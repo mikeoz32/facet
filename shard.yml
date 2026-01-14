@@ -1,0 +1,13 @@
+name: facet
+version: 0.1.0
+
+authors:
+  - Mike Oz <kozloffsky@hotmail.com>
+
+targets:
+  facet:
+    main: src/facet.cr
+
+crystal: '>= 1.18.2'
+
+license: MIT
