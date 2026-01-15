@@ -7,9 +7,11 @@ module Facet
       LF    = 0x0a_u8
       BANG  = 0x21_u8
       HASH  = 0x23_u8
+      DOLLAR = 0x24_u8
       EQUAL = 0x3d_u8
       PERCENT = 0x25_u8
       DQUOTE = 0x22_u8
+      AT = 0x40_u8
       QUESTION = 0x3f_u8
       SQUOTE = 0x27_u8
       BACKSLASH = 0x5c_u8
@@ -71,6 +73,18 @@ module Facet
         return record_token(eof_token) if @i >= @bytes.size
 
         byte = @bytes[@i]
+        if byte == AT
+          if token = scan_at_variable
+            return record_token(token)
+          end
+        end
+
+        if byte == DOLLAR
+          if token = scan_global_variable
+            return record_token(token)
+          end
+        end
+
         if ident_start?(byte)
           return record_token(scan_identifier)
         end
@@ -211,6 +225,61 @@ module Facet
 
         kind = Keywords.lookup(@bytes, start, @i - start) || TokenKind::Identifier
         Token.new(kind, Span.new(start, @i))
+      end
+
+      private def scan_at_variable : Token?
+        n = @bytes.size
+        start = @i
+        at_count = 0
+        while @i < n && @bytes[@i] == AT && at_count < 2
+          @i += 1
+          at_count += 1
+        end
+        return nil if at_count == 0 || @i >= n || !ident_start?(@bytes[@i])
+
+        @i += 1
+        while @i < n && ident_continue?(@bytes[@i])
+          @i += 1
+        end
+        if @i < n
+          byte = @bytes[@i]
+          if byte == QUESTION
+            if @i + 1 >= n || @bytes[@i + 1] != EQUAL
+              @i += 1
+            end
+          elsif byte == BANG
+            if @i + 1 >= n || (@bytes[@i + 1] != EQUAL && @bytes[@i + 1] != TILDE)
+              @i += 1
+            end
+          end
+        end
+
+        kind = at_count == 1 ? TokenKind::InstanceVar : TokenKind::ClassVar
+        Token.new(kind, Span.new(start, @i))
+      end
+
+      private def scan_global_variable : Token?
+        n = @bytes.size
+        start = @i
+        @i += 1
+        return nil if @i >= n || !(ident_start?(@bytes[@i]) || ascii_digit?(@bytes[@i]) || @bytes[@i] == TILDE)
+        @i += 1
+        while @i < n && ident_continue?(@bytes[@i])
+          @i += 1
+        end
+        if @i < n
+          byte = @bytes[@i]
+          if byte == QUESTION
+            if @i + 1 >= n || @bytes[@i + 1] != EQUAL
+              @i += 1
+            end
+          elsif byte == BANG
+            if @i + 1 >= n || (@bytes[@i + 1] != EQUAL && @bytes[@i + 1] != TILDE)
+              @i += 1
+            end
+          end
+        end
+        Token.new(TokenKind::GlobalVar, Span.new(start, @i))
       end
 
       private def scan_number : Token

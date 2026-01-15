@@ -3,6 +3,9 @@ module Facet
     enum TokenKind
       Eof
       Identifier
+      InstanceVar
+      ClassVar
+      GlobalVar
       Number
       String
       Regex

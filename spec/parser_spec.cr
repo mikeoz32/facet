@@ -247,6 +247,39 @@ describe Facet::Compiler::Parser do
     targets.not_nil!.size.should eq(2)
   end
 
+  it "parses case/when with multiple branches and else" do
+    source = Facet::Compiler::Source.new(<<-CRYSTAL)
+      case x
+      when 1, 2 then foo
+      when 3
+        bar
+      else
+        baz
+      end
+      CRYSTAL
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    case_id = ast.children(exprs)[0]
+    ast.node(case_id).kind.should eq(Facet::Compiler::NodeKind::Case)
+
+    subject_id = ast.children(case_id)[0]
+    ast.node(subject_id).kind.should_not eq(Facet::Compiler::NodeKind::Error)
+
+    whens_id = ast.children(case_id)[1]
+    whens = ast.children(whens_id)
+    whens.size.should eq(2)
+    ast.node(whens[0]).kind.should eq(Facet::Compiler::NodeKind::When)
+    conds_id = ast.children(whens[0])[0]
+    conds = ast.children(conds_id)
+    conds.size.should eq(2)
+
+    else_id = ast.children(case_id)[2]
+    ast.node(else_id).kind.should eq(Facet::Compiler::NodeKind::Expressions)
+  end
+
   it "recovers macro for header missing target" do
     source = Facet::Compiler::Source.new("{% for in items %} {% end %}")
     parser = Facet::Compiler::Parser.new(source)
@@ -308,6 +341,73 @@ describe Facet::Compiler::Parser do
     ast.node(rhs).kind.should eq(Facet::Compiler::NodeKind::CallWithBlock)
     args = ast.children(rhs)[1]
     ast.children(args).size.should eq(2)
+  end
+
+  it "parses for loops with multiple targets" do
+    source = Facet::Compiler::Source.new("for x, y in items\n  x\nend")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    for_id = ast.children(exprs)[0]
+    ast.node(for_id).kind.should eq(Facet::Compiler::NodeKind::For)
+    targets_id = ast.children(for_id)[0]
+    ast.children(targets_id).size.should eq(2)
+  end
+
+  it "parses include/extend command-style calls" do
+    source = Facet::Compiler::Source.new("include Foo, Bar")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    call_id = ast.children(exprs)[0]
+    ast.node(call_id).kind.should eq(Facet::Compiler::NodeKind::Call)
+    args_id = ast.children(call_id)[1]
+    ast.children(args_id).size.should eq(2)
+  end
+
+  it "parses builtin-like keyword calls with or without parens" do
+    source = Facet::Compiler::Source.new("sizeof(Int32)\nalignof Int32")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    first_call = ast.children(exprs)[0]
+    second_call = ast.children(exprs)[1]
+    ast.node(first_call).kind.should eq(Facet::Compiler::NodeKind::Call)
+    ast.node(second_call).kind.should eq(Facet::Compiler::NodeKind::Call)
+  end
+
+  it "parses shift-left operator" do
+    source = Facet::Compiler::Source.new("1 << 2")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    bin_id = ast.children(exprs)[0]
+    ast.node(bin_id).kind.should eq(Facet::Compiler::NodeKind::Binary)
+    ast.arena.operator_kind(ast.node(bin_id).payload_index).should eq(Facet::Compiler::TokenKind::ShiftLeft)
+  end
+
+  it "parses visibility + def and sigiled variables" do
+    source = Facet::Compiler::Source.new("protected def foo; @x = @@y = $z?; end")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    def_id = ast.children(exprs)[0]
+    ast.node(def_id).kind.should eq(Facet::Compiler::NodeKind::Def)
+    body_id = ast.children(def_id)[3]
+    assign = ast.children(body_id)[0]
+    ast.node(assign).kind.should eq(Facet::Compiler::NodeKind::Assign)
+    lhs = ast.children(assign)[0]
+    ast.node(lhs).kind.should eq(Facet::Compiler::NodeKind::InstanceVar)
   end
 
   it "parses if expressions with else" do
