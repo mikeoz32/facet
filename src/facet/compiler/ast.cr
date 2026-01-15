@@ -63,12 +63,14 @@ module Facet
       NamedTuple
       Range
       Index
+      CallWithBlock
       Path
       TypeApply
       MacroExpr
       MacroControl
       MacroForHeader
       MacroVar
+      Require
     end
 
     enum LiteralKind
@@ -246,6 +248,19 @@ module Facet
         parts = macro_for_header_parts(node_id)
         return nil unless parts
         children(parts[0])
+      end
+
+      def set_ident_symbol(node_id : NodeId, symbol_id : SymbolId)
+        node = @nodes[node_id]
+        return unless node.kind == NodeKind::Ident
+        @nodes[node_id] = Node.new(
+          node.kind,
+          node.span,
+          node.first_child,
+          node.child_count,
+          node.flags,
+          symbol_id
+        )
       end
     end
 

@@ -63,6 +63,8 @@ module Facet
           parse_control(NodeKind::Next)
         when TokenKind::KeywordYield
           parse_control(NodeKind::Yield)
+        when TokenKind::KeywordRequire
+          parse_require
         when TokenKind::KeywordDef
           parse_def(NodeKind::Def, TokenKind::KeywordEnd, "expected 'end' to close def")
         when TokenKind::KeywordMacro
@@ -215,10 +217,14 @@ module Facet
       private def parse_type_block(kind : NodeKind, end_message : String) : NodeId
         start = advance
         name_node = parse_path
+        superclass = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+        if match(TokenKind::Less)
+          superclass = parse_type
+        end
         body = parse_expressions([TokenKind::KeywordEnd])
         end_token = expect(TokenKind::KeywordEnd, end_message)
         span = Span.new(start.span.start, end_token.span.finish)
-        @arena.add_node(kind, span, [name_node, body])
+        @arena.add_node(kind, span, [name_node, superclass, body])
       end
 
       private def parse_path : NodeId
@@ -340,11 +346,53 @@ module Facet
             end_token = expect(TokenKind::RBracket, "expected ']' to close index")
             span = Span.new(node_span(left).start, end_token.span.finish)
             left = @arena.add_node(NodeKind::Index, span, [left] + indices)
+          when TokenKind::KeywordDo
+            left = parse_block_call(left)
           else
             break
           end
         end
         left
+      end
+
+      private def parse_block_call(call : NodeId) : NodeId
+        start = advance
+        block_params = parse_block_params
+        body = parse_expressions([TokenKind::KeywordEnd])
+        end_token = expect(TokenKind::KeywordEnd, "expected 'end' to close block")
+        span = Span.new(node_span(call).start, end_token.span.finish)
+        call_node = @arena.node(call)
+        if call_node.kind == NodeKind::Binary && (op = @arena.operator_kind(call_node.payload_index)) && (op == TokenKind::Dot || op == TokenKind::DoubleColon)
+          lhs = @arena.children(call)[0]
+          rhs = @arena.children(call)[1]
+          rhs_span = node_span(rhs)
+          block_span = Span.new(rhs_span.start, end_token.span.finish)
+          rhs_with_block = @arena.add_node(NodeKind::CallWithBlock, block_span, [rhs, block_params, body])
+          span = Span.new(node_span(lhs).start, end_token.span.finish)
+          @arena.add_node(NodeKind::Binary, span, [lhs, rhs_with_block], payload_index: call_node.payload_index)
+        else
+          @arena.add_node(NodeKind::CallWithBlock, span, [call, block_params, body])
+        end
+      end
+
+      private def parse_block_params : NodeId
+        return @arena.add_node(NodeKind::Args, Span.new(current.span.start, current.span.start)) unless current.kind == TokenKind::Pipe
+        start = advance
+        params = [] of NodeId
+        until current.kind == TokenKind::Pipe || current.eof?
+          if current.kind == TokenKind::Identifier
+            ident_token = advance
+            sym = @arena.symbols.intern(token_text(ident_token))
+            params << @arena.add_ident(ident_token.span, sym)
+          else
+            @diagnostics << Diagnostic.new(current.span, "expected block parameter")
+            advance
+          end
+          break unless match(TokenKind::Comma)
+        end
+        end_pipe = expect(TokenKind::Pipe, "expected '|' to close block parameters")
+        span = Span.new(start.span.start, end_pipe.span.finish)
+        @arena.add_node(NodeKind::Args, span, params)
       end
 
       private def parse_args : NodeId
@@ -777,6 +825,18 @@ module Facet
         @diagnostics << Diagnostic.new(token.span, message)
         advance unless token.eof?
         token
+      end
+
+      private def parse_require : NodeId
+        start = advance
+        if current.kind == TokenKind::String
+          str = advance
+          span = Span.new(start.span.start, str.span.finish)
+          return @arena.add_node(NodeKind::Require, span, [@arena.add_literal_node(LiteralKind::String, str.span)])
+        else
+          @diagnostics << Diagnostic.new(current.span, "expected string literal after require")
+          return @arena.add_node(NodeKind::Error, current.span)
+        end
       end
 
       private def span_from(start : Span, finish : Span) : Span

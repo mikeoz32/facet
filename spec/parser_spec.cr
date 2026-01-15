@@ -204,6 +204,31 @@ describe Facet::Compiler::Parser do
     targets.size.should eq(2)
   end
 
+  it "parses nested macro controls mixed with loops" do
+    source = Facet::Compiler::Source.new("{% for x in [1,2] %}{% if true %}a{% end %}{% end %}")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    macro_for = ast.children(exprs)[0]
+    ast.node(macro_for).kind.should eq(Facet::Compiler::NodeKind::MacroControl)
+
+    body_id = ast.children(macro_for)[1]
+    body_exprs = ast.children(body_id)
+    body_exprs.size.should eq(1)
+    inner_macro = body_exprs[0]
+    ast.node(inner_macro).kind.should eq(Facet::Compiler::NodeKind::MacroControl)
+  end
+
+  it "recovers from unmatched macro control end" do
+    source = Facet::Compiler::Source.new("{% if true %} 1 ")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.any? { |d| d.message.includes?("expected '{% end %}' to close macro if") }.should be_true
+  end
+
   it "extracts macro for header parts via helper" do
     source = Facet::Compiler::Source.new("{% for x, y in items %} 1 {% end %}")
     parser = Facet::Compiler::Parser.new(source)
@@ -247,6 +272,42 @@ describe Facet::Compiler::Parser do
     ast = parser.parse_file
 
     ast.diagnostics.any? { |d| d.message.includes?("expected expression after 'in'") }.should be_true
+  end
+
+  it "parses require statements" do
+    source = Facet::Compiler::Source.new("require \"./foo\"")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    exprs = ast.children(ast.root)[0]
+    req = ast.children(exprs)[0]
+    ast.node(req).kind.should eq(Facet::Compiler::NodeKind::Require)
+  end
+
+  it "parses class inheritance" do
+    source = Facet::Compiler::Source.new("class Foo < Bar; end")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    exprs = ast.children(ast.root)[0]
+    cls = ast.children(exprs)[0]
+    ast.node(cls).kind.should eq(Facet::Compiler::NodeKind::Class)
+    ast.children(cls).size.should eq(3)
+  end
+
+  it "parses call blocks with parameters" do
+    source = Facet::Compiler::Source.new("foo(1).bar do |x, y| x end")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    exprs = ast.children(ast.root)[0]
+    binary_id = ast.children(exprs)[0]
+    binary = ast.node(binary_id)
+    binary.kind.should eq(Facet::Compiler::NodeKind::Binary)
+    rhs = ast.children(binary_id)[1]
+    ast.node(rhs).kind.should eq(Facet::Compiler::NodeKind::CallWithBlock)
+    args = ast.children(rhs)[1]
+    ast.children(args).size.should eq(2)
   end
 
   it "parses if expressions with else" do
