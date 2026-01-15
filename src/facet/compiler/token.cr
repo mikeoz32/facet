@@ -6,6 +6,8 @@ module Facet
       InstanceVar
       ClassVar
       GlobalVar
+      Annotation
+      Symbol
       Number
       String
       Regex
@@ -48,6 +50,9 @@ module Facet
       KeywordOf
       KeywordOffsetof
       KeywordOut
+      KeywordProperty
+      KeywordGetter
+      KeywordSetter
       KeywordPointerof
       KeywordPrivate
       KeywordProtected

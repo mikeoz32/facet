@@ -382,6 +382,62 @@ describe Facet::Compiler::Parser do
     ast.node(second_call).kind.should eq(Facet::Compiler::NodeKind::Call)
   end
 
+  it "parses var declarations with type and default" do
+    source = Facet::Compiler::Source.new("@size : Int32 = 0")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    decl = ast.children(exprs)[0]
+    ast.node(decl).kind.should eq(Facet::Compiler::NodeKind::VarDecl)
+  end
+
+  it "parses proc types and typed block params without names" do
+    source = Facet::Compiler::Source.new("def foo(& : Int32 -> Nil) : Int32 -> Nil; end")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    def_id = ast.children(exprs)[0]
+    ret_type = ast.children(def_id)[2]
+    ast.node(ret_type).kind.should eq(Facet::Compiler::NodeKind::ProcType)
+  end
+
+  it "parses operator, setter, and indexer defs" do
+    source = Facet::Compiler::Source.new("def <<(x); end\ndef foo=(v); end\ndef [](i); end\ndef []=(i, v); end\ndef self.>>(x); end")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    defs = ast.children(exprs)
+    defs.size.should eq(5)
+  end
+
+  it "parses annotations" do
+    source = Facet::Compiler::Source.new("@[Deprecated] def foo; end")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    ast.node(ast.children(exprs)[0]).kind.should eq(Facet::Compiler::NodeKind::Annotation)
+  end
+
+  it "parses lib fun and aliases" do
+    source = Facet::Compiler::Source.new("fun printf(fmt : LibC::Char*) : Int32\nalias MyInt = Int32\ntype MyPtr = Pointer(Int32)")
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+
+    ast.diagnostics.should be_empty
+    exprs = ast.children(ast.root)[0]
+    ast.node(ast.children(exprs)[0]).kind.should eq(Facet::Compiler::NodeKind::Fun)
+    ast.node(ast.children(exprs)[1]).kind.should eq(Facet::Compiler::NodeKind::Alias)
+    ast.node(ast.children(exprs)[2]).kind.should eq(Facet::Compiler::NodeKind::TypeDef)
+  end
+
   it "parses shift-left operator" do
     source = Facet::Compiler::Source.new("1 << 2")
     parser = Facet::Compiler::Parser.new(source)

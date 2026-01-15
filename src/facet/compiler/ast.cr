@@ -22,6 +22,9 @@ module Facet
       LiteralSymbol
       LiteralBool
       LiteralNil
+      Annotation
+      AnnotationDef
+      VarDecl
       Call
       Assign
       Unary
@@ -66,6 +69,7 @@ module Facet
       CallWithBlock
       Path
       TypeApply
+      ProcType
       MacroExpr
       MacroControl
       MacroForHeader

@@ -12,6 +12,7 @@ module Facet
       PERCENT = 0x25_u8
       DQUOTE = 0x22_u8
       AT = 0x40_u8
+      COLON = 0x3a_u8
       QUESTION = 0x3f_u8
       SQUOTE = 0x27_u8
       BACKSLASH = 0x5c_u8
@@ -74,7 +75,13 @@ module Facet
 
         byte = @bytes[@i]
         if byte == AT
-          if token = scan_at_variable
+          if token = scan_annotation_or_variable
+            return record_token(token)
+          end
+        end
+
+        if byte == COLON
+          if token = scan_symbol_literal
             return record_token(token)
           end
         end
@@ -227,9 +234,13 @@ module Facet
         Token.new(kind, Span.new(start, @i))
       end
 
-      private def scan_at_variable : Token?
+      private def scan_annotation_or_variable : Token?
         n = @bytes.size
         start = @i
+        if @i + 1 < n && @bytes[@i + 1] == LBRACKET
+          @i += 1
+          return Token.new(TokenKind::Annotation, Span.new(start, @i))
+        end
         at_count = 0
         while @i < n && @bytes[@i] == AT && at_count < 2
           @i += 1
@@ -280,6 +291,32 @@ module Facet
           end
         end
         Token.new(TokenKind::GlobalVar, Span.new(start, @i))
+      end
+
+      private def scan_symbol_literal : Token?
+        n = @bytes.size
+        start = @i
+        return nil if @i + 1 >= n
+        next_byte = @bytes[@i + 1]
+        return nil if next_byte == COLON
+        return nil unless ident_start?(next_byte)
+        @i += 2
+        while @i < n && ident_continue?(@bytes[@i])
+          @i += 1
+        end
+        if @i < n
+          byte = @bytes[@i]
+          if byte == QUESTION
+            if @i + 1 >= n || @bytes[@i + 1] != EQUAL
+              @i += 1
+            end
+          elsif byte == BANG
+            if @i + 1 >= n || (@bytes[@i + 1] != EQUAL && @bytes[@i + 1] != TILDE)
+              @i += 1
+            end
+          end
+        end
+        Token.new(TokenKind::Symbol, Span.new(start, @i))
       end
 
       private def scan_number : Token

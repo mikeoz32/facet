@@ -58,6 +58,7 @@ module Facet
         ':'.ord.to_u8 => TokenKind::Colon,
         ';'.ord.to_u8 => TokenKind::Semicolon,
         '?'.ord.to_u8 => TokenKind::Question,
+        '@'.ord.to_u8 => TokenKind::At,
       } of UInt8 => TokenKind
 
       def self.match(bytes : Bytes, index : Int32) : Tuple(TokenKind, Int32)?
