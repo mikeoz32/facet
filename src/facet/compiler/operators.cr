@@ -1,11 +1,22 @@
 module Facet
   module Compiler
     module Operators
+      MULTI_4 = {
+        "&**=" => TokenKind::AmpersandStarStarEqual,
+      } of String => TokenKind
+
       MULTI_3 = {
         "..." => TokenKind::DotDotDot,
         "===" => TokenKind::TripleEqual,
         "<=>" => TokenKind::Spaceship,
         "//=" => TokenKind::SlashSlashEqual,
+        "**=" => TokenKind::StarStarEqual,
+        "&**" => TokenKind::AmpersandStarStar,
+        "<<=" => TokenKind::ShiftLeftEqual,
+        ">>=" => TokenKind::ShiftRightEqual,
+        "&+=" => TokenKind::AmpersandPlusEqual,
+        "&-=" => TokenKind::AmpersandMinusEqual,
+        "&*=" => TokenKind::AmpersandStarEqual,
       } of String => TokenKind
 
       MULTI_2 = {
@@ -31,6 +42,12 @@ module Facet
         "*=" => TokenKind::StarEqual,
         "/=" => TokenKind::SlashEqual,
         "%=" => TokenKind::PercentEqual,
+        "|=" => TokenKind::PipeEqual,
+        "&=" => TokenKind::AmpersandEqual,
+        "^=" => TokenKind::CaretEqual,
+        "&+" => TokenKind::AmpersandPlus,
+        "&-" => TokenKind::AmpersandMinus,
+        "&*" => TokenKind::AmpersandStar,
       } of String => TokenKind
 
       SINGLE = {
@@ -44,6 +61,7 @@ module Facet
         '|'.ord.to_u8 => TokenKind::Pipe,
         '!'.ord.to_u8 => TokenKind::Bang,
         '~'.ord.to_u8 => TokenKind::Tilde,
+        '`'.ord.to_u8 => TokenKind::Backtick,
         '='.ord.to_u8 => TokenKind::Assign,
         '<'.ord.to_u8 => TokenKind::Less,
         '>'.ord.to_u8 => TokenKind::Greater,
@@ -63,6 +81,12 @@ module Facet
 
       def self.match(bytes : Bytes, index : Int32) : Tuple(TokenKind, Int32)?
         remaining = bytes.size - index
+
+        if remaining >= 4
+          if kind = MULTI_4[String.new(bytes[index, 4])]?
+            return {kind, 4}
+          end
+        end
 
         if remaining >= 3
           if kind = MULTI_3[String.new(bytes[index, 3])]?

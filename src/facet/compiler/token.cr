@@ -90,6 +90,7 @@ module Facet
       Pipe
       Bang
       Tilde
+      Backtick
       Assign
       EqualEqual
       BangEqual
@@ -115,6 +116,20 @@ module Facet
       SlashEqual
       SlashSlashEqual
       PercentEqual
+      PipeEqual
+      AmpersandEqual
+      CaretEqual
+      StarStarEqual
+      ShiftLeftEqual
+      ShiftRightEqual
+      AmpersandPlusEqual
+      AmpersandMinusEqual
+      AmpersandStarEqual
+      AmpersandStarStarEqual
+      AmpersandPlus
+      AmpersandMinus
+      AmpersandStar
+      AmpersandStarStar
       # Punctuation
       LParen
       RParen

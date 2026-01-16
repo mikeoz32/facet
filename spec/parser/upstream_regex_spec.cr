@@ -1,0 +1,43 @@
+require "../spec_helper"
+require "./upstream_support"
+
+include UpstreamSupport
+
+describe "Parser upstream parity (regex and globals)" do
+  it_parses "{/ / => / /, / / => / /}"
+  it_parses "{/ /, / /}"
+  it_parses "begin; / /; end"
+  it_parses "begin\n/ /\nend"
+  it_parses "/\\//"
+  it_parses "/\\ /"
+  it_parses "%r(/)"
+  it_parses "%r(\\/)"
+  it_parses "%r(\\ )"
+  it_parses "a()/3"
+  it_parses "a() /3"
+  it_parses "a.b() /3"
+  it_parses "def foo(x = / /); end"
+  it_parses "begin 1 end / 2"
+  it_parses "foo /a/"
+  it_parses "foo(/a/)"
+  it_parses "foo(//)"
+  it_parses "foo(regex: //)"
+
+  it_parses "$~"
+  it_parses "$~.foo"
+  it_parses "$0"
+  it_parses "$1"
+  it_parses "$1?"
+  it_parses "foo $1"
+  it_parses "$~ = 1"
+  it_parses "$?"
+  it_parses "$?.foo"
+  it_parses "foo $?"
+  it_parses "$? = 1"
+
+  it_parses "$0 = 1"
+  it_parses "$0, $1 = [1, 2]"
+  it_parses "$0, a = {1, 2}"
+  it_parses "$2147483648"
+  it_parses "$99999999999999999999999?"
+end

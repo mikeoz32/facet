@@ -75,6 +75,7 @@ module Facet
       MacroForHeader
       MacroVar
       Require
+      Ternary
     end
 
     enum LiteralKind

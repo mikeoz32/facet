@@ -71,9 +71,14 @@ module Facet
 
       def next_token : Token
         skip_trivia
-        return record_token(eof_token) if @i >= @bytes.size
+        n = @bytes.size
+        return record_token(eof_token) if @i >= n
 
         byte = @bytes[@i]
+        if byte == BACKSLASH && @i + 1 < n && @bytes[@i + 1] == LBRACE
+          @i += 1
+          return next_token
+        end
         if byte == AT
           if token = scan_annotation_or_variable
             return record_token(token)
@@ -109,8 +114,10 @@ module Facet
         end
 
         if byte == PERCENT
-          if token = scan_percent_literal
-            return record_token(token)
+          unless @last_token_kind == TokenKind::KeywordDef || @last_token_kind == TokenKind::KeywordMacro
+            if token = scan_percent_literal
+              return record_token(token)
+            end
           end
         end
 
@@ -157,6 +164,23 @@ module Facet
         n = @bytes.size
         while @i < n
           case @bytes[@i]
+          when BACKSLASH
+            if @i + 1 < n
+              if @bytes[@i + 1] == LF
+                @i += 2
+                @line_starts << @i
+                next
+              elsif @bytes[@i + 1] == CR
+                if @i + 2 < n && @bytes[@i + 2] == LF
+                  @i += 3
+                else
+                  @i += 2
+                end
+                @line_starts << @i
+                next
+              end
+            end
+            break
           when SPACE, TAB, CR
             @i += 1
           when LF
@@ -273,7 +297,7 @@ module Facet
         n = @bytes.size
         start = @i
         @i += 1
-        return nil if @i >= n || !(ident_start?(@bytes[@i]) || ascii_digit?(@bytes[@i]) || @bytes[@i] == TILDE)
+        return nil if @i >= n || !(ident_start?(@bytes[@i]) || ascii_digit?(@bytes[@i]) || @bytes[@i] == TILDE || @bytes[@i] == QUESTION)
         @i += 1
         while @i < n && ident_continue?(@bytes[@i])
           @i += 1
@@ -299,6 +323,48 @@ module Facet
         return nil if @i + 1 >= n
         next_byte = @bytes[@i + 1]
         return nil if next_byte == COLON
+
+        # Quoted symbol, e.g. :"foo" or :"\\u{61}"
+        if next_byte == DQUOTE
+          @i += 2
+          terminated = false
+          while @i < n
+            byte = @bytes[@i]
+            @i += 1
+            if byte == BACKSLASH
+              consume_escape(@i - 1)
+            elsif byte == DQUOTE
+              terminated = true
+              break
+            elsif byte == LF
+              @line_starts << @i
+            end
+          end
+          unless terminated
+            @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated symbol literal")
+          end
+          return Token.new(TokenKind::Symbol, Span.new(start, @i))
+        end
+
+        # Special bracketed symbols like :[], :[]?, :[]=
+        if next_byte == LBRACKET
+          @i += 2
+          if @i < n && @bytes[@i] == RBRACKET
+            @i += 1
+            if @i < n && (@bytes[@i] == QUESTION || @bytes[@i] == EQUAL)
+              @i += 1
+            end
+          end
+          return Token.new(TokenKind::Symbol, Span.new(start, @i))
+        end
+
+        # Operator symbols (:+, :**, etc.)
+        if match = Operators.match(@bytes, @i + 1)
+          _kind, length = match
+          @i += 1 + length
+          return Token.new(TokenKind::Symbol, Span.new(start, @i))
+        end
+
         return nil unless ident_start?(next_byte)
         @i += 2
         while @i < n && ident_continue?(@bytes[@i])
@@ -968,9 +1034,26 @@ module Facet
       end
 
       private def regex_allowed? : Bool
+        slash_op = slash_starts_operator?
+        following_space = next_byte_space?
+        next_ident = next_byte_ident_start?
         case @last_token_kind
         when TokenKind::Identifier
-          identifier_ends_with_predicate?
+          return true if identifier_ends_with_predicate?
+          return false if slash_op
+          return false unless spaced_since_last_token?
+          return false if following_space
+          return false if ident_preceded_by_dot_or_colon?
+          return false if next_ident && !regex_closing_delim_ahead?
+          true
+        when TokenKind::InstanceVar,
+             TokenKind::ClassVar,
+             TokenKind::GlobalVar
+          return false if slash_op
+          return false unless spaced_since_last_token?
+          return false if following_space
+          return false if next_ident && !regex_closing_delim_ahead?
+          true
         when TokenKind::Number,
              TokenKind::String,
              TokenKind::Regex,
@@ -978,6 +1061,9 @@ module Facet
              TokenKind::RParen,
              TokenKind::RBracket,
              TokenKind::RBrace,
+             TokenKind::KeywordEnd,
+             TokenKind::KeywordRescue,
+             TokenKind::KeywordEnsure,
              TokenKind::KeywordDef,
              TokenKind::KeywordMacro,
              TokenKind::KeywordAlias,
@@ -998,6 +1084,65 @@ module Facet
         return false if span.finish <= span.start
         last = @bytes[span.finish - 1]
         last == QUESTION || last == BANG
+      end
+
+      private def spaced_since_last_token? : Bool
+        return true unless span = @last_token_span
+        i = span.finish
+        return false if i >= @i
+        while i < @i
+          byte = @bytes[i]
+          return false unless byte == SPACE || byte == TAB || byte == CR || byte == LF
+          i += 1
+        end
+        true
+      end
+
+      private def ident_preceded_by_dot_or_colon? : Bool
+        return false unless span = @last_token_span
+        return false if span.start == 0
+        prev = @bytes[span.start - 1]
+        prev == DOT || prev == COLON
+      end
+
+      private def slash_starts_operator? : Bool
+        n = @bytes.size
+        return false if @i + 1 >= n
+        nxt = @bytes[@i + 1]
+        nxt == EQUAL || nxt == SLASH
+      end
+
+      private def next_byte_space? : Bool
+        n = @bytes.size
+        return false if @i + 1 >= n
+        byte = @bytes[@i + 1]
+        byte == SPACE || byte == TAB || byte == CR || byte == LF
+      end
+
+      private def next_byte_ident_start? : Bool
+        n = @bytes.size
+        return false if @i + 1 >= n
+        ident_start?(@bytes[@i + 1])
+      end
+
+      private def regex_closing_delim_ahead? : Bool
+        n = @bytes.size
+        j = @i + 1
+        escaped = false
+        while j < n
+          byte = @bytes[j]
+          if escaped
+            escaped = false
+          elsif byte == BACKSLASH
+            escaped = true
+          elsif byte == SLASH
+            return true
+          elsif byte == LF
+            return false
+          end
+          j += 1
+        end
+        false
       end
 
 
