@@ -14,6 +14,8 @@ module Facet
         "&**" => TokenKind::AmpersandStarStar,
         "<<=" => TokenKind::ShiftLeftEqual,
         ">>=" => TokenKind::ShiftRightEqual,
+        "||=" => TokenKind::OrOrEqual,
+        "&&=" => TokenKind::AndAndEqual,
         "&+=" => TokenKind::AmpersandPlusEqual,
         "&-=" => TokenKind::AmpersandMinusEqual,
         "&*=" => TokenKind::AmpersandStarEqual,

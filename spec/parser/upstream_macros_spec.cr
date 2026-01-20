@@ -86,5 +86,50 @@ describe "Parser upstream parity (macros)" do
     parse_ok("macro x\n%{}\nend")
     parse_ok("macro foo;%var;end")
     parse_ok("macro foo;%var{1, x} = hello;end")
+    parse_ok("macro foo; end")
+    parse_ok("macro [];end")
+    parse_ok(%(macro foo; 1 + 2; end))
+    parse_ok(%(macro foo(x); 1 + 2; end))
+    parse_ok(%(macro foo(x)\n 1 + 2; end))
+    parse_ok("macro foo; 1 + 2 {{foo}} 3 + 4; end")
+    parse_ok("macro foo; 1 + 2 {{ foo }} 3 + 4; end")
+    parse_ok("macro foo;bar{% for x in y %}body{% end %}baz;end")
+    parse_ok("macro foo;bar{% for x, y in z %}body{% end %}baz;end")
+    parse_ok("macro foo;bar{% if x %}body{% end %}baz;end")
+    parse_ok("macro foo;bar{% if x %}body{% else %}body2{%end%}baz;end")
+    parse_ok("macro foo;bar{% if x %}body{% elsif y %}body2{%end%}baz;end")
+    parse_ok("macro foo;bar{% if x %}body{% elsif y %}body2{% else %}body3{%end%}baz;end")
+    parse_ok("macro foo;bar{% unless x %}body{% end %}baz;end")
+    parse_ok("macro foo;bar{% for x in y %}\\  \n   body{% end %}baz;end")
+    parse_ok("macro foo;bar{% for x in y %}\\  \n   body{% end %}\\   baz;end")
+    parse_ok("macro foo; 1 + 2 {{foo}}\\ 3 + 4; end")
+    parse_ok("macro foo(\na = 0\n)\nend")
+    parse_ok("macro foo;{% verbatim do %}1{% foo %}2{% end %};end")
+    parse_ok("macro foo\n{%\nif 1\n2\nelse\n3\nend\n%}end")
+    parse_ok("macro foo\neenum\nend")
+    parse_ok("macro foo\n'\\''\nend")
+    parse_ok("macro foo\n'\\\\'\nend")
+    parse_ok(%(macro foo\n"\\'"\nend))
+    parse_ok(%(macro foo\n"\\\\"\nend))
+    parse_ok("macro foo;bar(end: 1);end")
+    parse_ok("macro foo(@[Foo] var);end")
+    parse_ok("macro foo(@[Foo] outer inner);end")
+    parse_ok("macro foo(@[Foo]  var);end")
+    parse_ok("macro foo(a, @[Foo] var);end")
+    parse_ok("macro foo(a, @[Foo] &block);end")
+    parse_ok("macro foo(@[Foo] *args);end")
+    parse_ok("macro foo(@[Foo] **args);end")
+    parse_ok(<<-CRYSTAL)
+      macro foo(
+        @[Foo]
+        id,
+        @[Bar] name
+      );end
+    CRYSTAL
+
+    ast = parse_ok("macro foo(@[Foo] var);end")
+    params = macro_params(ast)
+    params.size.should eq(1)
+    node_kind(ast, params[0]).should eq(Facet::Compiler::NodeKind::Annotation)
   end
 end

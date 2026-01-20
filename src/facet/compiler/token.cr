@@ -100,6 +100,8 @@ module Facet
       GreaterEqual
       AndAnd
       OrOr
+      AndAndEqual
+      OrOrEqual
       Arrow
       HashRocket
       StarStar

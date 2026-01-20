@@ -9,6 +9,7 @@ describe "Parser upstream parity (structures and visibility)" do
   it_parses "struct Foo; end"
   it_parses "enum Foo; end"
   it_parses "lib LibC; end"
+  it_parses "union Foo; end"
   it_parses "abstract class Foo; end"
   it_parses "abstract struct Foo; end"
   it_parses "abstract module Foo; end"

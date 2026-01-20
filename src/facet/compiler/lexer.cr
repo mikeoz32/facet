@@ -114,7 +114,11 @@ module Facet
         end
 
         if byte == PERCENT
-          unless @last_token_kind == TokenKind::KeywordDef || @last_token_kind == TokenKind::KeywordMacro
+          unless @last_token_kind == TokenKind::KeywordDef ||
+                 @last_token_kind == TokenKind::KeywordMacro ||
+                 @last_token_kind == TokenKind::Dot ||
+                 @last_token_kind == TokenKind::SafeNav ||
+                 @last_token_kind == TokenKind::DoubleColon
             if token = scan_percent_literal
               return record_token(token)
             end
@@ -166,17 +170,24 @@ module Facet
           case @bytes[@i]
           when BACKSLASH
             if @i + 1 < n
-              if @bytes[@i + 1] == LF
-                @i += 2
+              j = @i + 1
+              while j < n && (@bytes[j] == SPACE || @bytes[j] == TAB)
+                j += 1
+              end
+              if j < n && @bytes[j] == LF
+                @i = j + 1
                 @line_starts << @i
                 next
-              elsif @bytes[@i + 1] == CR
-                if @i + 2 < n && @bytes[@i + 2] == LF
-                  @i += 3
+              elsif j < n && @bytes[j] == CR
+                if j + 1 < n && @bytes[j + 1] == LF
+                  @i = j + 2
                 else
-                  @i += 2
+                  @i = j + 1
                 end
                 @line_starts << @i
+                next
+              elsif j > @i + 1
+                @i = j
                 next
               end
             end
@@ -1061,6 +1072,9 @@ module Facet
              TokenKind::RParen,
              TokenKind::RBracket,
              TokenKind::RBrace,
+             TokenKind::Dot,
+             TokenKind::DoubleColon,
+             TokenKind::SafeNav,
              TokenKind::KeywordEnd,
              TokenKind::KeywordRescue,
              TokenKind::KeywordEnsure,

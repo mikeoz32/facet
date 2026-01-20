@@ -40,6 +40,35 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo(x = 1, **args)\n1\nend"
   it_parses "def foo(**args : Foo)\n1\nend"
 
+  it "builds def param shapes" do
+    ast = parse_ok("def foo(x, y = 1, *rest, **kw, &blk); end")
+    params = def_params(ast)
+    params.size.should eq(5)
+    params[0..1].each { |p| ast.arena.node(p).kind.should eq(Facet::Compiler::NodeKind::Param) }
+  end
+
+  it "builds def types and return unions" do
+    ast = parse_ok("def foo(x : Foo?, y : Foo::Bar | Baz) : Foo(Int32)?\nend")
+    params = def_params(ast)
+    params.size.should eq(2)
+    ast.arena.node(ast.arena.children(params[0])[1]).kind.should eq(Facet::Compiler::NodeKind::Binary)
+    ast.arena.node(ast.arena.children(params[1])[1]).kind.should eq(Facet::Compiler::NodeKind::Binary)
+    ret = def_return(ast)
+    ast.arena.node(ret).kind.should eq(Facet::Compiler::NodeKind::Binary)
+  end
+
+  # Basic def shapes and setters
+  it_parses "def foo\n1\nend"
+  it_parses "def foo ; 1 ; end"
+  it_parses "def foo; end"
+  it_parses "def foo(var); end"
+  it_parses "def foo(\nvar); end"
+  it_parses "def foo(\nvar\n); end"
+  it_parses "def foo(var1, var2); end"
+  it_parses "def foo; 1; 2; end"
+  it_parses "def foo=(value); end"
+  it_parses "def foo(n); foo(n -1); end"
+
   # Operator defs with extra params/defaults/splats (upstream #10397)
   %w(<= >= == != []= ===).each do |name|
     it_parses "def #{name}(other, file = 1); end"

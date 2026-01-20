@@ -16,6 +16,27 @@ describe "Parser upstream parity (operators and edge calls)" do
   it_parses "..10"
   it_parses "10.."
   it_parses "1...2"
+  it_parses "1 || 2"
+  it_parses "1 && 2"
+  it_parses "a ||= 1"
+  it_parses "a &&= 1"
+  it "builds binary ops for ||, && and op-assign" do
+    ast = parse_ok("1 || 2")
+    exprs = root_exprs(ast)[0]
+    bin = ast.children(exprs)[0]
+    binary_op_kind(ast, bin).should eq(Facet::Compiler::TokenKind::OrOr)
+
+    ast2 = parse_ok("a ||= 1")
+    exprs2 = root_exprs(ast2)[0]
+    bin2 = ast2.children(exprs2)[0]
+    binary_op_kind(ast2, bin2).should eq(Facet::Compiler::TokenKind::OrOrEqual)
+  end
+  it_parses "foo !false"
+  it_parses "!a && b"
+  it_parses "foo.bar.baz"
+  it_parses "f.x Foo.new"
+  it_parses "f.x = Foo.new"
+  it_parses "f.x = - 1"
 
   it "parses abbreviated operator assignment" do
     %w(+= -= *= /= //= %= |= &= ^= **=).each do |op|
@@ -25,6 +46,55 @@ describe "Parser upstream parity (operators and edge calls)" do
     %w(<<= >>= &+= &-= &*= &**=).each do |op|
       parse_ok("f.x #{op} 2")
     end
+  end
+
+  it "parses operator definitions with and without receiver" do
+    %w(/ < <= == != =~ !~ > >= + - * / ~ % & | ^ ** ===).each do |op|
+      parse_ok("def #{op}; end;")
+      parse_ok("def #{op}(); end;")
+      parse_ok("def self.#{op}; end;")
+      parse_ok("def self.#{op}(); end;")
+    end
+  end
+
+  it "parses operator calls with args, blocks, and proc pointers" do
+    %w(bar + - * / < <= == > >= % | & ^ ** === =~ != []= !~).each do |name|
+      parse_ok("foo.#{name}")
+      parse_ok("foo.#{name} 1, 2")
+      parse_ok("foo.#{name}(1, 2)")
+      parse_ok("foo.#{name}(1, 2) { 3 }")
+      parse_ok("foo.#{name} do end")
+    end
+
+    %w(<< < <= == >> > >= + - * / // % | & ^ ** === =~ !~ &+ &- &* &**).each do |op|
+      parse_ok("1 #{op} 2")
+      parse_ok("n #{op} 2")
+      parse_ok("foo(n #{op} 2)")
+      parse_ok("foo(0, n #{op} 2)")
+      parse_ok("foo(a: n #{op} 2)")
+      parse_ok("foo(z: 0, a: n #{op} 2)")
+      parse_ok("def #{op}(); end")
+      parse_ok("foo = 1; ->foo.#{op}(Int32)")
+      parse_ok("->Foo.#{op}(Int32)")
+    end
+
+    %w([] []=).each do |op|
+      parse_ok("foo = 1; ->foo.#{op}(Int32)")
+      parse_ok("->Foo.#{op}(Int32)")
+    end
+  end
+
+  it "parses operator abbreviated assignments on vars and calls" do
+    %w(+ - * / // % | & ^ ** << >> &+ &- &*).each do |op|
+      parse_ok("a = 1; a #{op}= 1")
+      parse_ok("a = 1; a #{op}=\n1")
+      parse_ok("a.b #{op}=\n1")
+    end
+
+    parse_ok("a = 1; a &&= 1")
+    parse_ok("a = 1; a ||= 1")
+    parse_ok("a = 1; a[2] &&= 3")
+    parse_ok("a = 1; a[2] ||= 3")
   end
 
   it_diagnoses "case 1\nwhen .=(2)", "unexpected token"

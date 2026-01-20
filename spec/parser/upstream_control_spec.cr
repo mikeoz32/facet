@@ -18,6 +18,10 @@ describe "Parser upstream parity (control flow)" do
 
   it_parses "while ready?\n  tick\nend"
   it_parses "until done?\n  step\nend"
+  it_parses "while true; end;"
+  it_parses "while true; 1; end;"
+  it_parses "until true; end;"
+  it_parses "until true; 1; end;"
 
   it_parses <<-CRYSTAL
     case x
@@ -41,6 +45,10 @@ describe "Parser upstream parity (control flow)" do
 
   it_parses "1 rescue 2"
   it_parses "1 ensure 2"
+  it_parses "1 if 3"
+  it_parses "1 unless 3"
+  it_parses "foo if 3"
+  it_parses "foo unless 3"
 
   it_parses <<-CRYSTAL
     select
