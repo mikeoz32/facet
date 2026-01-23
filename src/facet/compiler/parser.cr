@@ -16,6 +16,9 @@ module Facet
       def parse_file : AstFile
         exprs = parse_expressions([TokenKind::Eof])
 
+        # Validate top-level statements for standalone splats
+        @arena.children(exprs).each { |stmt| validate_no_standalone_splat(stmt) }
+
         @lexer.diagnostics.each { |diag| @diagnostics << diag }
 
         root_span = Span.new(0, @source.size)
@@ -318,6 +321,20 @@ module Facet
         end
         colon = expect(TokenKind::Colon, "expected ':' in declaration")
         type_node = parse_type(-> { current.kind == TokenKind::Assign || current.kind == TokenKind::Semicolon || current.kind == TokenKind::KeywordEnd }, allow_tuple: true)
+
+        # validate type tuple doesn't contain lowercase identifiers (indicates malformed `x : T, a = v`)
+        if @arena.node(type_node).kind == NodeKind::Tuple
+          @arena.children(type_node).each do |child_id|
+            child = @arena.node(child_id)
+            if child.kind == NodeKind::Ident
+              name = @arena.symbols[child.payload_index]
+              if name.size > 0 && name[0].lowercase?
+                @diagnostics << Diagnostic.new(node_span(child_id), "unexpected identifier in type position")
+              end
+            end
+          end
+        end
+
         value_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
         if !value_before_type && match(TokenKind::Assign)
           value_node = parse_expression
@@ -1096,9 +1113,13 @@ module Facet
             left = parse_postfix(left)
             next
           end
-          if stop.nil? && token.kind == TokenKind::Comma
+          # Comma forms tuples only at very low precedence (below assignment at 10)
+          # This prevents `a.foo, a.bar` from being parsed as `a.(foo, a.bar)`
+          if stop.nil? && token.kind == TokenKind::Comma && min_bp < 10
             advance
-            right = parse_expression(0, stop)
+            # Stop at assignment operators so multi-assign `a, b = 1, 2` parses correctly
+            # as Assign(Tuple(a, b), Tuple(1, 2)) instead of Tuple(a, Assign(b, Tuple(1, 2)))
+            right = parse_expression(0, -> { assignment_op?(current.kind) })
             children = [] of NodeId
             if @arena.node(left).kind == NodeKind::Tuple
               children.concat(@arena.children(left))
@@ -2279,6 +2300,154 @@ module Facet
       private def build_infix(kind : TokenKind, span : Span, left : NodeId, right : NodeId) : NodeId
         case kind
         when TokenKind::Assign
+          lhs_node = @arena.node(left)
+          rhs_node = @arena.node(right)
+
+          # reject nested assignments (e.g., `a = 1, b = 2` where outer tries to assign to inner assign)
+          if lhs_node.kind == NodeKind::Assign
+            @diagnostics << Diagnostic.new(node_span(left), "unexpected token: \"=\"")
+            return @arena.add_node(NodeKind::Error, span)
+          end
+
+          # reject RHS being an assignment (e.g., `a = 1, b = 2`)
+          if rhs_node.kind == NodeKind::Assign
+            @diagnostics << Diagnostic.new(node_span(right), "unexpected token: \"=\"")
+            return @arena.add_node(NodeKind::Error, span)
+          end
+
+          # reject non-assignable LHS (e.g., `1 == 2, a = 4` where LHS becomes Binary)
+          # but allow method calls (Binary with Dot/SafeNav) which are valid setter assignments
+          if lhs_node.kind == NodeKind::Binary
+            op = @arena.operator_kind(lhs_node.payload_index)
+            unless op == TokenKind::Dot || op == TokenKind::SafeNav
+              @diagnostics << Diagnostic.new(node_span(left), "invalid assignment target")
+              return @arena.add_node(NodeKind::Error, span)
+            end
+          end
+
+          # reject assignments to methods like `b? = 1` or `b! = 1`
+          if lhs_node.kind == NodeKind::Ident
+            name = @arena.symbols[lhs_node.payload_index]
+            if name.ends_with?("?") || name.ends_with?("!")
+              @diagnostics << Diagnostic.new(lhs_node.span, "unexpected token: \"=\"")
+              return @arena.add_node(NodeKind::Error, span)
+            end
+          end
+
+          # detect invalid targets in multiple-assignment LHS
+          if lhs_node.kind == NodeKind::Tuple
+            splat_count = 0
+            @arena.children(left).each do |child_id|
+              child = @arena.node(child_id)
+              case child.kind
+              when NodeKind::Ident
+                name = @arena.symbols[child.payload_index]
+                if name =~ /\A[A-Z]/
+                  @diagnostics << Diagnostic.new(child.span, "can't assign to constant in multiple assignment")
+                  return @arena.add_node(NodeKind::Error, span)
+                end
+              when NodeKind::Binary
+                # allow method calls (Binary with Dot/SafeNav) which are valid setter assignments
+                op = @arena.operator_kind(child.payload_index)
+                unless op == TokenKind::Dot || op == TokenKind::SafeNav
+                  @diagnostics << Diagnostic.new(node_span(child_id), "invalid multiple assignment target")
+                  return @arena.add_node(NodeKind::Error, span)
+                end
+              when NodeKind::Assign
+                @diagnostics << Diagnostic.new(node_span(child_id), "invalid multiple assignment target")
+                return @arena.add_node(NodeKind::Error, span)
+              when NodeKind::LiteralNumber, NodeKind::LiteralString, NodeKind::LiteralChar,
+                   NodeKind::LiteralSymbol, NodeKind::LiteralRegex, NodeKind::LiteralNil,
+                   NodeKind::LiteralBool, NodeKind::Array, NodeKind::Hash
+                @diagnostics << Diagnostic.new(node_span(child_id), "can't assign to literal")
+                return @arena.add_node(NodeKind::Error, span)
+              when NodeKind::Splat
+                splat_count += 1
+                if splat_count > 1
+                  @diagnostics << Diagnostic.new(node_span(child_id), "can't use more than one splat in assignment")
+                  return @arena.add_node(NodeKind::Error, span)
+                end
+                # check splat contents - must be valid assignment target
+                splat_inner_id = @arena.children(child_id).first?
+                if splat_inner_id
+                  splat_inner = @arena.node(splat_inner_id)
+                  case splat_inner.kind
+                  when NodeKind::LiteralNumber, NodeKind::LiteralString, NodeKind::LiteralChar,
+                       NodeKind::LiteralSymbol, NodeKind::LiteralRegex, NodeKind::LiteralNil,
+                       NodeKind::LiteralBool, NodeKind::Array, NodeKind::Hash
+                    @diagnostics << Diagnostic.new(node_span(splat_inner_id), "can't splat a literal")
+                    return @arena.add_node(NodeKind::Error, span)
+                  else
+                    # allow valid splat targets
+                  end
+                end
+              else
+                # allow Ident, InstanceVar, ClassVar, Global, Call (for setters), Index
+              end
+            end
+          end
+
+          # detect invalid RHS containing assignments or splats (but allow splats for setter calls)
+          if rhs_node.kind == NodeKind::Tuple
+            is_setter_call = lhs_node.kind == NodeKind::Binary &&
+                             @arena.operator_kind(lhs_node.payload_index) == TokenKind::Dot
+            @arena.children(right).each do |child_id|
+              child = @arena.node(child_id)
+              if child.kind == NodeKind::Assign
+                @diagnostics << Diagnostic.new(node_span(child_id), "unexpected token: \"=\"")
+                return @arena.add_node(NodeKind::Error, span)
+              end
+              if child.kind == NodeKind::Splat && !is_setter_call
+                @diagnostics << Diagnostic.new(node_span(child_id), "splat is not allowed on right-hand side")
+                return @arena.add_node(NodeKind::Error, span)
+              end
+            end
+          end
+
+          # detect single splat as RHS (e.g., `a = *1`) but allow for setter calls (foo.bar= *baz)
+          if rhs_node.kind == NodeKind::Splat
+            # Setter calls (Binary[Dot]) can have splat args
+            is_setter_call = lhs_node.kind == NodeKind::Binary &&
+                             @arena.operator_kind(lhs_node.payload_index) == TokenKind::Dot
+            unless is_setter_call
+              @diagnostics << Diagnostic.new(node_span(right), "splat is not allowed on right-hand side")
+              return @arena.add_node(NodeKind::Error, span)
+            end
+          end
+
+          # single LHS with multiple RHS values requires splat or tuple LHS
+          if lhs_node.kind != NodeKind::Tuple && lhs_node.kind != NodeKind::Splat && rhs_node.kind == NodeKind::Tuple
+            rhs_count = @arena.children(right).size
+            if rhs_count > 1
+              @diagnostics << Diagnostic.new(span, "multiple assignment requires matching targets")
+              return @arena.add_node(NodeKind::Error, span)
+            end
+          end
+
+          # multi-assign count validation: with splat and >2 non-splat targets, need enough values
+          # Crystal appears to only validate when there are more than 2 non-splat targets
+          # Example: `a, b, *c, d = 1, 2` needs 3 values (a, b get first 2, d gets last 1)
+          # Example: `a, b, *c = 1` is allowed (only 2 non-splat, Crystal allows short assignment)
+          if lhs_node.kind == NodeKind::Tuple
+            lhs_children = @arena.children(left)
+            splat_index = lhs_children.index { |c| @arena.node(c).kind == NodeKind::Splat }
+            if splat_index
+              non_splat_count = lhs_children.size - 1  # total minus the splat
+              # Only validate when there are more than 2 non-splat targets
+              if non_splat_count > 2
+                rhs_count = if rhs_node.kind == NodeKind::Tuple
+                              @arena.children(right).size
+                            else
+                              1
+                            end
+                if rhs_count < non_splat_count
+                  @diagnostics << Diagnostic.new(span, "not enough values for multiple assignment")
+                  return @arena.add_node(NodeKind::Error, span)
+                end
+              end
+            end
+          end
+
           @arena.add_node(NodeKind::Assign, span, [left, right])
         when TokenKind::DoubleColon
           @arena.add_node(NodeKind::Path, span, [left, right])
@@ -2462,6 +2631,51 @@ module Facet
           true
         else
           false
+        end
+      end
+
+      private def assignment_op?(kind : TokenKind) : Bool
+        case kind
+        when TokenKind::Assign,
+             TokenKind::PlusEqual, TokenKind::MinusEqual, TokenKind::StarEqual,
+             TokenKind::SlashEqual, TokenKind::SlashSlashEqual, TokenKind::PercentEqual,
+             TokenKind::PipeEqual, TokenKind::AmpersandEqual, TokenKind::CaretEqual,
+             TokenKind::StarStarEqual, TokenKind::ShiftLeftEqual, TokenKind::ShiftRightEqual,
+             TokenKind::AmpersandPlusEqual, TokenKind::AmpersandMinusEqual, TokenKind::AmpersandStarEqual,
+             TokenKind::AmpersandStarStarEqual, TokenKind::OrOrEqual, TokenKind::AndAndEqual
+          true
+        else
+          false
+        end
+      end
+
+      # Check for standalone splat expressions which are invalid outside of assignment context
+      private def validate_no_standalone_splat(node_id : NodeId) : Nil
+        node = @arena.node(node_id)
+        case node.kind
+        when NodeKind::Splat
+          @diagnostics << Diagnostic.new(node.span, "splat is not allowed outside of assignment")
+        when NodeKind::If, NodeKind::Unless
+          # Check the body of conditionals for splats
+          children = @arena.children(node_id)
+          if children.size >= 2
+            then_body = @arena.node(children[1])
+            if then_body.kind == NodeKind::Expressions
+              @arena.children(children[1]).each do |child|
+                child_node = @arena.node(child)
+                if child_node.kind == NodeKind::Splat
+                  @diagnostics << Diagnostic.new(child_node.span, "splat is not allowed outside of assignment")
+                end
+              end
+            elsif then_body.kind == NodeKind::Splat
+              @diagnostics << Diagnostic.new(then_body.span, "splat is not allowed outside of assignment")
+            end
+          end
+        when NodeKind::Tuple
+          # Check tuple elements for splats (standalone tuple with splat, not in assignment)
+          # This is handled by assignment validation, so skip here
+        else
+          # Other node types don't need splat validation
         end
       end
 

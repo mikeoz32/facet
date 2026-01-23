@@ -40,17 +40,17 @@ describe "Parser upstream parity (multi-assign / splat)" do
     parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new("b? = 1", "diag"))
     parser.parse_file
     parser.diagnostics.should_not be_empty
-    parser.diagnostics.first.message.should include("=")
+    parser.diagnostics.first.message.should contain("=")
 
     parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new("b! = 1", "diag"))
     parser.parse_file
     parser.diagnostics.should_not be_empty
-    parser.diagnostics.first.message.should include("=")
+    parser.diagnostics.first.message.should contain("=")
 
     parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new("a, B = 1, 2", "diag"))
     parser.parse_file
     parser.diagnostics.should_not be_empty
-    parser.diagnostics.first.message.should include("constant")
+    parser.diagnostics.first.message.should contain("constant")
 
     # errors that just need to produce a diagnostic
     [
