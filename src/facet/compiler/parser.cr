@@ -149,6 +149,10 @@ module Facet
       end
 
       private def parse_proc_pointer_target : NodeId
+        if current.kind == TokenKind::DoubleColon
+          advance
+        end
+
         base = case current.kind
                when TokenKind::KeywordSelf
                  tok = advance
@@ -203,6 +207,11 @@ module Facet
                 end
           span = Span.new(node_span(base).start, node_span(rhs).finish)
           base = @arena.add_node(NodeKind::Path, span, [base, rhs])
+        end
+        if current.kind == TokenKind::LParen
+          args = parse_type_args
+          span = Span.new(node_span(base).start, node_span(args).finish)
+          base = @arena.add_node(NodeKind::Call, span, [base, args])
         end
         base
       end
@@ -369,13 +378,45 @@ module Facet
           @arena.add_node(NodeKind::ClassVar, ident.span, payload_index: sym)
         when TokenKind::GlobalVar
           ident = advance
-          sym = @arena.symbols.intern(token_text(ident))
-          @arena.add_node(NodeKind::Global, ident.span, payload_index: sym)
+          parse_global_var(ident)
         else
           tok = current
           @diagnostics << Diagnostic.new(tok.span, "expected variable name")
           advance unless tok.eof?
           @arena.add_node(NodeKind::Error, tok.span)
+        end
+      end
+
+      private def parse_global_var(token : Token) : NodeId
+        text = token_text(token)
+        sym = @arena.symbols.intern(text)
+        node_id = @arena.add_node(NodeKind::Global, token.span, payload_index: sym)
+        if digits = global_match_data_digits(text)
+          if digits.size > 10 || (value = digits.to_i64?) && value > Int32::MAX
+            @diagnostics << Diagnostic.new(token.span, "Index $#{digits} doesn't fit in an Int32")
+          end
+        end
+        node_id
+      end
+
+      private def global_match_data_name?(name : String) : Bool
+        !!global_match_data_digits(name)
+      end
+
+      private def global_match_data_digits(name : String) : String?
+        return nil if name.size < 2 || name[0] != '$'
+        bytes = name.to_slice
+        i = 1
+        while i < bytes.size && bytes[i] >= 48 && bytes[i] <= 57
+          i += 1
+        end
+        return nil if i == 1
+        if i == bytes.size
+          String.new(bytes[1, i - 1])
+        elsif i == bytes.size - 1 && bytes[i] == '?'.ord.to_u8
+          String.new(bytes[1, i - 1])
+        else
+          nil
         end
       end
 
@@ -523,20 +564,28 @@ module Facet
         start = advance
         body = parse_expressions([TokenKind::KeywordRescue, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
         rescue_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+        else_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
         ensure_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
 
         if current.kind == TokenKind::KeywordRescue
           advance
-          rescue_body = parse_expressions([TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+          rescue_body = parse_expressions([TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
           if current.kind == TokenKind::KeywordRescue
             while current.kind == TokenKind::KeywordRescue
               advance
               _ = parse_expression if expression_follows?
-              parse_expressions([TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+              parse_expressions([TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
             end
           end
           rescue_span = span_from_nodes(rescue_body, rescue_body)
           rescue_node = @arena.add_node(NodeKind::Rescue, rescue_span, [rescue_body])
+        end
+
+        if current.kind == TokenKind::KeywordElse
+          advance
+          else_body = parse_expressions([TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+          else_span = span_from_nodes(else_body, else_body)
+          else_node = @arena.add_node(NodeKind::Rescue, else_span, [else_body])
         end
 
         if current.kind == TokenKind::KeywordEnsure
@@ -548,7 +597,7 @@ module Facet
 
         end_token = expect(TokenKind::KeywordEnd, "expected 'end' to close begin")
         span = Span.new(start.span.start, end_token.span.finish)
-        @arena.add_node(NodeKind::Begin, span, [body, rescue_node, ensure_node])
+        @arena.add_node(NodeKind::Begin, span, [body, rescue_node, else_node, ensure_node])
       end
 
       private def parse_visibility : NodeId
@@ -565,7 +614,8 @@ module Facet
 
       private def parse_case : NodeId
         start = advance
-        subject = if current.kind == TokenKind::KeywordWhen || current.kind == TokenKind::KeywordEnd
+        skip_separators
+        subject = if current.kind == TokenKind::KeywordWhen || current.kind == TokenKind::KeywordIn || current.kind == TokenKind::KeywordEnd
                     @arena.add_node(NodeKind::Nop, Span.new(start.span.finish, start.span.finish))
                   else
                     parse_expression
@@ -727,20 +777,29 @@ module Facet
         body = parse_expressions([TokenKind::KeywordRescue, TokenKind::KeywordEnsure, end_kind])
 
         rescue_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+        else_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
         ensure_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
         handlers = false
 
         if current.kind == TokenKind::KeywordRescue
           handlers = true
           advance
-          rescue_body = parse_expressions([TokenKind::KeywordEnsure, end_kind])
+          rescue_body = parse_expressions([TokenKind::KeywordElse, TokenKind::KeywordEnsure, end_kind])
           while current.kind == TokenKind::KeywordRescue
             advance
             _ = parse_expression if expression_follows?
-            parse_expressions([TokenKind::KeywordEnsure, end_kind])
+            parse_expressions([TokenKind::KeywordElse, TokenKind::KeywordEnsure, end_kind])
           end
           rescue_span = span_from_nodes(rescue_body, rescue_body)
           rescue_node = @arena.add_node(NodeKind::Rescue, rescue_span, [rescue_body])
+        end
+
+        if current.kind == TokenKind::KeywordElse
+          handlers = true
+          advance
+          else_body = parse_expressions([TokenKind::KeywordEnsure, end_kind])
+          else_span = span_from_nodes(else_body, else_body)
+          else_node = @arena.add_node(NodeKind::Rescue, else_span, [else_body])
         end
 
         if current.kind == TokenKind::KeywordEnsure
@@ -754,13 +813,15 @@ module Facet
         body = if handlers
                  tail = if @arena.node(ensure_node).kind != NodeKind::Nop
                           ensure_node
+                        elsif @arena.node(else_node).kind != NodeKind::Nop
+                          else_node
                         elsif @arena.node(rescue_node).kind != NodeKind::Nop
                           rescue_node
                         else
                           body
                         end
                  span = Span.new(node_span(body).start, node_span(tail).finish)
-                 @arena.add_node(NodeKind::Begin, span, [body, rescue_node, ensure_node])
+                 @arena.add_node(NodeKind::Begin, span, [body, rescue_node, else_node, ensure_node])
                else
                  body
                end
@@ -848,7 +909,7 @@ module Facet
 
       private def parse_alias : NodeId
         start = advance
-        name = parse_identifier_or_error
+        name = parse_path
         expect(TokenKind::Assign, "expected '=' in alias")
         value = parse_type
         span = Span.new(start.span.start, node_span(value).finish)
@@ -1146,6 +1207,12 @@ module Facet
             left = parse_postfix(left)
             next
           end
+          if token.kind == TokenKind::KeywordAs || token.kind == TokenKind::KeywordAsQuestion
+            @diagnostics << Diagnostic.new(token.span, "unexpected token: \"#{token_text(token)}\"")
+            advance
+            _ = parse_expression(0, stop) if expression_follows?
+            return @arena.add_node(NodeKind::Error, token.span)
+          end
           if token.kind == TokenKind::KeywordRescue
             advance
             right = parse_expression(0, stop)
@@ -1235,8 +1302,7 @@ module Facet
           @arena.add_node(NodeKind::ClassVar, token.span, payload_index: symbol_id)
         when TokenKind::GlobalVar
           advance
-          symbol_id = @arena.symbols.intern(token_text(token))
-          @arena.add_node(NodeKind::Global, token.span, payload_index: symbol_id)
+          parse_global_var(token)
         when TokenKind::Number
           advance
           @arena.add_literal_node(LiteralKind::Number, token.span)
@@ -1282,8 +1348,16 @@ module Facet
           @arena.add_ident(token.span, sym)
         when TokenKind::Arrow
           op = advance
-          if current.kind == TokenKind::LBrace
-            return parse_lambda_block(op)
+          params_node = nil
+          if current.kind == TokenKind::LParen
+            params_node = parse_params
+          end
+          if current.kind == TokenKind::Colon
+            advance
+            _ = parse_type
+          end
+          if current.kind == TokenKind::LBrace || current.kind == TokenKind::KeywordDo
+            return parse_lambda_literal(op, params_node)
           end
           target = parse_proc_pointer_target
           span = Span.new(op.span.start, node_span(target).finish)
@@ -1294,7 +1368,13 @@ module Facet
           @arena.add_ident(token.span, sym)
         when TokenKind::SafeNav
           op = advance
-          expr = parse_expression(prefix_binding_power(TokenKind::Dot), stop)
+          expr = if current.kind == TokenKind::Bang
+                   bang = advance
+                   sym = @arena.symbols.intern("!")
+                   @arena.add_ident(bang.span, sym)
+                 else
+                   parse_expression(prefix_binding_power(TokenKind::Dot), stop)
+                 end
           span = Span.new(op.span.start, node_span(expr).finish)
           @arena.add_unary(TokenKind::SafeNav, span, expr)
         when TokenKind::KeywordSelf
@@ -1415,9 +1495,13 @@ module Facet
             indices = [] of NodeId
             if current.kind != TokenKind::RBracket
               loop do
-                indices << parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RBracket })
-                break unless match(TokenKind::Comma)
-                break if current.kind == TokenKind::RBracket
+                indices << parse_argument
+                if current.kind == TokenKind::Comma
+                  advance
+                  break if current.kind == TokenKind::RBracket
+                  next
+                end
+                break
               end
             end
             end_token = expect(TokenKind::RBracket, "expected ']' to close index")
@@ -1446,16 +1530,24 @@ module Facet
       private def parse_block_call(call : NodeId) : NodeId
         start = advance
         block_params = parse_block_params
-        body = parse_expressions([TokenKind::KeywordRescue, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+        body = parse_expressions([TokenKind::KeywordRescue, TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
 
         rescue_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+        else_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
         ensure_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
 
         if current.kind == TokenKind::KeywordRescue
           advance
-          rescue_body = parse_expressions([TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+          rescue_body = parse_expressions([TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
           rescue_span = span_from_nodes(rescue_body, rescue_body)
           rescue_node = @arena.add_node(NodeKind::Rescue, rescue_span, [rescue_body])
+        end
+
+        if current.kind == TokenKind::KeywordElse
+          advance
+          else_body = parse_expressions([TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+          else_span = span_from_nodes(else_body, else_body)
+          else_node = @arena.add_node(NodeKind::Rescue, else_span, [else_body])
         end
 
         if current.kind == TokenKind::KeywordEnsure
@@ -1465,11 +1557,13 @@ module Facet
           ensure_node = @arena.add_node(NodeKind::Ensure, ensure_span, [ensure_body])
         end
 
-        block_body = if @arena.node(rescue_node).kind == NodeKind::Nop && @arena.node(ensure_node).kind == NodeKind::Nop
+        block_body = if @arena.node(rescue_node).kind == NodeKind::Nop &&
+                        @arena.node(else_node).kind == NodeKind::Nop &&
+                        @arena.node(ensure_node).kind == NodeKind::Nop
                        body
                      else
                        span = span_from_nodes(body, ensure_node)
-                       @arena.add_node(NodeKind::Begin, span, [body, rescue_node, ensure_node])
+                       @arena.add_node(NodeKind::Begin, span, [body, rescue_node, else_node, ensure_node])
                      end
 
         end_token = expect(TokenKind::KeywordEnd, "expected 'end' to close block")
@@ -1630,11 +1724,8 @@ module Facet
           loop do
             children << parse_argument
             if current.kind == TokenKind::Comma
-              comma = advance
-              if current.kind == TokenKind::RParen
-                @diagnostics << Diagnostic.new(comma.span, "invalid trailing comma in call")
-                break
-              end
+              advance
+              break if current.kind == TokenKind::RParen
               next
             else
               break
@@ -1674,6 +1765,7 @@ module Facet
         start = advance
         entries = [] of NodeId
         mode = :unknown
+        named_tuple_keys = nil
         if current.kind != TokenKind::RBrace
           loop do
             entry, entry_mode = parse_brace_entry
@@ -1681,7 +1773,21 @@ module Facet
             if mode == :unknown
               mode = entry_mode
             elsif mode != entry_mode && entry_mode != :unknown
-              @diagnostics << Diagnostic.new(node_span(entry), "mixed tuple/hash/named tuple entries")
+              if mode == :hash && entry_mode == :named_tuple
+                @diagnostics << Diagnostic.new(node_span(entry), "can't use 'key: value' syntax in a hash literal")
+              else
+                @diagnostics << Diagnostic.new(node_span(entry), "mixed tuple/hash/named tuple entries")
+              end
+            end
+            if entry_mode == :named_tuple && mode == :named_tuple
+              key_id = @arena.node(entry).payload_index
+              named_tuple_keys ||= {} of Int32 => Bool
+              if named_tuple_keys.has_key?(key_id)
+                name = @arena.symbols[key_id]
+                @diagnostics << Diagnostic.new(node_span(entry), "duplicated key: #{name}")
+              else
+                named_tuple_keys[key_id] = true
+              end
             end
             break unless match(TokenKind::Comma)
             break if current.kind == TokenKind::RBrace
@@ -1726,6 +1832,9 @@ module Facet
           value = parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RBrace })
           name_text = token_text(name)
           name_text = name_text[1...-1] if name.kind == TokenKind::String && name_text.size >= 2
+          if name_text.empty?
+            @diagnostics << Diagnostic.new(name.span, "named tuple name cannot be empty")
+          end
           symbol_id = @arena.symbols.intern(name_text)
           span = Span.new(name.span.start, node_span(value).finish)
           return {@arena.add_named_arg(symbol_id, span, value), :named_tuple}
@@ -1738,6 +1847,13 @@ module Facet
           span = Span.new(node_span(key).start, node_span(value).finish)
           return {@arena.add_binary(op.kind, span, key, value), :hash}
         end
+        if current.kind == TokenKind::Colon
+          colon = advance
+          @diagnostics << Diagnostic.new(colon.span, "expecting token '=>', not ':'")
+          value = parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RBrace })
+          span = Span.new(node_span(key).start, node_span(value).finish)
+          return {@arena.add_binary(TokenKind::HashRocket, span, key, value), :hash}
+        end
 
         {key, :tuple}
       end
@@ -1749,6 +1865,9 @@ module Facet
           value = parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RParen || current.kind == TokenKind::RBracket })
           name_text = token_text(name)
           name_text = name_text[1...-1] if name.kind == TokenKind::String && name_text.size >= 2
+          if name_text.empty?
+            @diagnostics << Diagnostic.new(name.span, "named argument cannot have an empty name")
+          end
           symbol_id = @arena.symbols.intern(name_text)
           span = Span.new(name.span.start, node_span(value).finish)
           return @arena.add_named_arg(symbol_id, span, value)
@@ -1756,17 +1875,92 @@ module Facet
         parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RParen || current.kind == TokenKind::RBracket })
       end
 
-      private def parse_lambda_block(start_arrow : Token) : NodeId
-        lbrace = advance
-        params = if current.kind == TokenKind::Pipe
-                   parse_block_params
-                 else
-                   @arena.add_node(NodeKind::Args, Span.new(lbrace.span.finish, lbrace.span.finish))
-                 end
-        body = parse_expressions([TokenKind::RBrace])
-        end_token = expect(TokenKind::RBrace, "expected '}' to close lambda")
+      private def parse_lambda_literal(start_arrow : Token, params_node : NodeId?) : NodeId
+        if current.kind == TokenKind::LBrace
+          lbrace = advance
+          params = params_node || (current.kind == TokenKind::Pipe ? parse_block_params : @arena.add_node(NodeKind::Args, Span.new(lbrace.span.finish, lbrace.span.finish)))
+          body = parse_expressions([TokenKind::KeywordRescue, TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::RBrace])
+
+          rescue_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+          else_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+          ensure_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+
+          if current.kind == TokenKind::KeywordRescue
+            advance
+            rescue_body = parse_expressions([TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::RBrace])
+            rescue_span = span_from_nodes(rescue_body, rescue_body)
+            rescue_node = @arena.add_node(NodeKind::Rescue, rescue_span, [rescue_body])
+          end
+
+          if current.kind == TokenKind::KeywordElse
+            advance
+            else_body = parse_expressions([TokenKind::KeywordEnsure, TokenKind::RBrace])
+            else_span = span_from_nodes(else_body, else_body)
+            else_node = @arena.add_node(NodeKind::Rescue, else_span, [else_body])
+          end
+
+          if current.kind == TokenKind::KeywordEnsure
+            advance
+            ensure_body = parse_expressions([TokenKind::RBrace])
+            ensure_span = span_from_nodes(ensure_body, ensure_body)
+            ensure_node = @arena.add_node(NodeKind::Ensure, ensure_span, [ensure_body])
+          end
+
+          block_body = if @arena.node(rescue_node).kind == NodeKind::Nop &&
+                          @arena.node(else_node).kind == NodeKind::Nop &&
+                          @arena.node(ensure_node).kind == NodeKind::Nop
+                         body
+                       else
+                         span = span_from_nodes(body, ensure_node)
+                         @arena.add_node(NodeKind::Begin, span, [body, rescue_node, else_node, ensure_node])
+                       end
+
+          end_token = expect(TokenKind::RBrace, "expected '}' to close lambda")
+          span = Span.new(start_arrow.span.start, end_token.span.finish)
+          return @arena.add_node(NodeKind::Block, span, [params, block_body])
+        end
+
+        do_token = expect(TokenKind::KeywordDo, "expected 'do' to start lambda body")
+        params = params_node || (current.kind == TokenKind::Pipe ? parse_block_params : @arena.add_node(NodeKind::Args, Span.new(do_token.span.finish, do_token.span.finish)))
+        body = parse_expressions([TokenKind::KeywordRescue, TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+
+        rescue_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+        else_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+        ensure_node = @arena.add_node(NodeKind::Nop, Span.new(current.span.start, current.span.start))
+
+        if current.kind == TokenKind::KeywordRescue
+          advance
+          rescue_body = parse_expressions([TokenKind::KeywordElse, TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+          rescue_span = span_from_nodes(rescue_body, rescue_body)
+          rescue_node = @arena.add_node(NodeKind::Rescue, rescue_span, [rescue_body])
+        end
+
+        if current.kind == TokenKind::KeywordElse
+          advance
+          else_body = parse_expressions([TokenKind::KeywordEnsure, TokenKind::KeywordEnd])
+          else_span = span_from_nodes(else_body, else_body)
+          else_node = @arena.add_node(NodeKind::Rescue, else_span, [else_body])
+        end
+
+        if current.kind == TokenKind::KeywordEnsure
+          advance
+          ensure_body = parse_expressions([TokenKind::KeywordEnd])
+          ensure_span = span_from_nodes(ensure_body, ensure_body)
+          ensure_node = @arena.add_node(NodeKind::Ensure, ensure_span, [ensure_body])
+        end
+
+        block_body = if @arena.node(rescue_node).kind == NodeKind::Nop &&
+                        @arena.node(else_node).kind == NodeKind::Nop &&
+                        @arena.node(ensure_node).kind == NodeKind::Nop
+                       body
+                     else
+                       span = span_from_nodes(body, ensure_node)
+                       @arena.add_node(NodeKind::Begin, span, [body, rescue_node, else_node, ensure_node])
+                     end
+
+        end_token = expect(TokenKind::KeywordEnd, "expected 'end' to close lambda")
         span = Span.new(start_arrow.span.start, end_token.span.finish)
-        @arena.add_node(NodeKind::Block, span, [params, body])
+        @arena.add_node(NodeKind::Block, span, [params, block_body])
       end
 
       private def parse_params : NodeId
@@ -2131,7 +2325,10 @@ module Facet
           inner
         when TokenKind::Arrow
           arrow = advance
-          ret = if stop && stop.call
+          newline_after = !current.eof? && newline_between?(arrow.span.finish, current.span.start)
+          ret = if newline_after
+                  @arena.add_node(NodeKind::Nop, Span.new(arrow.span.finish, arrow.span.finish))
+                elsif stop && stop.call
                   @arena.add_node(NodeKind::Nop, Span.new(arrow.span.finish, arrow.span.finish))
                 elsif {TokenKind::Comma, TokenKind::RParen, TokenKind::RBracket, TokenKind::RBrace, TokenKind::Eof}.includes?(current.kind)
                   @arena.add_node(NodeKind::Nop, Span.new(arrow.span.finish, arrow.span.finish))
@@ -2309,12 +2506,6 @@ module Facet
             return @arena.add_node(NodeKind::Error, span)
           end
 
-          # reject RHS being an assignment (e.g., `a = 1, b = 2`)
-          if rhs_node.kind == NodeKind::Assign
-            @diagnostics << Diagnostic.new(node_span(right), "unexpected token: \"=\"")
-            return @arena.add_node(NodeKind::Error, span)
-          end
-
           # reject non-assignable LHS (e.g., `1 == 2, a = 4` where LHS becomes Binary)
           # but allow method calls (Binary with Dot/SafeNav) which are valid setter assignments
           if lhs_node.kind == NodeKind::Binary
@@ -2334,6 +2525,15 @@ module Facet
             end
           end
 
+          # reject assignments to global match data ($0, $1, etc.)
+          if lhs_node.kind == NodeKind::Global
+            name = @arena.symbols[lhs_node.payload_index]
+            if global_match_data_name?(name)
+              @diagnostics << Diagnostic.new(lhs_node.span, "global match data cannot be assigned to")
+              return @arena.add_node(NodeKind::Error, span)
+            end
+          end
+
           # detect invalid targets in multiple-assignment LHS
           if lhs_node.kind == NodeKind::Tuple
             splat_count = 0
@@ -2344,6 +2544,12 @@ module Facet
                 name = @arena.symbols[child.payload_index]
                 if name =~ /\A[A-Z]/
                   @diagnostics << Diagnostic.new(child.span, "can't assign to constant in multiple assignment")
+                  return @arena.add_node(NodeKind::Error, span)
+                end
+              when NodeKind::Global
+                name = @arena.symbols[child.payload_index]
+                if global_match_data_name?(name)
+                  @diagnostics << Diagnostic.new(child.span, "global match data cannot be assigned to")
                   return @arena.add_node(NodeKind::Error, span)
                 end
               when NodeKind::Binary
@@ -2781,6 +2987,17 @@ module Facet
 
       private def token_text(token : Token) : String
         String.new(@source.bytes[token.span.start, token.span.length])
+      end
+
+      private def newline_between?(start_pos : Int32, end_pos : Int32) : Bool
+        i = start_pos
+        bytes = @source.bytes
+        while i < end_pos
+          byte = bytes[i]
+          return true if byte == 0x0a_u8 || byte == 0x0d_u8
+          i += 1
+        end
+        false
       end
 
       private def adjacent?(left : Token, right : Token) : Bool

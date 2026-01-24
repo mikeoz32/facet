@@ -36,4 +36,5 @@ describe "Parser upstream parity (types and literals)" do
   it_parses "@a = uninitialized Foo"
   it_parses "@@a = uninitialized Foo"
   it_parses "::A::B"
+  it_parses "Foo(_)"
 end

@@ -5,12 +5,52 @@ include UpstreamSupport
 
 describe "Parser upstream parity (strings and percent literals)" do
   it_parses "%q(foo bar)"
+  it_parses "%Q(foo bar)"
   it_parses "%w(foo bar)"
   it_parses "%i(foo bar)"
 
-  it_parses <<-CRYSTAL
-    <<-EOF
-    hello
-    EOF
-  CRYSTAL
+  it_parses "\"foo\#{bar}baz\""
+  it_parses "qux \"foo\#{bar do end}baz\""
+  it_parses "\"\#{1\n}\""
+  it_parses "\"foo\#{\"bar\"}baz\""
+  it_parses "`foo\#{1}bar`"
+  it_parses "`foo`"
+  it_parses "`foo\\``"
+  it_parses "%x(`which(foo)`)"
+
+  it_parses "<<-EOF\nhello\nEOF"
+
+  it_parses "<<-HERE\nHello, mom! I am HERE.\nHER dress is beautiful.\nHE is OK.\n  HERESY\nHERE"
+  it_parses "<<-HERE\n   One\n  Zero\n  HERE"
+  it_parses "<<-HERE\n   One \\n Two\n  Zero\n  HERE"
+  it_parses "<<-HERE\n   One\n\n  Zero\n  HERE"
+  it_parses "<<-HERE\n   One\n \n  Zero\n  HERE"
+  it_parses "<<-HERE\n   \#{1}One\n  \#{2}Zero\n  HERE"
+  it_parses "<<-HERE\n  foo\#{1}bar\n   baz\n  HERE"
+  it_parses "<<-HERE\r\n   One\r\n  Zero\r\n  HERE"
+  it_parses "<<-HERE\r\n   One\r\n  Zero\r\n  HERE\r\n"
+  it_parses "<<-SOME\n  Sa\n  Se\n  SOME"
+  it_parses "<<-HERE\n  \#{1} \#{2}\n  HERE"
+  it_parses "<<-HERE\n  \#{1} \\n \#{2}\n  HERE"
+  it_parses "<<-HERE\nHERE"
+  it_parses "<<-HERE1; <<-HERE2\nHERE1\nHERE2"
+  it_parses "<<-HERE1; <<-HERE2\nhere1\nHERE1\nHERE2"
+  it_parses "<<-HERE1; <<-HERE2\nHERE1\nhere2\nHERE2"
+
+  assert_syntax_error "<<-HERE\n   One\nwrong\n  Zero\n  HERE", "heredoc line must have an indent greater than or equal to 2"
+  assert_syntax_error "<<-HERE\n   One\n wrong\n  Zero\n  HERE", "heredoc line must have an indent greater than or equal to 2"
+  assert_syntax_error "<<-HERE\n   One\n \#{1}\n  Zero\n  HERE", "heredoc line must have an indent greater than or equal to 2"
+  assert_syntax_error "<<-HERE\n   One\n  \#{1}\n wrong\n  HERE", "heredoc line must have an indent greater than or equal to 2"
+  assert_syntax_error "<<-HERE\n   One\n  \#{1}\n wrong\#{1}\n  HERE", "heredoc line must have an indent greater than or equal to 2"
+  assert_syntax_error "<<-HERE\n One\n  \#{1}\n  HERE", "heredoc line must have an indent greater than or equal to 2"
+  assert_syntax_error %("\#{<<-HERE}"\nHERE), "heredoc cannot be used inside interpolation"
+
+  it_parses "<<-'HERE'\n  hello \\n world\n  \#{1}\n  HERE"
+  assert_syntax_error "<<-'HERE\n", "expecting closing single quote"
+  it_parses "<<-'HERE COMES HEREDOC'\n  hello \\n world\n  \#{1}\n  HERE COMES HEREDOC"
+  it_parses "<<-EOF.x\n  foo\nEOF"
+  it_parses "<<-'EOF'.x\n  foo\nEOF"
+  assert_syntax_error "<<-FOO\n1\nFOO.bar", "Unterminated heredoc: can't find \"FOO\" anywhere before the end of file"
+  assert_syntax_error "<<-FOO\n1\nFOO + 2", "Unterminated heredoc: can't find \"FOO\" anywhere before the end of file"
+  it_parses "<<-FOO\n\t1\n\tFOO"
 end

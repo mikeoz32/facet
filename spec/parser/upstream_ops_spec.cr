@@ -37,16 +37,27 @@ describe "Parser upstream parity (operators and edge calls)" do
   it_parses "f.x Foo.new"
   it_parses "f.x = Foo.new"
   it_parses "f.x = - 1"
+  it_parses "b.c ||= 1"
+  it_parses "b.c &&= 1"
+  it_parses "foo.bar = {} of Int32 => Int32"
+  it_parses "1 <= 2 <= 3"
+  it_parses "1 == 2 == 3 == 4"
 
-  it "parses abbreviated operator assignment" do
-    %w(+= -= *= /= //= %= |= &= ^= **=).each do |op|
-      parse_ok("f.x #{op} 2")
-    end
-
-    %w(<<= >>= &+= &-= &*= &**=).each do |op|
-      parse_ok("f.x #{op} 2")
-    end
-  end
+  it_parses "f.x += 2"
+  it_parses "f.x -= 2"
+  it_parses "f.x *= 2"
+  it_parses "f.x /= 2"
+  it_parses "f.x //= 2"
+  it_parses "f.x %= 2"
+  it_parses "f.x |= 2"
+  it_parses "f.x &= 2"
+  it_parses "f.x ^= 2"
+  it_parses "f.x **= 2"
+  it_parses "f.x <<= 2"
+  it_parses "f.x >>= 2"
+  it_parses "f.x &+= 2"
+  it_parses "f.x &-= 2"
+  it_parses "f.x &*= 2"
 
   it "parses operator definitions with and without receiver" do
     %w(/ < <= == != =~ !~ > >= + - * / ~ % & | ^ ** ===).each do |op|
@@ -84,18 +95,55 @@ describe "Parser upstream parity (operators and edge calls)" do
     end
   end
 
-  it "parses operator abbreviated assignments on vars and calls" do
-    %w(+ - * / // % | & ^ ** << >> &+ &- &*).each do |op|
-      parse_ok("a = 1; a #{op}= 1")
-      parse_ok("a = 1; a #{op}=\n1")
-      parse_ok("a.b #{op}=\n1")
-    end
-
-    parse_ok("a = 1; a &&= 1")
-    parse_ok("a = 1; a ||= 1")
-    parse_ok("a = 1; a[2] &&= 3")
-    parse_ok("a = 1; a[2] ||= 3")
-  end
+  it_parses "a = 1; a += 1"
+  it_parses "a = 1; a +=\n1"
+  it_parses "a.b +=\n1"
+  it_parses "a = 1; a -= 1"
+  it_parses "a = 1; a -=\n1"
+  it_parses "a.b -=\n1"
+  it_parses "a = 1; a *= 1"
+  it_parses "a = 1; a *=\n1"
+  it_parses "a.b *=\n1"
+  it_parses "a = 1; a /= 1"
+  it_parses "a = 1; a /=\n1"
+  it_parses "a.b /=\n1"
+  it_parses "a = 1; a //= 1"
+  it_parses "a = 1; a //=\n1"
+  it_parses "a.b //=\n1"
+  it_parses "a = 1; a %= 1"
+  it_parses "a = 1; a %=\n1"
+  it_parses "a.b %=\n1"
+  it_parses "a = 1; a |= 1"
+  it_parses "a = 1; a |=\n1"
+  it_parses "a.b |=\n1"
+  it_parses "a = 1; a &= 1"
+  it_parses "a = 1; a &=\n1"
+  it_parses "a.b &=\n1"
+  it_parses "a = 1; a ^= 1"
+  it_parses "a = 1; a ^=\n1"
+  it_parses "a.b ^=\n1"
+  it_parses "a = 1; a **= 1"
+  it_parses "a = 1; a **=\n1"
+  it_parses "a.b **=\n1"
+  it_parses "a = 1; a <<= 1"
+  it_parses "a = 1; a <<=\n1"
+  it_parses "a.b <<=\n1"
+  it_parses "a = 1; a >>= 1"
+  it_parses "a = 1; a >>=\n1"
+  it_parses "a.b >>=\n1"
+  it_parses "a = 1; a &+= 1"
+  it_parses "a = 1; a &+=\n1"
+  it_parses "a.b &+=\n1"
+  it_parses "a = 1; a &-= 1"
+  it_parses "a = 1; a &-=\n1"
+  it_parses "a.b &-=\n1"
+  it_parses "a = 1; a &*= 1"
+  it_parses "a = 1; a &*=\n1"
+  it_parses "a.b &*=\n1"
+  it_parses "a = 1; a &&= 1"
+  it_parses "a = 1; a ||= 1"
+  it_parses "a = 1; a[2] &&= 3"
+  it_parses "a = 1; a[2] ||= 3"
 
   it_diagnoses "case 1\nwhen .=(2)", "unexpected token"
   it_diagnoses "case 1\nwhen .+=(2)", "unexpected token"

@@ -55,6 +55,8 @@ module Facet
       PLUS = 0x2b_u8
       MINUS = 0x2d_u8
       TILDE = 0x7e_u8
+      BACKTICK = 0x60_u8
+      AMPERSAND = 0x26_u8
 
       getter source : Source
       getter line_starts : Array(Int32)
@@ -109,6 +111,12 @@ module Facet
           return record_token(scan_string)
         end
 
+        if byte == BACKTICK
+          if backtick_allowed?
+            return record_token(scan_backtick)
+          end
+        end
+
         if byte == SQUOTE
           return record_token(scan_char)
         end
@@ -133,6 +141,12 @@ module Facet
 
         if byte == SLASH && regex_allowed?
           return record_token(scan_regex)
+        end
+
+        if byte == AMPERSAND && @i + 2 < n && @bytes[@i + 1] == MINUS && @bytes[@i + 2] == GT
+          start = @i
+          @i += 1
+          return record_token(Token.new(TokenKind::Ampersand, Span.new(start, @i)))
         end
 
         if token = scan_operator_or_punct
@@ -621,6 +635,32 @@ module Facet
         Token.new(TokenKind::String, Span.new(start, @i))
       end
 
+      private def scan_backtick : Token
+        start = @i
+        n = @bytes.size
+        terminated = false
+        @i += 1
+        while @i < n
+          byte = @bytes[@i]
+          @i += 1
+          if byte == BACKSLASH
+            @i += 1 if @i < n
+          elsif byte == HASH && @i < n && @bytes[@i] == LBRACE
+            @i += 1
+            skip_interpolation
+          elsif byte == BACKTICK
+            terminated = true
+            break
+          elsif byte == LF
+            @line_starts << @i
+          end
+        end
+        unless terminated
+          @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated command literal")
+        end
+        Token.new(TokenKind::String, Span.new(start, @i))
+      end
+
       private def scan_char : Token
         start = @i
         n = @bytes.size
@@ -882,21 +922,30 @@ module Facet
           @i += 1
         end
 
-        label_start = @i
-        while @i < n
-          byte = @bytes[@i]
-          break unless ascii_alpha?(byte) || ascii_digit?(byte) || byte == UNDERSCORE
-          @i += 1
-        end
-        return nil if @i == label_start
-        label = String.new(@bytes[label_start, @i - label_start])
-
+        label = ""
         if quote
-          if @i < n && @bytes[@i] == quote
+          label_start = @i
+          while @i < n
+            byte = @bytes[@i]
+            break if byte == quote || byte == LF || byte == CR
             @i += 1
-          else
-            @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated heredoc label")
           end
+          if @i >= n || @bytes[@i] == LF || @bytes[@i] == CR
+            message = quote == SQUOTE ? "expecting closing single quote" : "expecting closing double quote"
+            @diagnostics << Diagnostic.new(Span.new(start, @i), message)
+            return Token.new(TokenKind::String, Span.new(start, @i))
+          end
+          label = String.new(@bytes[label_start, @i - label_start])
+          @i += 1
+        else
+          label_start = @i
+          while @i < n
+            byte = @bytes[@i]
+            break unless ascii_alpha?(byte) || ascii_digit?(byte) || byte == UNDERSCORE
+            @i += 1
+          end
+          return nil if @i == label_start
+          label = String.new(@bytes[label_start, @i - label_start])
         end
 
         while @i < n && @bytes[@i] != LF
@@ -908,30 +957,46 @@ module Facet
         end
 
         terminated = false
+        closing_indent = 0
+        line_indents = [] of Int32
         while @i < n
           line_start = @i
           while @i < n && @bytes[@i] != LF
             @i += 1
           end
           line_end = @i
+          line_end_no_cr = line_end
+          if line_end_no_cr > line_start && @bytes[line_end_no_cr - 1] == CR
+            line_end_no_cr -= 1
+          end
+
           compare_start = line_start
-          compare_length = line_end - line_start
+          compare_length = line_end_no_cr - line_start
+          indent_count = 0
+          scan_pos = line_start
           if indented
-            while compare_length > 0
-              byte = @bytes[compare_start]
+            while scan_pos < line_end_no_cr
+              byte = @bytes[scan_pos]
               break unless byte == SPACE || byte == TAB
-              compare_start += 1
-              compare_length -= 1
+              indent_count += 1
+              scan_pos += 1
             end
+            compare_start = scan_pos
+            compare_length = line_end_no_cr - scan_pos
           end
           if compare_length == label.bytesize &&
              @bytes[compare_start, compare_length] == label.to_slice
             terminated = true
+            closing_indent = indented ? indent_count : 0
             if @i < n && @bytes[@i] == LF
               @i += 1
               @line_starts << @i
             end
             break
+          end
+          if indented
+            blank = scan_pos >= line_end_no_cr
+            line_indents << indent_count unless blank
           end
           if @i < n && @bytes[@i] == LF
             @i += 1
@@ -939,8 +1004,17 @@ module Facet
           end
         end
 
+        if terminated && indented && closing_indent > 0
+          line_indents.each do |indent|
+            if indent < closing_indent
+              @diagnostics << Diagnostic.new(Span.new(start, @i), "heredoc line must have an indent greater than or equal to #{closing_indent}")
+              break
+            end
+          end
+        end
+
         unless terminated
-          @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated heredoc")
+          @diagnostics << Diagnostic.new(Span.new(start, @i), "Unterminated heredoc: can't find \"#{label}\" anywhere before the end of file")
         end
 
         Token.new(TokenKind::String, Span.new(start, @i))
@@ -993,6 +1067,10 @@ module Facet
             next
           elsif byte == SQUOTE
             skip_quoted(SQUOTE, "unterminated char literal")
+            next
+          elsif byte == LT && @i + 1 < n && @bytes[@i + 1] == LT
+            @diagnostics << Diagnostic.new(Span.new(@i, @i + 2), "heredoc cannot be used inside interpolation")
+            @i += 2
             next
           elsif byte == LBRACE
             depth += 1
@@ -1048,8 +1126,10 @@ module Facet
         slash_op = slash_starts_operator?
         following_space = next_byte_space?
         next_ident = next_byte_ident_start?
+        newline = newline_since_last_token?
         case @last_token_kind
         when TokenKind::Identifier
+          return true if newline
           return true if identifier_ends_with_predicate?
           return false if slash_op
           return false unless spaced_since_last_token?
@@ -1060,6 +1140,7 @@ module Facet
         when TokenKind::InstanceVar,
              TokenKind::ClassVar,
              TokenKind::GlobalVar
+          return true if newline
           return false if slash_op
           return false unless spaced_since_last_token?
           return false if following_space
@@ -1086,6 +1167,20 @@ module Facet
              TokenKind::KeywordTrue,
              TokenKind::KeywordFalse,
              TokenKind::KeywordSuper
+          return true if newline_since_last_token?
+          false
+        else
+          true
+        end
+      end
+
+      private def backtick_allowed? : Bool
+        case @last_token_kind
+        when TokenKind::KeywordDef,
+             TokenKind::KeywordMacro,
+             TokenKind::Dot,
+             TokenKind::SafeNav,
+             TokenKind::DoubleColon
           false
         else
           true
@@ -1110,6 +1205,29 @@ module Facet
           i += 1
         end
         true
+      end
+
+      private def newline_since_last_token? : Bool
+        return false unless span = @last_token_span
+        i = span.finish
+        return false if i >= @i
+        last_non_space = nil
+        while i < @i
+          byte = @bytes[i]
+          if byte == LF
+            return true unless last_non_space == BACKSLASH
+            last_non_space = nil
+          elsif byte == CR
+            return true unless last_non_space == BACKSLASH
+            last_non_space = nil
+          elsif byte == SPACE || byte == TAB
+            # skip
+          else
+            last_non_space = byte
+          end
+          i += 1
+        end
+        false
       end
 
       private def ident_preceded_by_dot_or_colon? : Bool

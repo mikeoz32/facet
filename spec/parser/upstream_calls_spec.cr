@@ -40,16 +40,85 @@ describe "Parser upstream parity (calls and blocks)" do
   it_parses "foo bar, out baz"
   it_parses "foo(&bar)"
   it_parses "foo &bar"
+  it_parses "foo(&block)"
+  it_parses "foo &block"
+  it_parses "a.foo &block"
+  it_parses "a.foo(&block)"
   it_parses "foo(&.bar)"
   it_parses "foo &.bar"
+  it_parses "foo(&.block)"
+  it_parses "foo &.block"
+  it_parses "foo &.block(1)"
+  it_parses "foo &.bar.baz"
+  it_parses "foo(&.bar.baz)"
+  it_parses "foo &.block[0]"
+  it_parses "foo(&.block[0])"
+  it_parses "foo &.@bar"
+  it_parses "foo &.@bar.baz"
+  it_parses "foo(&.as(T))"
+  it_parses "foo &.as(T)"
+  it_parses "foo(&.as(T).bar)"
+  it_parses "foo &.as(T).bar"
+  it_parses "foo &.each {\n}"
+  it_parses "foo &.each do\nend"
+  it_parses "foo { a = 1 }; a"
+  it_parses "foo.bar(1).baz"
+  it_parses "foo\n.bar"
+  it_parses "foo\n   .bar"
+  it_parses "foo\n\n  .bar"
+  it_parses "foo\n  #comment\n  .bar"
+  it_parses "foo(\n1\n)"
+  it_parses "a = 1\nfoo - a"
+  it_parses "a = 1\nfoo -a"
+  it_parses "foo out x; x"
+  it_parses "foo(out x); x"
+  it_parses "foo out @x; @x"
+  it_parses "foo(out @x); @x"
+  it_parses "foo out _"
+  it_parses "foo z: out x; x"
+  it_parses "foo *bar"
+  it_parses "foo(*bar)"
+  it_parses "foo x, *bar"
+  it_parses "foo(x, *bar, *baz, y)"
+  it_parses "foo.[0]"
+  it_parses "foo.[0] = 1"
 
-  it "resolves block associativity like upstream" do
-    ["a b c d e do; end", "a b c d e {}"].each { |code| parse_ok(code) }
-    parse_ok("a b c d e do 1 end do 2 end { 3 } do 4 end")
-    parse_ok("a b c d e { 1 } { 2 } do 3 end { 4 }")
-    parse_ok("a b c d e 1, 2 do; end")
-    parse_ok("a b c d e 1, 2 {}")
-    parse_ok("a 1, (2), b do end")
-    parse_ok("a 1, (2), b {}")
-  end
+  it_parses "foo(a: 1, b: 2)"
+  it_parses "foo(1, a: 1, b: 2)"
+  it_parses "foo a: 1, b: 2"
+  it_parses "foo 1, a: 1, b: 2"
+  it_parses "foo 1, a: 1, b: 2\n1"
+  it_parses "foo(a: 1\n)"
+  it_parses "foo(\na: 1,\n)"
+  assert_syntax_error "foo(\"\": 1)", "named argument cannot have an empty name"
+
+  it_parses %(foo("foo bar": 1, "baz": 2))
+  it_parses %(foo "foo bar": 1, "baz": 2)
+  it_parses %(foo(Foo: 1, Bar: 2))
+
+  it_parses "x.foo(a: 1, b: 2)"
+  it_parses "x.foo a: 1, b: 2"
+
+  it_parses "x[a: 1, b: 2]"
+  it_parses "x[a: 1, b: 2,]"
+  it_parses "x[{1}]"
+  it_parses "x[+ 1]"
+
+  it_parses "foo(a: 1, &block)"
+  it_parses "foo a: 1, &block"
+  it_parses "foo a: b(1) do\nend"
+  it_parses "Foo.bar x.y do\nend"
+  it_parses "x = 1; foo x do\nend"
+  it_parses "x = 1; foo x { }"
+  it_parses "x = 1; foo x {\n}"
+  it_parses "foo(\n  &.block\n)"
+
+  it_parses "a b c d e do; end"
+  it_parses "a b c d e {}"
+  it_parses "a b c d e do 1 end do 2 end { 3 } do 4 end"
+  it_parses "a b c d e { 1 } { 2 } do 3 end { 4 }"
+  it_parses "a b c d e 1, 2 do; end"
+  it_parses "a b c d e 1, 2 {}"
+  it_parses "a 1, (2), b do end"
+  it_parses "a 1, (2), b {}"
 end

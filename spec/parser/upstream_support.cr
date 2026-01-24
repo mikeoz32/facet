@@ -11,8 +11,9 @@ module UpstreamSupport
   end
 
   # Small DSL helpers to speed up porting upstream specs.
-  macro it_parses(code_literal, description = nil)
-    it({{description || "parses " + code_literal.stringify}}) do
+  # Accept extra args so we can mirror upstream `it_parses` signatures.
+  macro it_parses(code_literal, *rest, **named)
+    it({{"parses " + code_literal.stringify}}) do
       parse_ok({{code_literal}})
     end
   end
@@ -23,6 +24,18 @@ module UpstreamSupport
       parser.parse_file
       parser.diagnostics.should_not be_empty
       parser.diagnostics.first.message.should contain({{message}})
+    end
+  end
+
+  # Upstream-compatible syntax error helper (line/column params ignored for now).
+  macro assert_syntax_error(code_literal, message = nil, *rest)
+    it({{"diagnoses " + code_literal.stringify}}) do
+      parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new({{code_literal}}, "diag"))
+      parser.parse_file
+      parser.diagnostics.should_not be_empty
+      {% if message != nil %}
+        parser.diagnostics.first.message.should contain({{message}})
+      {% end %}
     end
   end
 

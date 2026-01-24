@@ -62,4 +62,13 @@ describe "Parser upstream parity (basic port)" do
   it_parses "..10"
   it_parses "10.."
   it_parses "1..2"
+
+  it_parses "a = 1; b = 2; c = 3; a-b-c"
+  it_parses "a = 1; b = 2; c = 3; a-b -c"
+  it_parses "1\n+2"
+  it_parses "1;-2"
+  it_parses "1 * 2"
+  it_parses "2 * (3 + 4)"
+  it_parses "()"
+  it_parses "(1; 2; 3)"
 end

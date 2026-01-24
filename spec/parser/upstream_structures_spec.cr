@@ -27,4 +27,8 @@ describe "Parser upstream parity (structures and visibility)" do
   it_parses "class Foo; setter bar; end"
   it_parses "class Foo; property bar : Int32; end"
   it_parses "def initialize(@x : Int32); end"
+  it_parses "a = 1; class Foo; @x = a; end"
+  it_parses "class Foo %x() end"
+  it_parses "struct Foo %x() end"
+  it_parses "module Foo %x() end"
 end

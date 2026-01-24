@@ -10,6 +10,10 @@ describe "Parser upstream parity (macros)" do
     parse_ok("{% for x in items %} 1 {% end %}")
     parse_ok("{% for x, y in items %} 1 {% end %}")
     parse_ok("{% if true %} {% end %}")
+    parse_ok("{{ foo.nil? }}")
+    parse_ok("{{ foo &.nil? }}")
+    parse_ok("{{ foo.nil?(foo) }}")
+    parse_ok("{{ nil?(foo) }}")
   end
 
   it "parses macro vars and nested controls" do

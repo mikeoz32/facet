@@ -9,8 +9,12 @@ describe "Parser upstream parity (miscellaneous)" do
   CRYSTAL
 
   it_parses "sizeof(Int32)"
+  it_parses "instance_sizeof(Int32)"
   it_parses "alignof(Int32)"
+  it_parses "instance_alignof(Int32)"
   it_parses "offsetof(Int32, a)"
+  it_parses "offsetof(Int32, @a)"
+  it_parses "offsetof(Int32, 1)"
   it_parses "pointerof(@foo)"
 
   it_parses <<-CRYSTAL
@@ -36,4 +40,6 @@ describe "Parser upstream parity (miscellaneous)" do
   it_parses %(\"hello "\\\n"world\")
   it_parses %(\"hello " \\\r\n "world\")
   it_parses "puts ~1"
+  it_parses "require \"foo\""
+  it_parses "require \"foo\"; [1]"
 end

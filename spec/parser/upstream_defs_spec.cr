@@ -30,6 +30,7 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo(a, &block : *Int -> ); end"
 
   it_parses "def foo(x, *args, y = 2); 1; end"
+  it_parses "def foo(x, *y); 1; end"
   it_parses "def foo(x, *args, y = 2, w, z = 3); 1; end"
   it_parses "def foo(x, *, y); 1; end"
   it_parses "def foo(x, *, y, &); 1; end"
@@ -39,6 +40,9 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo(**args)\nargs\nend"
   it_parses "def foo(x = 1, **args)\n1\nend"
   it_parses "def foo(**args : Foo)\n1\nend"
+  it_parses "def foo(x = 1, *y); 1; end"
+  it_parses "def foo(x, *y : Int32); 1; end"
+  it_parses "def foo(*y : *T); 1; end"
 
   it "builds def param shapes" do
     ast = parse_ok("def foo(x, y = 1, *rest, **kw, &blk); end")
@@ -59,6 +63,7 @@ describe "Parser upstream parity (defs and params)" do
 
   # Basic def shapes and setters
   it_parses "def foo\n1\nend"
+  it_parses "def downto(n)\n1\nend"
   it_parses "def foo ; 1 ; end"
   it_parses "def foo; end"
   it_parses "def foo(var); end"
@@ -68,6 +73,66 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo; 1; 2; end"
   it_parses "def foo=(value); end"
   it_parses "def foo(n); foo(n -1); end"
+  it_parses "def type(type); end"
+
+  it_parses "def self.foo\n1\nend"
+  it_parses "def self.foo()\n1\nend"
+  it_parses "def self.foo=\n1\nend"
+  it_parses "def self.foo=()\n1\nend"
+  it_parses "def Foo.foo\n1\nend"
+  it_parses "def Foo::Bar.foo\n1\nend"
+
+  it_parses "def foo; a; end"
+  it_parses "def foo(a); a; end"
+  it_parses "def foo; a = 1; a; end"
+  it_parses "def foo; a = 1; a {}; end"
+  it_parses "def foo; a = 1; x { a }; end"
+  it_parses "def foo; x { |a| a }; end"
+  it_parses "def foo; x { |_| 1 }; end"
+  it_parses "def foo; x { |a, *b| b }; end"
+
+  it_parses "def foo(var = 1); end"
+  it_parses "def foo(var : Int); end"
+  it_parses "def foo(var : self); end"
+  it_parses "def foo(var : self?); end"
+  it_parses "def foo(var : self.class); end"
+  it_parses "def foo(var : self*); end"
+  it_parses "def foo(var : Int | Double); end"
+  it_parses "def foo(var : Int?); end"
+  it_parses "def foo(var : Int*); end"
+  it_parses "def foo(var : Int**); end"
+  it_parses "def foo(var : Int -> Double); end"
+  it_parses "def foo(var : (Int, Float -> Double)); end"
+  it_parses "def foo(var : (Int, Float) -> Double); end"
+  it_parses "def foo(var : Char[256]); end"
+  it_parses "def foo(var : Char[N]); end"
+  it_parses "def foo(var : Int32 = 1); end"
+
+  it_parses "def foo; yield; end"
+  it_parses "def foo; yield 1; end"
+  it_parses "def foo; yield 1; yield; end"
+  it_parses "def foo; yield(1); end"
+  it_parses "def foo(a, b = a); end"
+
+  it_parses "def foo(&block); end"
+  it_parses "def foo(&); end"
+  it_parses "def foo(&\n); end"
+  it_parses "def foo(a, &block); end"
+  it_parses "def foo(a, &block : Int -> Double); end"
+  it_parses "def foo(a, & : Int -> Double); end"
+  it_parses "def foo(a, &block : Int, Float -> Double); end"
+  it_parses "def foo(a, &block : Int, self -> Double); end"
+  it_parses "def foo(a, &block : -> Double); end"
+  it_parses "def foo(a, &block : Int -> ); end"
+  it_parses "def foo(a, &block : self -> self); end"
+  it_parses "def foo(a, &block : Foo); end"
+
+  it_parses "def foo(@var); end"
+  it_parses "def foo(@var); 1; end"
+  it_parses "def foo(@var = 1); 1; end"
+  it_parses "def foo(@@var); end"
+  it_parses "def foo(@@var); 1; end"
+  it_parses "def foo(@@var = 1); 1; end"
 
   # Operator defs with extra params/defaults/splats (upstream #10397)
   %w(<= >= == != []= ===).each do |name|
