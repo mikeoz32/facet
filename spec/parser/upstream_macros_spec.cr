@@ -68,11 +68,54 @@ describe "Parser upstream parity (macros)" do
     CRYSTAL
   end
 
+  [{'(', ')'}, {'[', ']'}, {'<', '>'}, {'{', '}'}, {'|', '|'}].each do |open, close|
+    it_parses "{% begin %}%#{open} %s #{close}{% end %}"
+    it_parses "{% begin %}%q#{open} %s #{close}{% end %}"
+    it_parses "{% begin %}%Q#{open} %s #{close}{% end %}"
+    it_parses "{% begin %}%i#{open} %s #{close}{% end %}"
+    it_parses "{% begin %}%w#{open} %s #{close}{% end %}"
+    it_parses "{% begin %}%x#{open} %s #{close}{% end %}"
+    it_parses "{% begin %}%r#{open}\\A#{close}{% end %}"
+  end
+
   it "parses operator macro names" do
     %w(` << < <= == === != =~ !~ >> > >= + - * / // ~ % & | ^ ** []? []= <=> &+ &- &* &**).each do |name|
       parse_ok("macro #{name}; end")
     end
   end
+
+  # Explicit operator forms without space before end (to match upstream strings)
+  it_parses "macro `;end"
+  it_parses "macro <<;end"
+  it_parses "macro <;end"
+  it_parses "macro <=;end"
+  it_parses "macro ==;end"
+  it_parses "macro ===;end"
+  it_parses "macro !=;end"
+  it_parses "macro =~;end"
+  it_parses "macro !~;end"
+  it_parses "macro >>;end"
+  it_parses "macro >;end"
+  it_parses "macro >=;end"
+  it_parses "macro +;end"
+  it_parses "macro -;end"
+  it_parses "macro *;end"
+  it_parses "macro /;end"
+  it_parses "macro //;end"
+  it_parses "macro ~;end"
+  it_parses "macro %;end"
+  it_parses "macro &;end"
+  it_parses "macro |;end"
+  it_parses "macro ^;end"
+  it_parses "macro **;end"
+  it_parses "macro []?;end"
+  it_parses "macro []=;end"
+  it_parses "macro <=>;end"
+  it_parses "macro &+;end"
+  it_parses "macro &-;end"
+  it_parses "macro &*;end"
+  it_parses "macro &**;end"
+  it_parses "macro foo;end"
 
   it "parses macro suffix if/unless after macro vars" do
     parse_ok("macro foo;%var if true;end")
@@ -83,6 +126,14 @@ describe "Parser upstream parity (macros)" do
     parse_ok("macro foo;var unless true;end")
     parse_ok("macro foo;unless %var;true;end;end")
     parse_ok("macro foo;unless var;true;end;end")
+  end
+
+  %w(bar? bar!).each do |name|
+    it_parses "macro foo(#{name} foo); end"
+  end
+
+  %w(i q r w x Q).each do |ch|
+    it_parses "macro foo;%#{ch}[#{ch}];end"
   end
 
   it "parses additional macro forms" do
@@ -116,6 +167,7 @@ describe "Parser upstream parity (macros)" do
     parse_ok(%(macro foo\n"\\'"\nend))
     parse_ok(%(macro foo\n"\\\\"\nend))
     parse_ok("macro foo;bar(end: 1);end")
+    parse_ok("macro foo; bar class: 1; end")
     parse_ok("macro foo(@[Foo] var);end")
     parse_ok("macro foo(@[Foo] outer inner);end")
     parse_ok("macro foo(@[Foo]  var);end")
@@ -123,6 +175,7 @@ describe "Parser upstream parity (macros)" do
     parse_ok("macro foo(a, @[Foo] &block);end")
     parse_ok("macro foo(@[Foo] *args);end")
     parse_ok("macro foo(@[Foo] **args);end")
+    parse_ok("macro foo(**args)\n1\nend")
     parse_ok(<<-CRYSTAL)
       macro foo(
         @[Foo]
@@ -136,4 +189,44 @@ describe "Parser upstream parity (macros)" do
     params.size.should eq(1)
     node_kind(ast, params[0]).should eq(Facet::Compiler::NodeKind::Annotation)
   end
+
+  # Macro expressions in regular code (parse-only)
+  it_parses "puts {{1}}"
+  it_parses "puts {{\n1\n}}"
+  it_parses "puts {{*1}}"
+  it_parses "puts {{**1}}"
+  it_parses "{{a = 1 if 2}}"
+  it_parses "{% a = 1 %}"
+  it_parses "{%\na = 1\n%}"
+  it_parses "{% a = 1 if 2 %}"
+  it_parses "{% if 1; 2; end %}"
+  it_parses "{%\nif 1; 2; end\n%}"
+  it_parses "{% if 1\n  x\nend %}"
+  it_parses "{% x if 1 %}"
+  it_parses "{% unless 1; 2; end %}"
+  it_parses "{% unless 1; 2; else 3; end %}"
+  it_parses "{% unless 1\n  x\nend %}"
+  it_parses "{% x unless 1 %}"
+  it_parses "{%\n1\n2\n3\n%}"
+  it_parses "{% if 1; 2; end; %}"
+  it_parses "{% if 1; 2; end; 3 %}"
+  it_parses "{%\nif 1; 2; end; 3\n%}"
+  it_parses "{% 2 if 1; 3 %}"
+  it_parses "{%\n2 if 1; 3\n%}"
+  it_parses "{% if 1; 2; elsif 3; 4; else; 5; end; 6 %}"
+  it_parses "{% unless 1; 2; end; %}"
+  it_parses "{% unless 1; 2; end; 3 %}"
+  it_parses "{%\nunless 1; 2; end; 3\n%}"
+  it_parses "{% 2 unless 1; 3 %}"
+  it_parses "{%\n2 unless 1; 3\n%}"
+  it_parses "{% if true %}\n{% end %}\n{% if true %}\n{% end %}"
+  it_parses "{{ 1 // 2 }}"
+  it_parses "{{ //.options }}"
+  it_parses "macro foo=;end"
+  it_parses "{{ foo }}"
+  it_parses "{% for x in y %}body{% end %}"
+  it_parses "{% if x %}body{% end %}"
+  it_parses "{% for _, x, _ in y %}body{% end %}"
+  it_parses "{% begin %}{% if true %}if true{% end %}\n{% if true %}end{% end %}{% end %}"
+  it_parses "macro foo(x, *y);end"
 end

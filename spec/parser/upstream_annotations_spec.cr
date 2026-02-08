@@ -25,4 +25,15 @@ describe "Parser upstream parity (annotations)" do
       @[Bar] name
     );end
   CRYSTAL
+
+  # Standalone annotation literals and argument forms
+  it_parses "@[Foo]"
+  it_parses "@[Foo()]"
+  it_parses "@[Foo(1)]"
+  it_parses "@[Foo(\"hello\")]"
+  it_parses "@[Foo(1, foo: 2)]"
+  it_parses "@[Foo(1, foo: 2\n)]"
+  it_parses "@[Foo(\n1, foo: 2\n)]"
+  it_parses "@[Foo::Bar]"
+  it_parses "@[::Foo]"
 end

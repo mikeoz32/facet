@@ -1025,6 +1025,8 @@ module Facet
         n = @bytes.size
         @i += 1
         in_class = false
+        paren_depth = 0
+        invalid_regex = false
         terminated = false
         while @i < n
           byte = @bytes[@i]
@@ -1035,6 +1037,11 @@ module Facet
             in_class = true
           elsif byte == RBRACKET
             in_class = false
+          elsif byte == LPAREN && !in_class
+            paren_depth += 1
+          elsif byte == RPAREN && !in_class
+            paren_depth -= 1
+            invalid_regex = true if paren_depth < 0
           elsif byte == HASH && @i < n && @bytes[@i] == LBRACE
             @i += 1
             skip_interpolation
@@ -1048,6 +1055,9 @@ module Facet
 
         unless terminated
           @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated regex literal")
+        end
+        if invalid_regex || paren_depth != 0
+          @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid regex")
         end
 
         while @i < n && ascii_alpha?(@bytes[@i])
@@ -1134,7 +1144,6 @@ module Facet
           return false if slash_op
           return false unless spaced_since_last_token?
           return false if following_space
-          return false if ident_preceded_by_dot_or_colon?
           return false if next_ident && !regex_closing_delim_ahead?
           true
         when TokenKind::InstanceVar,

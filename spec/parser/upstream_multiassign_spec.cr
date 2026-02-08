@@ -34,6 +34,7 @@ describe "Parser upstream parity (multi-assign / splat)" do
 
   # use ASCII identifiers here to avoid encoding edge cases in tests
   it_parses "a.b, c.d = 1, 2"
+  it_parses "あ.い, う.え.お = 1, 2"
 
   it "diagnoses invalid assignment forms" do
     # specific message expectations

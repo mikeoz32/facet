@@ -23,7 +23,10 @@ describe "Parser upstream parity (casts and typeof)" do
   it_parses "1.as? Bar"
   it_parses "1.as?(Bar)"
   it_parses "as?(Bar)"
+  it_parses "1.as(\n  Int32\n)"
+  it_parses "1.as?(\n  Int32\n)"
 
   it_parses "typeof(1)"
+  it_parses "typeof(\n  1\n)"
   it_parses "typeof(a = 1); a"
 end

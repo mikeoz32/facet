@@ -38,6 +38,7 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo(x, **args)\n1\nend"
   it_parses "def foo(x, **args, &block)\n1\nend"
   it_parses "def foo(**args)\nargs\nend"
+  it_parses "def foo(**args : **Foo)\n1\nend"
   it_parses "def foo(x = 1, **args)\n1\nend"
   it_parses "def foo(**args : Foo)\n1\nend"
   it_parses "def foo(x = 1, *y); 1; end"
@@ -74,6 +75,19 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo=(value); end"
   it_parses "def foo(n); foo(n -1); end"
   it_parses "def type(type); end"
+  it_parses "def foo;{{@type}};end"
+  it_parses "def foo : Int32\n1\nend"
+  it_parses "def foo(x) : Int32\n1\nend"
+  it_parses "abstract def foo"
+  it_parses "abstract def foo(x)"
+  it_parses "abstract def foo : Int32"
+  it_parses "abstract def foo(x) : Int32"
+  it_parses "def `(cmd); 1; end"
+  it_parses "def foo(bar = 1\n); 2; end"
+  it_parses "def foo; / /; end"
+  it_parses "def foo(x); end; x"
+  it_parses "def foo; end; if false; 1; else; 2; end"
+  it_parses "my_def def foo\nloop do\nend\nend"
 
   it_parses "def self.foo\n1\nend"
   it_parses "def self.foo()\n1\nend"
@@ -107,12 +121,16 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo(var : Char[256]); end"
   it_parses "def foo(var : Char[N]); end"
   it_parses "def foo(var : Int32 = 1); end"
+  it_parses "def foo(var : Int32 -> = 1); end"
 
   it_parses "def foo; yield; end"
   it_parses "def foo; yield 1; end"
   it_parses "def foo; yield 1; yield; end"
   it_parses "def foo; yield(1); end"
   it_parses "def foo(a, b = a); end"
+  it_parses "def foo; with a yield; end"
+  it_parses "def foo; with a yield 1; end"
+  it_parses "def foo; a = 1; with a yield a; end"
 
   it_parses "def foo(&block); end"
   it_parses "def foo(&); end"
@@ -126,6 +144,7 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo(a, &block : Int -> ); end"
   it_parses "def foo(a, &block : self -> self); end"
   it_parses "def foo(a, &block : Foo); end"
+  it_parses "def foo(&@block); end"
 
   it_parses "def foo(@var); end"
   it_parses "def foo(@var); 1; end"
@@ -133,6 +152,31 @@ describe "Parser upstream parity (defs and params)" do
   it_parses "def foo(@@var); end"
   it_parses "def foo(@@var); 1; end"
   it_parses "def foo(@@var = 1); 1; end"
+  it_parses "def foo;bar(end: 1);end"
+  it_parses "def foo(x y); y; end"
+  it_parses "def foo(x @var); end"
+  it_parses "def foo(x @@var); end"
+
+  %w(
+    begin nil true false yield with abstract
+    def macro require case select if unless include
+    extend class struct module enum while until return
+    next break lib fun alias pointerof sizeof
+    instance_sizeof offsetof typeof private protected asm out
+    end self in
+  ).each do |kw|
+    assert_syntax_error "def foo(#{kw}); end", "cannot use '#{kw}' as a parameter name"
+    assert_syntax_error "def foo(foo #{kw}); end", "cannot use '#{kw}' as a parameter name"
+    it_parses "def foo(#{kw} foo); end"
+    it_parses "def foo(@#{kw}); end"
+    it_parses "def foo(@@#{kw}); end"
+    it_parses "def foo(x @#{kw}); end"
+    it_parses "def foo(x @@#{kw}); end"
+  end
+
+  %w(bar? bar!).each do |name|
+    it_parses "def foo(#{name} foo); end"
+  end
 
   # Operator defs with extra params/defaults/splats (upstream #10397)
   %w(<= >= == != []= ===).each do |name|
@@ -140,6 +184,24 @@ describe "Parser upstream parity (defs and params)" do
     it_parses "def #{name}(*args, **opts); end"
     it_parses "def #{name}(*args, **opts, &); end"
   end
+  it_parses "def <=(other, file = 1); end"
+  it_parses "def >=(other, file = 1); end"
+  it_parses "def ==(other, file = 1); end"
+  it_parses "def !=(other, file = 1); end"
+  it_parses "def []=(other, file = 1); end"
+  it_parses "def ===(other, file = 1); end"
+  it_parses "def <=(*args, **opts); end"
+  it_parses "def >=(*args, **opts); end"
+  it_parses "def ==(*args, **opts); end"
+  it_parses "def !=(*args, **opts); end"
+  it_parses "def []=(*args, **opts); end"
+  it_parses "def ===(*args, **opts); end"
+  it_parses "def <=(*args, **opts, &); end"
+  it_parses "def >=(*args, **opts, &); end"
+  it_parses "def ==(*args, **opts, &); end"
+  it_parses "def !=(*args, **opts, &); end"
+  it_parses "def []=(*args, **opts, &); end"
+  it_parses "def ===(*args, **opts, &); end"
 
   # Disallow constructs inside def
   {
@@ -157,4 +219,12 @@ describe "Parser upstream parity (defs and params)" do
   }.each do |kw, msg|
     it_diagnoses "def foo\n#{kw}\nend", msg
   end
+
+  it_parses "def foo(x : U) forall U; end"
+  it_parses "def foo(x : U) forall T, U; end"
+  it_parses "def foo(x : U) : Int32 forall T, U; end"
+  it_parses "def foo(var : Int, Float -> Double); end"
+
+  it_parses "abstract def foo; 1"
+  it_parses "abstract def foo\n1"
 end

@@ -39,7 +39,7 @@ describe "Parser compatibility with Crystal surface" do
   end
 
   it "parses params with external names and ivars" do
-    source = Facet::Compiler::Source.new("def initialize(name @name : String, counter @counter : Int32); end\n")
+    source = Facet::Compiler::Source.new("def initialize(name @first : String, counter @count : Int32); end\n")
     parser = Facet::Compiler::Parser.new(source)
     ast = parser.parse_file
 

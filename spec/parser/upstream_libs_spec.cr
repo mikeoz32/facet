@@ -22,6 +22,8 @@ describe "Parser upstream parity (libs)" do
   CRYSTAL
 
   it_parses "fun foo(x : Int32) : Void\nend"
+  it_parses "fun foo(x : Int32) : Int64\nx\nend"
+  it_parses "fun foo : Int32; 1; end; 2"
   it_parses "lib LibFoo\nend\nif true\nend"
 
   it_parses "lib LibC\nend"

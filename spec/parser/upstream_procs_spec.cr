@@ -28,12 +28,25 @@ describe "Parser upstream parity (proc pointers and arrows)" do
   it_parses "->() : Int32 do end"
   it_parses "->(x : Int32) : Int32 { }"
 
+  %w(foo foo= foo? foo!).each do |method|
+    it_parses "->#{method}"
+    it_parses "foo = 1; ->foo.#{method}"
+    it_parses "->Foo.#{method}"
+    it_parses "->@foo.#{method}"
+    it_parses "->@@foo.#{method}"
+    it_parses "->::#{method}"
+    it_parses "->::Foo.#{method}"
+  end
+
   it_parses "->foo"
   it_parses "foo = 1; ->foo"
   it_parses "->Foo.foo"
   it_parses "->@foo.foo"
   it_parses "->@@foo.foo"
   it_parses "->::foo"
+  it_parses "->::foo.foo"
+  it_parses "->::@foo.foo"
+  it_parses "->::@@foo.foo"
   it_parses "->::Foo.foo"
   it_parses "->Foo::Bar::Baz.foo"
   it_parses "->foo(Int32, Float64)"
@@ -41,6 +54,8 @@ describe "Parser upstream parity (proc pointers and arrows)" do
   it_parses "->foo(Void*)"
   it_parses "call ->foo"
   it_parses "[] of ->"
+  it_parses "[] of ->\n"
+  it_parses "[] of ->;"
   it_parses "[] of ->\n1"
 
   it_parses "foo &->bar"

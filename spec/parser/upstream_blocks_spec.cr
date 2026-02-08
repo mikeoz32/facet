@@ -24,9 +24,22 @@ describe "Parser upstream parity (blocks and binding)" do
   it_parses "foo { |a| 1 }"
   it_parses "foo { |a, b| 1 }"
   it_parses "foo { |a, b, | 1 }"
+  it_parses "foo { |a, (b, c), (d, e)| a; b; c; d; e }"
   it_parses "foo { |(_, c)| c }"
   it_parses "foo { |(_, c, )| c }"
   it_parses "foo { |(a, (b, (c, d)))| }"
   it_parses "foo { |(a, *b, c)| }"
+
+  %w(
+    begin nil true false yield with abstract
+    def macro require case select if unless include
+    extend class struct module enum while until return
+    next break lib fun alias pointerof sizeof
+    instance_sizeof offsetof typeof private protected asm
+    end self in do else elsif when rescue ensure
+  ).each do |kw|
+    assert_syntax_error "foo { |#{kw}| }", "cannot use '#{kw}' as a block parameter name"
+    assert_syntax_error "foo { |(#{kw})| }", "cannot use '#{kw}' as a block parameter name"
+  end
 
 end

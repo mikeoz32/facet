@@ -31,4 +31,7 @@ describe "Parser upstream parity (hashes, named tuples, tuples)" do
   it_parses "{\n1\n}"
   it_parses "{\n{1}\n}"
   it_parses %({"".id})
+  it_parses "Set {1, 2, 3}"
+  it_parses "Set() {1, 2, 3}"
+  it_parses "Set(Int32) {1, 2, 3}"
 end

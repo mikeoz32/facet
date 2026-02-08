@@ -66,9 +66,98 @@ describe "Parser upstream parity (basic port)" do
   it_parses "a = 1; b = 2; c = 3; a-b-c"
   it_parses "a = 1; b = 2; c = 3; a-b -c"
   it_parses "1\n+2"
+  it_parses "1;+2"
   it_parses "1;-2"
   it_parses "1 * 2"
   it_parses "2 * (3 + 4)"
   it_parses "()"
   it_parses "(1; 2; 3)"
+
+  # Additional expressions from upstream parser spec (parse-only)
+  it_parses "[1, 2]"
+  it_parses "[\n1, 2]"
+  it_parses "[1,\n 2,]"
+
+  it_parses "1 +\n2"
+  it_parses "1 +2"
+  it_parses "1 -2"
+  it_parses "1 +2.0"
+  it_parses "1 -2.0"
+  it_parses "1 +2_i64"
+  it_parses "1 -2_i64"
+  it_parses "1 - 2"
+  it_parses "1 -\n2"
+  it_parses "1\n-2"
+  it_parses "1 * -2"
+  it_parses "2 * 3 + 4 * 5"
+  it_parses "1 / 2"
+  it_parses "1 / -2"
+  it_parses "2 / 3 + 4 / 5"
+  it_parses "1/2"
+  it_parses "1+0"
+  it_parses "a = 1; a /b"
+  it_parses "a = 1; a/b"
+  it_parses "a = 1; (a)/b"
+  it_parses "_ = 1"
+  it_parses "@foo/2"
+  it_parses "@@foo/2"
+  it_parses "@foo = 1"
+  it_parses "-@foo"
+  it_parses "@@foo = 1"
+  it_parses "-@@foo"
+  it_parses "1+2*3"
+  it_parses "foo[] /2"
+  it_parses "foo[1] /2"
+  it_parses "[1] /2"
+  it_parses "2**3**4"
+
+  it_parses %(foo%i)
+  it_parses %(foo%q)
+  it_parses %(foo%Q)
+  it_parses %(foo%r)
+  it_parses %(foo%x)
+  it_parses %(foo%w)
+  it_parses %(foo %i)
+  it_parses %(foo %q)
+  it_parses %(foo %Q)
+  it_parses %(foo %r)
+  it_parses %(foo %x)
+  it_parses %(foo %w)
+  it_parses %(foo %i())
+  it_parses %(foo %q())
+  it_parses %(foo %Q())
+  it_parses %(foo %r())
+  it_parses %(foo %x())
+  it_parses %(foo %w())
+  it_parses %(foo % i())
+  it_parses %(foo % q())
+  it_parses %(foo % Q())
+  it_parses %(foo % r())
+  it_parses %(foo % x())
+  it_parses %(foo % w())
+
+  it_parses "!1"
+  it_parses "- 1"
+  it_parses "+ 1"
+  it_parses "~ 1"
+  it_parses "1.~"
+  it_parses "1.!"
+  it_parses "1 && 2"
+  it_parses "1 || 2"
+  it_parses "&- 1"
+  it_parses "&+ 1"
+  it_parses "1 <=> 2"
+  it_parses "1 !~ 2"
+  it_parses "a = b = 2"
+  it_parses "a[] = 1"
+  it_parses "a.[] = 1"
+  it_parses "A = 1"
+  it_parses "a @b-1\nc"
+
+  it_parses "@foo"
+  it_parses "@@foo"
+  it_parses "$foo"
+  it_parses "$foo :: Foo"
+  it_parses "@foo :: Foo"
+  it_parses "@@foo :: Foo"
 end

@@ -4,6 +4,9 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (literals)" do
+  it_parses "true"
+  it_parses "false"
+  it_parses "nil"
   # Numbers
   it_parses "1"
   it_parses "+1"
@@ -22,6 +25,7 @@ describe "Parser upstream parity (literals)" do
   it_parses "2.3_f32"
 
   # Chars/strings
+  it_parses "'a'"
   it_parses %('a')
   it_parses %("foo")
   it_parses %("")
@@ -100,6 +104,10 @@ describe "Parser upstream parity (literals)" do
   it_parses "[1, *2]"
   it_parses "[*1, *2]"
   it_parses "[1, *2, 3, *4, 5]"
+  it_parses "x = {*1}"
+  it_parses "{*1 * 2}"
+  it_parses "[*1 ** 2]"
+  it_parses "Set {*{1} * 2}"
   it_parses "Set {*1, 2, *3}"
   it_parses "[*[*[1]], *[2]]"
   it_parses "[] of Int"
@@ -133,4 +141,14 @@ describe "Parser upstream parity (literals)" do
   it_parses "x[1, ..2]"
   it_parses "{..2}"
   it_parses "[..2]"
+  it_parses "{1 => 2 / 3}"
+  it_parses "[\n1\n]"
+  it_parses "[\n1,2\n]"
+  it_parses "{[] of Foo, Bar::Baz.new}"
+  it_parses "{[] of Foo, ::Bar::Baz.new}"
+  it_parses "{[] of Foo, Bar::Baz + 2}"
+  it_parses "{[] of Foo, Bar::Baz * 2}"
+  it_parses "{[] of Foo, Bar::Baz ** 2}"
+  it_parses "{[] of Foo, ::foo}"
+  it_parses "{[] of Foo, self.foo}"
 end
