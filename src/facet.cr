@@ -1,8 +1,7 @@
 require "./facet/compiler"
 
-# TODO: Write documentation for `Facet`
+# Crystal language frontend primitives for parsers, diagnostics, macros, and
+# incremental language tooling.
 module Facet
-  VERSION = "0.1.0"
-
-  # TODO: Put your code here
+  VERSION = "0.1.5"
 end
