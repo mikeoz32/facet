@@ -4,6 +4,20 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (calls and blocks)" do
+  it_parses "Number.expand_div [Int32, Int64], BigInt"
+  it_parses "ivar_ptr type, name, value"
+  it_parses "default_value_index.try(&.< splat_index)"
+  it_parses "pointerof(func).as({Void*, Void*}*)"
+  it_parses "start_attribute *args, **nargs"
+  it_parses "$~ = regex.match self, pos, options: options"
+  it "keeps consecutive parenthesized calls as separate expressions" do
+    code = 2_000.times.map { |index| "put(data, #{index})" }.join('\n')
+    ast = parse_ok(code)
+    expressions = ast.children(ast.root)[0]
+
+    ast.children(expressions).size.should eq(2_000)
+  end
+
   it "parses chained calls with blocks and params" do
     ast = parse_ok("foo(1).bar do |x, y| x end")
     exprs = ast.children(ast.root)[0]

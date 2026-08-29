@@ -4,6 +4,12 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (control flow)" do
+  it_parses "value = yield || fallback"
+  it_parses "case state\nin .open?\n  yield\nin .closed?\nend"
+  it_parses "value || return nil"
+  it_parses "value && break"
+  it_parses "begin\nwork\nrescue ex : Error\nrecover\nrescue fallback\nretry_work\nend"
+  it_parses "case value\n{% for key in keys %}\nwhen {{key}}\n{% end %}\nend"
   it_parses <<-CRYSTAL
     if a
       b

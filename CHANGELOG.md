@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Reached a clean parser compatibility baseline across all 1,625 Crystal 1.21
+  standard-library source files, with isolated crash containment and corpus
+  reporting in `scripts/check_parser_compat.cr`.
+- Expanded lexer and parser support for contextual keywords, macro-generated
+  declarations, nested/verbatim macro controls, FFI forms, rescue clauses,
+  command splats, tuple types, and multiline statement boundaries.
 - Replaced placeholder project documentation with frontend usage, architecture,
   integration, and scope guidance.
 - Aligned `Facet::VERSION` with the shard version (0.1.5).

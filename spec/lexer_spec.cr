@@ -23,10 +23,12 @@ describe Facet::Compiler::Lexer do
   end
 
   it "lexes numeric literals" do
-    source = Facet::Compiler::Source.new("123 0x1f 0b1010 0o755 3.14 2e10 1_000 0xDEAD_BEEF 0x1.fp2 42_u64 1.0_f64 0b1_001 0o7_77")
+    source = Facet::Compiler::Source.new("123 0x1f 0b1010 0o755 3.14 2e10 1_000 0xDEAD_BEEF 0x1.fp2 42_u64 1.0_f64 0b1_001 0o7_77 8u64 1f32")
     lexer = Facet::Compiler::Lexer.new(source)
     kinds = lexer.tokenize_all.map(&.kind)
     kinds.should eq([
+      Facet::Compiler::TokenKind::Number,
+      Facet::Compiler::TokenKind::Number,
       Facet::Compiler::TokenKind::Number,
       Facet::Compiler::TokenKind::Number,
       Facet::Compiler::TokenKind::Number,
@@ -185,6 +187,25 @@ describe Facet::Compiler::Lexer do
       Facet::Compiler::TokenKind::String,
       Facet::Compiler::TokenKind::String,
       Facet::Compiler::TokenKind::Regex,
+      Facet::Compiler::TokenKind::Eof,
+    ])
+  end
+
+  it "keeps raw percent-q delimiters separate from following parentheses" do
+    source = Facet::Compiler::Source.new("%q(\\??\\))")
+    lexer = Facet::Compiler::Lexer.new(source)
+    lexer.tokenize_all.map(&.kind).should eq([
+      Facet::Compiler::TokenKind::String,
+      Facet::Compiler::TokenKind::RParen,
+      Facet::Compiler::TokenKind::Eof,
+    ])
+  end
+
+  it "lexes setter names as a single symbol" do
+    source = Facet::Compiler::Source.new(":read_timeout=")
+    lexer = Facet::Compiler::Lexer.new(source)
+    lexer.tokenize_all.map(&.kind).should eq([
+      Facet::Compiler::TokenKind::Symbol,
       Facet::Compiler::TokenKind::Eof,
     ])
   end

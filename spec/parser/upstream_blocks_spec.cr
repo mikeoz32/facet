@@ -4,6 +4,12 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (blocks and binding)" do
+  it_parses "items.each { |type| type }"
+  it_parses "String.new(8) { |buffer| buffer += 1 }"
+  it_parses "items.each { |_, _, _| nil }"
+  it_parses "named_args.try &.[index]?"
+  it_parses "current.try(&.annotation(Deprecated))"
+  it_parses "items.each { |of, uninitialized, union| nil }"
   # Block associativity surprises (#15303)
   it_parses "a b c d e do; end"
   it_parses "a b c d e {}"
@@ -36,10 +42,12 @@ describe "Parser upstream parity (blocks and binding)" do
     extend class struct module enum while until return
     next break lib fun alias pointerof sizeof
     instance_sizeof offsetof typeof private protected asm
-    end self in do else elsif when rescue ensure
+    end self in do else elsif rescue ensure
   ).each do |kw|
     assert_syntax_error "foo { |#{kw}| }", "cannot use '#{kw}' as a block parameter name"
     assert_syntax_error "foo { |(#{kw})| }", "cannot use '#{kw}' as a block parameter name"
   end
+
+  it_parses "foo { |when| when.to_s }"
 
 end

@@ -23,6 +23,8 @@ describe "Parser upstream parity (literals)" do
   it_parses "+1.0_f32"
   it_parses "-1.0_f32"
   it_parses "2.3_f32"
+  it_parses "8u64"
+  it_parses "1f32"
 
   # Chars/strings
   it_parses "'a'"

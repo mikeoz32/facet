@@ -32,6 +32,7 @@ describe "Parser upstream parity (libs)" do
   it_parses "lib LibC\nfun getchar : Int\nend"
   it_parses "lib LibC\nfun getchar : (->)?\nend"
   it_parses "lib LibC\nfun getchar(Int, Float)\nend"
+  it_parses "lib LibC\nfun read(Int, UInt8*, StaticArray(UInt8, 4))\nend"
   it_parses "lib LibC\nfun getchar(a : Int, b : Float)\nend"
   it_parses "lib LibC\nfun getchar(a : Int)\nend"
   it_parses "lib LibC\nfun getchar(a : Int, b : Float) : Int\nend"
@@ -58,6 +59,8 @@ describe "Parser upstream parity (libs)" do
   it_parses %(lib LibC\nfun getch = "get.char"\nend)
   it_parses %(lib LibC\nfun getch = "get.char" : Int32\nend)
   it_parses %(lib LibC\nfun getch = "get.char"(x : Int32)\nend)
+  it_parses "lib LibC\nfun init2 = __gmpz_init2(x : MPZ*, bits : BitcntT)\nend"
+  it_parses "lib LibC\nfun invoke(class : Int32, out : Void*, then : Bool)\nend"
   it_parses "lib LibC\n$errno : Int32\n$errno2 : Int32\nend"
   it_parses "lib LibC\n$errno : B, C -> D\nend"
   it_parses "lib LibC\n$errno = Foo : Int32\nend"

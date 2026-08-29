@@ -4,6 +4,9 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (types and literals)" do
+  it_parses "lib LibX\nalias Callback = (Int32, Void*) ->\nfun version : UInt8*\nend"
+  it_parses "@@cache : NamedTuple(time: Time, location: Location)"
+  it_parses "range : {start: Location, end: Location}"
   it_parses "def foo(x : Foo?, y : Foo::Bar | Baz) : Foo(Int32)?\nend"
   it_parses "def foo(& : Int32 -> Nil) : Int32 -> Nil; end"
   it_parses "def foo(x : (Int32, Float64) -> Nil); end"

@@ -4,6 +4,19 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (macros)" do
+  it_parses "def to_u{{n}} : UInt{{n}}\nend"
+  it_parses "fun {{name}}(a : {{from}}) : {{to}}\n  a\nend"
+  it_parses "struct {{name}}\nend"
+  it_parses "def self.{{name.id}}({{args.splat}}) : {{return_type}}\nend"
+  it_parses "::String.build do |%io|\nend"
+  it_parses "macro choose\n  value\n  \\{% else %}\nend"
+  it_parses "def to_i{{n}}! : Int{{n}}\nend"
+  it_parses "def to_i{{n}}! : Int{{n}}\n  to_u{{n}}!.to_i{{n}}!\nend"
+  it_parses "@\\{{ivar.id}} = other.@\\{{ivar.id}}.clone"
+  it_parses "property {{name}} : {{type}} | Nil"
+  it_parses "\\{{ run(\"tool\", {{name}}, {{io.stringify}}) }}"
+  it_parses "{% if outer %}\n{% if doc %}# {{doc}}{% end %}\n{% else %}\nfallback\n{% end %}"
+  it_parses "{% verbatim do %}{% begin %}{% if true %}body{% end %}{% end %}{% end %}"
   it "parses macro expressions and controls" do
     parse_ok("{{ 1 + 2 }}")
     parse_ok("{% if true %} 1 {% elsif false %} 2 {% else %} 3 {% end %}")

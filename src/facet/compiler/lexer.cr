@@ -290,6 +290,10 @@ module Facet
           @i += 1
           return Token.new(TokenKind::Annotation, Span.new(start, @i))
         end
+        if @i + 2 < n && @bytes[@i + 1] == BACKSLASH && @bytes[@i + 2] == LBRACE
+          @i += 2
+          return Token.new(TokenKind::InstanceVar, Span.new(start, @i))
+        end
         at_count = 0
         while @i < n && @bytes[@i] == AT && at_count < 2
           @i += 1
@@ -405,6 +409,8 @@ module Facet
             if @i + 1 >= n || (@bytes[@i + 1] != EQUAL && @bytes[@i + 1] != TILDE)
               @i += 1
             end
+          elsif byte == EQUAL
+            @i += 1
           end
         end
         Token.new(TokenKind::Symbol, Span.new(start, @i))
@@ -786,10 +792,24 @@ module Facet
         if trailing_underscore
           return false unless @i < n && ascii_alpha?(@bytes[@i])
         else
-          return false unless @i + 1 < n
-          return false unless @bytes[@i] == UNDERSCORE
-          return false unless ascii_alpha?(@bytes[@i + 1])
-          @i += 1
+          if @i + 1 < n && @bytes[@i] == UNDERSCORE && ascii_alpha?(@bytes[@i + 1])
+            @i += 1
+          else
+            suffix_start = @i
+            return false unless suffix_start < n
+            prefix = @bytes[suffix_start]
+            return false unless prefix == 'i'.ord.to_u8 || prefix == 'u'.ord.to_u8 || prefix == 'f'.ord.to_u8
+            @i += 1
+            while @i < n && ascii_digit?(@bytes[@i])
+              @i += 1
+            end
+            suffix = String.new(@bytes[suffix_start, @i - suffix_start])
+            unless {"i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64"}.includes?(suffix)
+              @i = suffix_start
+              return false
+            end
+            return true
+          end
         end
 
         while @i < n
@@ -827,7 +847,13 @@ module Facet
         return nil unless closing
 
         @i = delimiter_index + 1
-        terminated = scan_percent_body(delimiter, closing, nested, percent_literal_interpolates?(type))
+        terminated = scan_percent_body(
+          delimiter,
+          closing,
+          nested,
+          percent_literal_interpolates?(type),
+          type != 'q'.ord.to_u8
+        )
         unless terminated
           @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated percent literal")
         end
@@ -835,13 +861,13 @@ module Facet
         Token.new(kind, Span.new(start, @i))
       end
 
-      private def scan_percent_body(opening : UInt8, closing : UInt8, nested : Bool, interpolate : Bool) : Bool
+      private def scan_percent_body(opening : UInt8, closing : UInt8, nested : Bool, interpolate : Bool, escapes : Bool) : Bool
         n = @bytes.size
         depth = nested ? 1 : 0
         while @i < n
           byte = @bytes[@i]
           @i += 1
-          if byte == BACKSLASH
+          if escapes && byte == BACKSLASH
             @i += 1 if @i < n
             next
           end

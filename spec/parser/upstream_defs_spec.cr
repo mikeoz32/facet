@@ -4,6 +4,15 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (defs and params)" do
+  it_parses "def self.select(*ops); end"
+  it_parses "def with; end"
+  it_parses "def annotation; end"
+  it_parses "def advance(slice, index, buffer); slice += 1; index += 1; buffer += 1; end"
+  it_parses "def lock\nend"
+  it_parses "def map(values, of = nil, uninitialized = false, union = nil); end"
+  it_parses "def self.union(*patterns : Regex | String) : self\n  union patterns\nend"
+  it_parses "getter(loader : Loader) { load }"
+  it_parses "getter(value : Value) do\n  build_value\nend"
 
   it_parses "def foo(@[Foo] var); end"
   it_parses "def foo(@[Foo] outer inner); end"

@@ -17,7 +17,9 @@ for future name resolution, type checking, and compilation stages.
 - Compact `AstArena` representation with interned symbols and source-backed text.
 - Multi-file macro indexing and partial macro expansion with origin tracking.
 - `SourceManager` and `QueryDb` caching for parse, index, and expansion queries.
-- A growing compatibility suite ported from the upstream Crystal parser specs.
+- A compatibility suite ported from the upstream Crystal parser specs. The
+  current parser baseline is clean across all 1,625 files in the Crystal 1.21
+  standard-library source tree.
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
@@ -101,10 +103,14 @@ safe environment for measuring Facet compatibility before a deeper migration.
 crystal spec
 crystal spec spec/parser_spec.cr
 crystal run scripts/bench_lexer.cr
+crystal run scripts/check_parser_compat.cr
 ```
 
 The full suite includes lexer coverage against the installed Crystal stdlib and
-ported parser compatibility cases.
+ported parser compatibility cases. `check_parser_compat.cr` parses each source
+file in an isolated subprocess so a parser crash cannot abort the corpus run.
+Pass files or directories after `--` to scan another Crystal codebase, for
+example `crystal run scripts/check_parser_compat.cr -- src`.
 
 ## Contributing
 
