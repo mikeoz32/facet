@@ -23,6 +23,19 @@ describe Facet::Compiler::QueryDb do
     expanded.source.text.should contain("foo")
   end
 
+  it "returns parser diagnostics once" do
+    mgr = Facet::Compiler::SourceManager.new
+    fid = mgr.add("def foo(", "broken.cr")
+    db = Facet::Compiler::QueryDb.new(mgr)
+
+    direct_parser = Facet::Compiler::Parser.new(mgr.source(fid))
+    direct_ast = direct_parser.parse_file
+    cached_ast = db.parse(fid)
+
+    direct_ast.diagnostics.should_not be_empty
+    cached_ast.diagnostics.map(&.message).should eq(direct_ast.diagnostics.map(&.message))
+  end
+
   it "invalidates expand when macro provider changes" do
     mgr = Facet::Compiler::SourceManager.new
     macro_fid = mgr.add("macro foo; 1; end")

@@ -38,7 +38,6 @@ module Facet
         source = @manager.source(file_id)
         parser = Parser.new(source)
         ast = parser.parse_file
-        parser.diagnostics.each { |d| ast.diagnostics << d }
         @parse_cache[file_id] = QueryResult.new(ast, src_fp, [src_fp])
         ast
       end
