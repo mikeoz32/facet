@@ -421,7 +421,7 @@ module Facet
         when NodeKind::Call
           child(0)
         when NodeKind::CallWithBlock
-          child(0).try(&.callee)
+          child(0).try { |target| target.callee || target }
         when NodeKind::Binary
           member_access? ? child(1).try { |right| {NodeKind::Call, NodeKind::CallWithBlock}.includes?(right.kind) ? right.callee : right } : nil
         else
@@ -437,7 +437,7 @@ module Facet
         if kind == NodeKind::Call
           child(1).try(&.children) || [] of SyntaxNode
         elsif kind == NodeKind::CallWithBlock
-          child(0).try(&.arguments) || [] of SyntaxNode
+          child(0).try { |target| target.kind == NodeKind::Call ? target.arguments : [] of SyntaxNode } || [] of SyntaxNode
         elsif kind == NodeKind::Binary && member_access?
           child(1).try { |right| {NodeKind::Call, NodeKind::CallWithBlock}.includes?(right.kind) ? right.arguments : [] of SyntaxNode } || [] of SyntaxNode
         else
@@ -453,7 +453,10 @@ module Facet
         if kind == NodeKind::Binary
           return member_access? ? child(0) : nil
         end
-        call = kind == NodeKind::CallWithBlock ? child(0) : self
+        if kind == NodeKind::CallWithBlock
+          return child(0).try(&.receiver)
+        end
+        call = self
         return nil unless call && call.kind == NodeKind::Call
         target = call.callee
         return nil unless target && target.kind == NodeKind::Binary

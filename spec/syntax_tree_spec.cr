@@ -121,6 +121,9 @@ describe Facet::Compiler::SyntaxTree do
       items.each(limit: 1) do |item|
         item
       end
+      items.map do |item|
+        item
+      end
     CRYSTAL
     tree = Facet::Compiler::SyntaxTree.new(Facet::Compiler::Parser.new(source).parse_file)
 
@@ -133,6 +136,12 @@ describe Facet::Compiler::SyntaxTree do
     member_call.call_name.should eq("each")
     member_call.receiver.try(&.symbol_name).should eq("items")
     member_call.arguments.map(&.text).should eq(["limit: 1"])
+
+    bare_block_call = tree.nodes(Facet::Compiler::NodeKind::CallWithBlock).find { |node| node.call_name == "map" }.not_nil!
+    bare_block_call.arguments.should be_empty
+    bare_block_call.parameters.map(&.name).should eq(["item"])
+    bare_member_call = tree.nodes(Facet::Compiler::NodeKind::Binary).find { |node| node.call_name == "map" }.not_nil!
+    bare_member_call.receiver.try(&.symbol_name).should eq("items")
   end
 
   it "converts byte offsets to UTF-8 and UTF-16 editor positions" do
