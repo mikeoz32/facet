@@ -15,6 +15,11 @@ AST_CONTRACT_CASES = [
     expected: %q(File(Expressions(Assign(Ident["result"], Binary[Plus](Unary[Minus](Ident["left"]), Binary[Star](Ident["right"], LiteralNumber["2"]))), Call(Ident["foo"], Args(LiteralNumber["1"], NamedArg["named"](LiteralString["\"x\""]))), Index(Ident["values"], LiteralNumber["0"]), Range{storage=1}(LiteralNumber["1"], LiteralNumber["3"]), Ternary(Ident["flag"], Ident["yes"], Ident["no"])))),
   },
   {
+    name:     "call shorthand and nested trailing comma",
+    source:   %(value.try &.foo; consume(foo 1,)),
+    expected: %q(File(Expressions(Call(Binary[Dot](Ident["value"], Ident["try"]), Args(Unary[SafeNav](Ident["foo"]))), Call(Ident["consume"], Args(Call(Ident["foo"], Args(LiteralNumber["1"]))))))),
+  },
+  {
     name:     "collections",
     source:   %([1, 2]; {1 => 2}; {one: 1}; {1, "two"}; [1] of Int32),
     expected: %q(File(Expressions(Array(LiteralNumber["1"], LiteralNumber["2"]), Hash(Binary[HashRocket](LiteralNumber["1"], LiteralNumber["2"])), NamedTuple(NamedArg["one"](LiteralNumber["1"])), Tuple(LiteralNumber["1"], LiteralString["\"two\""]), Array{storage=1}(LiteralNumber["1"], Ident["Int32"])))),

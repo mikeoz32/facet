@@ -470,14 +470,21 @@ module FacetAstNormalizer
     shorthand = shorthand_arg_expression(args.children[index]).not_nil!
     remaining = [] of SemanticAstNode
     args.children.each_with_index { |arg, arg_index| remaining << arg unless arg_index == index }
+    receiver = nil.as(SemanticAstNode?)
+    member = callee
+    if callee.kind == "Binary" && callee.payload == "Dot" && callee.children.size == 2
+      receiver = callee.children[0]
+      member = callee.children[1]
+    end
     call = if remaining.empty?
-             explicit_parens ? sem("Call", [callee, sem("Args")]) : callee
+             explicit_parens ? sem("Call", [member, sem("Args")]) : member
            else
-             sem("Call", [callee, sem("Args", remaining)])
+             sem("Call", [member, sem("Args", remaining)])
            end
     block_var = sem("Ident", payload: "__arg0")
     body = apply_shorthand(block_var, shorthand)
-    sem("CallWithBlock", [call, sem("Args", [block_var]), sem("Expressions", [body])])
+    block = sem("CallWithBlock", [call, sem("Args", [block_var]), sem("Expressions", [body])])
+    receiver ? sem("Binary", [receiver, block], payload: "Dot") : block
   end
 
   private def apply_shorthand(receiver : SemanticAstNode, expression : SemanticAstNode) : SemanticAstNode
@@ -489,7 +496,15 @@ module FacetAstNormalizer
     if expression.kind == "Binary" && expression.children.size == 2
       if expression.payload == "Dot"
         left = apply_shorthand(receiver, expression.children[0])
-        return sem("Binary", [left, expression.children[1]], payload: "Dot")
+        right = expression.children[1]
+        if right.kind == "Call" && right.children.size == 2 && right.children[1].kind == "Args"
+          callee = right.children[0]
+          if callee.kind == "Index" && !callee.children.empty? &&
+             callee.children[0].kind == "Ident" && callee.children[0].payload == "."
+            return sem("Index", [left] + callee.children[1..] + right.children[1].children, flags: callee.flags)
+          end
+        end
+        return sem("Binary", [left, right], payload: "Dot")
       end
       left = apply_shorthand(receiver, expression.children[0])
       return sem("Binary", [left, expression.children[1]], payload: expression.payload, flags: expression.flags)
@@ -512,6 +527,10 @@ module FacetAstNormalizer
     if expression.kind == "Call" && expression.children.size == 2
       callee = expression.children[0]
       args = expression.children[1]
+      if callee.kind == "Index" && !callee.children.empty? && args.kind == "Args" &&
+         callee.children[0].kind == "Ident" && callee.children[0].payload == "."
+        return sem("Index", [receiver] + callee.children[1..] + args.children, flags: callee.flags)
+      end
       if callee.kind == "Ident" && args.kind == "Args" && (name = callee.payload)
         if operator = INFIX_METHODS[name]?
           return sem("Binary", [receiver, args.children.first], payload: operator) if args.children.size == 1

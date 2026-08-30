@@ -1881,7 +1881,7 @@ module Facet
             if newline_between?(expression_finish(left), token.span.start)
               break
             end
-            args = cast_callee?(left) ? parse_cast_command_arg : parse_command_args
+            args = cast_callee?(left) ? parse_cast_command_arg : parse_command_args(stop)
             register_out_argument(left, args)
             left = build_command_call(left, args)
             left = parse_postfix(left, allow_type_apply)
@@ -2701,7 +2701,7 @@ module Facet
         end
       end
 
-      private def parse_command_args : NodeId
+      private def parse_command_args(outer_stop : Proc(Bool)? = nil) : NodeId
         start_pos = current.span.start
         return @arena.add_node(NodeKind::Args, Span.new(start_pos, start_pos)) if command_args_stop?
         args = [] of NodeId
@@ -2728,9 +2728,12 @@ module Facet
             args << parse_expression(0, -> { current.kind == TokenKind::Comma || command_args_stop? })
           end
           break unless current.kind == TokenKind::Comma
+          break if block_arg_node?(args.last) && outer_stop && outer_stop.call
           comma = advance
           if command_args_stop?
-            @diagnostics << Diagnostic.new(comma.span, "invalid trailing comma in call")
+            unless current.kind == TokenKind::RParen || current.kind == TokenKind::RBracket
+              @diagnostics << Diagnostic.new(comma.span, "invalid trailing comma in call")
+            end
             break
           end
         end
@@ -4652,7 +4655,7 @@ module Facet
         op_id = node.payload_index
         return false if op_id < 0
         op = @arena.operator_kind(op_id)
-        op == TokenKind::Ampersand
+        op == TokenKind::Ampersand || op == TokenKind::SafeNav
       end
 
       private def parse_type_union(stop : Proc(Bool)? = nil, allow_tuple : Bool = false) : NodeId
@@ -5687,8 +5690,17 @@ module Facet
 
       private def validate_call_arg_order(args_id : NodeId) : Nil
         saw_double_splat = false
+        saw_named = false
+        saw_block = false
         @arena.children(args_id).each do |arg_id|
           arg = @arena.node(arg_id)
+          is_block = block_arg_node?(arg_id)
+          if saw_block
+            @diagnostics << Diagnostic.new(arg.span, "argument not allowed after block argument")
+          elsif saw_named && arg.kind != NodeKind::NamedArg && !is_block
+            token = arg.kind == NodeKind::Splat ? "*" : (arg.kind == NodeKind::DoubleSplat ? "**" : span_text(arg.span))
+            @diagnostics << Diagnostic.new(arg.span, "expected named argument, not #{token}")
+          end
           if saw_double_splat && !block_arg_node?(arg_id)
             if arg.kind == NodeKind::Splat
               target = @arena.children(arg_id).first?
@@ -5708,6 +5720,8 @@ module Facet
               @diagnostics << Diagnostic.new(arg.span, "argument not allowed after double splat")
             end
           end
+          saw_named = true if arg.kind == NodeKind::NamedArg
+          saw_block = true if is_block
           saw_double_splat = true if arg.kind == NodeKind::DoubleSplat
         end
       end

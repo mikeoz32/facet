@@ -255,4 +255,11 @@ describe "Parser upstream parity (calls and blocks)" do
     it_parses "foo(#{name})"
     it_parses "foo #{name}"
   end
+
+  it_parses "consume(foo 1,)"
+  it_parses "consume(foo &block, 1)"
+  it_parses "Matches.new(@matches.try &.[](*args), @cover, @owner, @success)"
+  it_parses "value.try &.foo"
+  assert_syntax_error "foo(name: 1, 2)"
+  assert_syntax_error "foo(&block, 1)"
 end
