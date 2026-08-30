@@ -4,13 +4,18 @@ require "./macro_footprint"
 
 module Facet
   module Compiler
-    alias MacroValue = Int64 | String | Bool | Nil | Array(MacroValue) | Hash(String, MacroValue)
+    record MacroBlockValue, body : String, parameters : Array(String)
+
+    alias MacroValue = Int64 | String | Bool | Nil | MacroBlockValue | Array(MacroValue) | Hash(String, MacroValue)
+    alias MacroArguments = Tuple(Array(MacroValue), Hash(String, MacroValue), MacroBlockValue?)
 
     # Keep a successful `nil` or `false` macro value distinct from a failed
     # evaluation. A bare MacroValue? cannot make that distinction in Crystal.
     record MacroEvaluation, value : MacroValue
 
     class MacroExpander
+      YIELD_ENV_KEY = "__facet_macro_yield__"
+
       private record BuiltinProperty,
         name : String,
         type : String?,
@@ -507,17 +512,26 @@ module Facet
         end
       end
 
-      private def macro_call_args(node_id : NodeId, ast : AstFile) : Tuple(Array(MacroValue), Hash(String, MacroValue))
+      private def macro_call_args(node_id : NodeId, ast : AstFile) : MacroArguments
         node = ast.node(node_id)
         positional = [] of MacroValue
         named = {} of String => MacroValue
         if node.kind == NodeKind::CallWithBlock
+          call = syntax_tree(ast).node(node_id)
+          block = MacroBlockValue.new(
+            call.body.try(&.text) || "",
+            call.parameters.compact_map(&.name)
+          )
           call_id = ast.children(node_id)[0]?
-          return call_id ? macro_call_args(call_id, ast) : {positional, named}
+          if call_id
+            call_positional, call_named, _ = macro_call_args(call_id, ast)
+            return {call_positional, call_named, block}
+          end
+          return {positional, named, block}
         end
-        return {positional, named} unless node.kind == NodeKind::Call
+        return {positional, named, nil} unless node.kind == NodeKind::Call
         args_id = ast.children(node_id)[1]?
-        return {positional, named} unless args_id
+        return {positional, named, nil} unless args_id
         ast.children(args_id).each do |arg_id|
           arg_node = ast.node(arg_id)
           if arg_node.kind == NodeKind::NamedArg
@@ -528,7 +542,7 @@ module Facet
             positional << macro_argument_value(arg_id, ast)
           end
         end
-        {positional, named}
+        {positional, named, nil}
       end
 
       # Crystal macro parameters are AST nodes. The lightweight evaluator uses
@@ -540,7 +554,7 @@ module Facet
         evaluation ? evaluation.value : ast.node_string(node_id)
       end
 
-      private def expand_macro_def(ref : DeclRef, args : {Array(MacroValue), Hash(String, MacroValue)}, index : ProgramIndex?, footprint : MacroFootprint?) : String
+      private def expand_macro_def(ref : DeclRef, args : MacroArguments, index : ProgramIndex?, footprint : MacroFootprint?) : String
         params_id = ref.ast.children(ref.node_id)[1]?
         body_id = ref.ast.children(ref.node_id)[3]?
         return "" unless body_id && params_id
@@ -560,7 +574,7 @@ module Facet
         text
       end
 
-      private def cache_key(ref : DeclRef, args : {Array(MacroValue), Hash(String, MacroValue)}) : String
+      private def cache_key(ref : DeclRef, args : MacroArguments) : String
         def_node = ref.ast.node(ref.node_id)
         name_id = ref.ast.children(ref.node_id)[0]
         name = ref.ast.arena.symbols[ref.ast.node(name_id).payload_index]
@@ -584,12 +598,13 @@ module Facet
         ast.children(node_id).any? { |child| contains_hygienic_macro_value?(child, ast) }
       end
 
-      private def build_param_env(params_id : NodeId, ast : AstFile, args : {Array(MacroValue), Hash(String, MacroValue)}) : Hash(String, MacroValue)
+      private def build_param_env(params_id : NodeId, ast : AstFile, args : MacroArguments) : Hash(String, MacroValue)
         env = {} of String => MacroValue
         params = ast.children(params_id)
-        positional_args, named_args = args
+        positional_args, named_args, block = args
         positional_index = 0
         trailing_named = named_args.dup
+        env[YIELD_ENV_KEY] = block if block
 
         params.each do |param_id|
           param = ast.node(param_id)
@@ -622,7 +637,8 @@ module Facet
               trailing_named.clear
             end
           when NodeKind::BlockParam
-            # ignore
+            name = splat_name(param_id, ast)
+            env[name] = block if name && block
           end
         end
 
@@ -639,11 +655,12 @@ module Facet
         ast.arena.symbols[child.payload_index]
       end
 
-      private def fingerprint_args(args : {Array(MacroValue), Hash(String, MacroValue)}) : String
-        positional, named = args
+      private def fingerprint_args(args : MacroArguments) : String
+        positional, named, block = args
         pos_fp = positional.map { |v| fingerprint_value(v) }.join("|")
         named_fp = named.keys.sort.map { |k| "#{k}=#{fingerprint_value(named[k])}" }.join("|")
-        "#{pos_fp}||#{named_fp}"
+        block_fp = block ? fingerprint_value(block) : "nil"
+        "#{pos_fp}||#{named_fp}||#{block_fp}"
       end
 
       private def fingerprint_value(value : MacroValue) : String
@@ -656,6 +673,8 @@ module Facet
           value.to_s
         when String
           value
+        when MacroBlockValue
+          "block(#{value.parameters.join(",")}){#{value.body}}"
         when Array(MacroValue)
           "[" + value.map { |v| fingerprint_value(v) }.join(",") + "]"
         when Hash(String, MacroValue)
@@ -840,6 +859,13 @@ module Facet
         when NodeKind::MacroVar
           value = expand_macro_var(node_id, ast)
           value ? MacroEvaluation.new(value) : nil
+        when NodeKind::Yield
+          if block = current_macro_env[YIELD_ENV_KEY]?
+            MacroEvaluation.new(block)
+          else
+            @diagnostics << Diagnostic.new(node.span, "can't use macro yield without a block")
+            MacroEvaluation.new(nil)
+          end
         when NodeKind::Binary
           left_id, right_id = ast.children(node_id)
           op = ast.arena.operator_kind(node.payload_index)
@@ -1008,6 +1034,7 @@ module Facet
         when "empty?"
           empty = case receiver
                   when String                   then receiver.empty?
+                  when MacroBlockValue          then receiver.body.empty?
                   when Array(MacroValue)        then receiver.empty?
                   when Hash(String, MacroValue) then receiver.empty?
                   else                               return nil
@@ -1032,6 +1059,12 @@ module Facet
           return nil unless receiver.is_a?(Hash(String, MacroValue)) && args.empty?
           values = receiver.map { |_, value| value.as(MacroValue) }
           MacroEvaluation.new(values)
+        when "body"
+          return nil unless receiver.is_a?(MacroBlockValue) && args.empty?
+          MacroEvaluation.new(receiver.body)
+        when "args"
+          return nil unless receiver.is_a?(MacroBlockValue) && args.empty?
+          MacroEvaluation.new(receiver.parameters.map(&.as(MacroValue)))
         when "includes?"
           return nil unless args.size == 1
           result = case receiver
@@ -1291,6 +1324,8 @@ module Facet
           value.to_s
         when String
           value
+        when MacroBlockValue
+          value.body
         when Array(MacroValue)
           value.map { |v| val_to_string(v) }.join(",")
         when Hash(String, MacroValue)

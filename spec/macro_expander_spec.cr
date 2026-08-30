@@ -482,6 +482,61 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "binds macro blocks for yield and block body expansion" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro wrap(&block)
+        def yielded
+          {{yield}}
+        end
+
+        def explicit
+          {{block.body}}
+        end
+      end
+
+      wrap do
+        source_call(1)
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.scan("source_call(1)").size.should eq(2)
+    expanded.source.text.should_not contain("wrap do")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "exposes macro block parameters and caches distinct block bodies separately" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro capture(&block)
+        puts {{block.args.join(",").stringify}}
+        {{yield}}
+      end
+
+      capture do |left, right|
+        first_call(left, right)
+      end
+
+      capture do |value|
+        second_call(value)
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(puts "left,right"))
+    expanded.source.text.should contain("first_call(left, right)")
+    expanded.source.text.should contain(%(puts "value"))
+    expanded.source.text.should contain("second_call(value)")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "expands nested controls and macro calls with the active parameter environment" do
     src_def = Facet::Compiler::Source.new(<<-CR)
       macro inner(x)

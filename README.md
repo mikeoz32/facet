@@ -173,7 +173,9 @@ Both `{{ macro_call(...) }}` and ordinary receiverless Crystal macro calls are
 expanded. Ordinary calls resolve through lexical type scopes, select overloads
 by arity, and support bare zero-argument calls while respecting parameters and
 previous local assignments that shadow the macro name. Calls with an explicit
-receiver remain runtime calls.
+receiver remain runtime calls. User macro blocks are source-backed values:
+`{{yield}}`, `{{block.body}}`, and `block.args` preserve caller syntax, and the
+block body and parameters participate in expansion cache keys.
 
 The standard `getter`, `setter`, and `property` families (including class,
 query, bang, typed, and block forms) plus `record` have Facet-native lowering.
