@@ -13,6 +13,22 @@ describe Facet::Compiler::Parser do
     end
   end
 
+  it "matches Crystal numeric suffix boundaries" do
+    valid = Facet::Compiler::Parser.new(Facet::Compiler::Source.new("0xA_f32"))
+    ast = valid.parse_file
+    valid.diagnostics.should be_empty
+    expressions = ast.children(ast.root)[0]
+    number = ast.children(expressions)[0]
+    ast.node(number).kind.should eq(Facet::Compiler::NodeKind::LiteralNumber)
+    ast.node_string(number).should eq("0xA_f32")
+
+    ["0x1.0p0", "1.0_int", "1I32"].each do |code|
+      parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new(code))
+      parser.parse_file
+      parser.diagnostics.should_not be_empty
+    end
+  end
+
   it "parses identifiers and interns symbols" do
     source = Facet::Compiler::Source.new("foo; bar")
     parser = Facet::Compiler::Parser.new(source)

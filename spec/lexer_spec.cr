@@ -23,11 +23,10 @@ describe Facet::Compiler::Lexer do
   end
 
   it "lexes numeric literals" do
-    source = Facet::Compiler::Source.new("123 0x1f 0b1010 0o755 3.14 2e10 1_000 0xDEAD_BEEF 0x1.fp2 42_u64 1.0_f64 0b1_001 0o7_77 8u64 1f32")
+    source = Facet::Compiler::Source.new("123 0x1f 0b1010 0o755 3.14 2e10 1_000 0xDEAD_BEEF 42_u64 1.0_f64 0b1_001 0o7_77 8u64 1f32")
     lexer = Facet::Compiler::Lexer.new(source)
     kinds = lexer.tokenize_all.map(&.kind)
     kinds.should eq([
-      Facet::Compiler::TokenKind::Number,
       Facet::Compiler::TokenKind::Number,
       Facet::Compiler::TokenKind::Number,
       Facet::Compiler::TokenKind::Number,

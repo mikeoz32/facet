@@ -494,35 +494,12 @@ module Facet
             if hex_count == 0
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid hex literal")
             end
-            if @i + 1 < n && @bytes[@i] == DOT && hex_digit?(@bytes[@i + 1])
-              floating = true
-              @i += 1
-              frac_count, frac_ok, frac_trailing = scan_hex_digits
-              underscore_invalid ||= !frac_ok
-              trailing_underscore = frac_trailing
-              if frac_count == 0
-                @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid hex literal")
-              end
-            end
-            if @i < n && (@bytes[@i] == LOWER_P || @bytes[@i] == UPPER_P)
-              floating = true
-              @i += 1
-              if @i < n && (@bytes[@i] == PLUS || @bytes[@i] == MINUS)
-                @i += 1
-              end
-              exp_count, exp_ok, exp_trailing = scan_decimal_digits
-              underscore_invalid ||= !exp_ok
-              trailing_underscore = exp_trailing
-              if exp_count == 0
-                @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid exponent in numeric literal")
-              end
-            end
             suffix_consumed = consume_numeric_suffix(trailing_underscore)
             underscore_invalid ||= trailing_underscore && !suffix_consumed
             if underscore_invalid
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
             end
-            validate_numeric_literal(start, @i, 16, floating)
+            validate_numeric_literal(start, @i, 16, floating, suffix_consumed)
             return Token.new(TokenKind::Number, Span.new(start, @i))
           elsif next_byte == LOWER_B || next_byte == UPPER_B
             @i += 2
@@ -537,7 +514,7 @@ module Facet
             if underscore_invalid
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
             end
-            validate_numeric_literal(start, @i, 2, false)
+            validate_numeric_literal(start, @i, 2, false, suffix_consumed)
             return Token.new(TokenKind::Number, Span.new(start, @i))
           elsif next_byte == LOWER_O || next_byte == UPPER_O
             @i += 2
@@ -552,7 +529,7 @@ module Facet
             if underscore_invalid
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
             end
-            validate_numeric_literal(start, @i, 8, false)
+            validate_numeric_literal(start, @i, 8, false, suffix_consumed)
             return Token.new(TokenKind::Number, Span.new(start, @i))
           end
         end
@@ -594,19 +571,19 @@ module Facet
           @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
         end
 
-        validate_numeric_literal(start, @i, 10, floating)
+        validate_numeric_literal(start, @i, 10, floating, suffix_consumed)
 
         Token.new(TokenKind::Number, Span.new(start, @i))
       end
 
-      private def validate_numeric_literal(start : Int32, finish : Int32, base : Int32, floating : Bool) : Nil
+      private def validate_numeric_literal(start : Int32, finish : Int32, base : Int32, floating : Bool, has_suffix : Bool) : Nil
         raw = String.new(@bytes[start, finish - start])
         normalized = raw.delete('_')
-        suffix = numeric_suffix(normalized)
+        suffix = has_suffix ? numeric_suffix(normalized) : nil
         core = suffix ? normalized[0, normalized.bytesize - suffix.bytesize] : normalized
 
-        if invalid_numeric_suffix_ahead?(finish)
-          @diagnostics << Diagnostic.new(Span.new(start, invalid_numeric_suffix_finish(finish)), "invalid numeric suffix")
+        if message = invalid_numeric_suffix_message(finish)
+          @diagnostics << Diagnostic.new(Span.new(start, invalid_numeric_suffix_finish(finish)), message)
         end
 
         if raw.includes?("_.")
@@ -621,8 +598,10 @@ module Facet
         end
 
         if suffix && suffix.not_nil!.starts_with?('f')
-          if base != 10
-            @diagnostics << Diagnostic.new(Span.new(start, finish), "non-decimal float literal is not supported")
+          if base == 2
+            @diagnostics << Diagnostic.new(Span.new(start, finish), "binary float literal is not supported")
+          elsif base == 8
+            @diagnostics << Diagnostic.new(Span.new(start, finish), "octal float literal is not supported")
           end
           return
         end
@@ -673,16 +652,24 @@ module Facet
         end
       end
 
-      private def invalid_numeric_suffix_ahead?(position : Int32) : Bool
-        return false if position >= @bytes.size
+      private def invalid_numeric_suffix_message(position : Int32) : String?
+        return nil if position >= @bytes.size
         prefix = @bytes[position]
-        return false unless prefix == 'i'.ord.to_u8 || prefix == 'u'.ord.to_u8 || prefix == 'f'.ord.to_u8 || prefix == UPPER_F
-        position + 1 < @bytes.size && ascii_digit?(@bytes[position + 1])
+        case prefix
+        when 'i'.ord.to_u8          then "invalid int suffix"
+        when 'u'.ord.to_u8          then "invalid uint suffix"
+        when 'f'.ord.to_u8, UPPER_F then "invalid float suffix"
+        else
+          return nil unless ident_start?(prefix)
+          finish = invalid_numeric_suffix_finish(position)
+          text = String.new(@bytes[position, finish - position])
+          "unexpected token: \"#{text}\""
+        end
       end
 
       private def invalid_numeric_suffix_finish(position : Int32) : Int32
         i = position + 1
-        while i < @bytes.size && ascii_digit?(@bytes[i])
+        while i < @bytes.size && ident_continue?(@bytes[i])
           i += 1
         end
         i
@@ -1038,6 +1025,7 @@ module Facet
 
       private def consume_numeric_suffix(trailing_underscore : Bool) : Bool
         n = @bytes.size
+        original = @i
         if trailing_underscore
           return false unless @i < n && ascii_alpha?(@bytes[@i])
         else
@@ -1053,7 +1041,7 @@ module Facet
               @i += 1
             end
             suffix = String.new(@bytes[suffix_start, @i - suffix_start])
-            unless {"i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64"}.includes?(suffix)
+            unless valid_numeric_suffix?(suffix)
               @i = suffix_start
               return false
             end
@@ -1061,6 +1049,7 @@ module Facet
           end
         end
 
+        suffix_start = @i
         while @i < n
           byte = @bytes[@i]
           if ascii_alpha?(byte) || ascii_digit?(byte)
@@ -1069,7 +1058,14 @@ module Facet
             break
           end
         end
-        true
+        suffix = String.new(@bytes[suffix_start, @i - suffix_start])
+        return true if valid_numeric_suffix?(suffix)
+        @i = original
+        false
+      end
+
+      private def valid_numeric_suffix?(suffix : String) : Bool
+        {"i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64"}.includes?(suffix)
       end
 
       private def scan_percent_literal : Token?
