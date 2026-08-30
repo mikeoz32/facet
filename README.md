@@ -194,6 +194,7 @@ crystal spec
 crystal spec spec/parser_spec.cr
 crystal spec spec/parser/ast_contract_spec.cr
 crystal run scripts/bench_lexer.cr
+crystal run scripts/bench_incremental_queries.cr -- 1000
 crystal run scripts/check_parser_compat.cr
 crystal run scripts/check_upstream_ast_shape.cr
 crystal run scripts/check_percent_literal_parity.cr
