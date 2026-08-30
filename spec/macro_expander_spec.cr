@@ -14,6 +14,16 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "uses decoded string values in macro expressions" do
+    src = Facet::Compiler::Source.new(%q(value = {{ "a\x62\u0063" }}))
+    ast = Facet::Compiler::Parser.new(src).parse_file
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand(ast)
+
+    expanded.source.text.should eq("value = abc")
+    expander.diagnostics.should be_empty
+  end
+
   it "expands macro control if/else" do
     src = Facet::Compiler::Source.new("{% if true %}1{% else %}2{% end %}")
     ast = Facet::Compiler::Parser.new(src).parse_file

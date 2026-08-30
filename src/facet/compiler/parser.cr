@@ -2192,7 +2192,8 @@ module Facet
           @arena.add_literal_node(
             LiteralKind::Char,
             token.span,
-            Span.new(token.span.start + 1, token.span.finish - 1)
+            Span.new(token.span.start + 1, token.span.finish - 1),
+            LiteralStyle::Escaped
           )
         when TokenKind::Regex
           advance
@@ -2291,7 +2292,8 @@ module Facet
           @arena.add_ident(token.span, symbol_id)
         when TokenKind::Symbol
           advance
-          @arena.add_literal_node(LiteralKind::Symbol, token.span, symbol_content_span(token))
+          style = span_text(token.span).starts_with?(%q(:")) ? LiteralStyle::Escaped : LiteralStyle::Source
+          @arena.add_literal_node(LiteralKind::Symbol, token.span, symbol_content_span(token), style)
         when TokenKind::Dot
           if peek1.kind == TokenKind::LBracket
             dot = advance
@@ -3016,7 +3018,17 @@ module Facet
 
         outer_span = @lexer.heredoc_full_span(token.span.start) || token.span
         body_start, body_finish = @lexer.heredoc_body_bounds(token.span.start) || literal_body_bounds(token, text)
-        literal = parse_interpolated_literal(outer_span, body_start, body_finish, LiteralKind::String, string_interpolates?(text))
+        style = string_literal_style(text)
+        delimiter = literal_delimiter(text)
+        literal = parse_interpolated_literal(
+          outer_span,
+          body_start,
+          body_finish,
+          LiteralKind::String,
+          string_interpolates?(text),
+          style: style,
+          delimiter: delimiter
+        )
         if suffix = heredoc_method_suffix(text)
           member = @arena.add_ident(outer_span, @arena.symbols.intern(suffix))
           return @arena.add_binary(TokenKind::Dot, outer_span, literal, member)
@@ -3035,8 +3047,29 @@ module Facet
         @arena.add_literal_node(
           LiteralKind::String,
           token.span,
-          Span.new(body_start, body_finish)
+          Span.new(body_start, body_finish),
+          string_literal_style(text),
+          literal_delimiter(text)
         )
+      end
+
+      private def string_literal_style(text : String) : LiteralStyle
+        if text.starts_with?("<<-") || text.starts_with?("<<~")
+          text.starts_with?("<<-'") || text.starts_with?("<<~'") ? LiteralStyle::HeredocRaw : LiteralStyle::HeredocEscaped
+        elsif text.starts_with?("%q")
+          LiteralStyle::Raw
+        else
+          LiteralStyle::Escaped
+        end
+      end
+
+      private def literal_delimiter(text : String) : UInt8
+        return 0_u8 if text.empty?
+        if text.starts_with?('%')
+          offset = text.bytesize >= 2 && text.byte_at(1).unsafe_chr.ascii_letter? ? 2 : 1
+          return text.byte_at(offset).to_u8 if offset < text.bytesize
+        end
+        text.byte_at(0).to_u8
       end
 
       private def symbol_content_span(token : Token) : Span
@@ -3055,12 +3088,23 @@ module Facet
           return @arena.add_literal_node(
             LiteralKind::Regex,
             token.span,
-            Span.new(body_start, body_finish)
+            Span.new(body_start, body_finish),
+            LiteralStyle::Regex,
+            literal_delimiter(text)
           )
         end
 
-        value = parse_interpolated_literal(token.span, body_start, body_finish, LiteralKind::String, true)
-        literal_id = @arena.add_literal(LiteralKind::Regex, Span.new(body_start, body_finish))
+        delimiter = literal_delimiter(text)
+        value = parse_interpolated_literal(
+          token.span,
+          body_start,
+          body_finish,
+          LiteralKind::String,
+          true,
+          style: LiteralStyle::Regex,
+          delimiter: delimiter
+        )
+        literal_id = @arena.add_literal(LiteralKind::Regex, Span.new(body_start, body_finish), LiteralStyle::Regex, delimiter)
         @arena.add_node(NodeKind::LiteralRegex, token.span, [value], payload_index: literal_id)
       end
 
@@ -3128,6 +3172,7 @@ module Facet
 
       private def parse_percent_word_array(token : Token, text : String) : NodeId
         body_start, body_finish = literal_body_bounds(token, text)
+        delimiter = literal_delimiter(text)
         kind = {'i', 'I'}.includes?(text[1]) ? LiteralKind::Symbol : LiteralKind::String
         interpolates = {'W', 'I'}.includes?(text[1])
         children = [] of NodeId
@@ -3164,7 +3209,16 @@ module Facet
             end
           end
           word_span = Span.new(word_start, position)
-          children << parse_interpolated_literal(word_span, word_start, position, kind, interpolates, lift_splat: true)
+          children << parse_interpolated_literal(
+            word_span,
+            word_start,
+            position,
+            kind,
+            interpolates,
+            lift_splat: true,
+            style: LiteralStyle::Word,
+            delimiter: delimiter
+          )
         end
 
         type_name = kind == LiteralKind::Symbol ? "Symbol" : "String"
@@ -3182,12 +3236,16 @@ module Facet
         static_kind : LiteralKind,
         interpolates : Bool,
         lift_splat : Bool = false,
+        style : LiteralStyle = LiteralStyle::Escaped,
+        delimiter : UInt8 = 0_u8,
       ) : NodeId
         unless interpolates && interpolation_between?(body_start, body_finish)
           return @arena.add_literal_node(
             static_kind,
             outer_span,
-            Span.new(body_start, body_finish)
+            Span.new(body_start, body_finish),
+            style,
+            delimiter
           )
         end
 
@@ -3205,12 +3263,24 @@ module Facet
           end
 
           if position > segment_start
-            children << @arena.add_literal_node(LiteralKind::String, Span.new(segment_start, position))
+            children << @arena.add_literal_node(
+              LiteralKind::String,
+              Span.new(segment_start, position),
+              nil,
+              style,
+              delimiter
+            )
           end
           expression_start = position + 2
           closing = interpolation_closing_position(expression_start, body_finish)
           unless closing
-            children << @arena.add_literal_node(LiteralKind::String, Span.new(position, body_finish))
+            children << @arena.add_literal_node(
+              LiteralKind::String,
+              Span.new(position, body_finish),
+              nil,
+              style,
+              delimiter
+            )
             position = body_finish
             segment_start = body_finish
             break
@@ -3220,7 +3290,13 @@ module Facet
           segment_start = position
         end
         if segment_start < body_finish
-          children << @arena.add_literal_node(LiteralKind::String, Span.new(segment_start, body_finish))
+          children << @arena.add_literal_node(
+            LiteralKind::String,
+            Span.new(segment_start, body_finish),
+            nil,
+            style,
+            delimiter
+          )
         end
         if lift_splat && children.size == 1
           child = @arena.node(children.first)
@@ -3288,7 +3364,16 @@ module Facet
                     node.payload_index >= 0 ? @arena.symbols.intern(ast.arena.symbols[node.payload_index]) : -1
                   when NodeKind::LiteralNumber, NodeKind::LiteralString, NodeKind::LiteralChar,
                        NodeKind::LiteralRegex, NodeKind::LiteralSymbol
-                    @arena.add_literal(ast.arena.literal(node.payload_index).kind)
+                    source_payload = ast.arena.literal(node.payload_index)
+                    content_span = source_payload.content_span.try do |content|
+                      Span.new(content.start + offset, content.finish + offset)
+                    end
+                    @arena.add_literal(
+                      source_payload.kind,
+                      content_span,
+                      source_payload.style,
+                      source_payload.delimiter
+                    )
                   when NodeKind::Unary, NodeKind::Binary
                     @arena.add_operator(ast.arena.operator_kind(node.payload_index))
                   when NodeKind::MacroControl

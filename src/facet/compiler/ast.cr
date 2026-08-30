@@ -108,8 +108,15 @@ module Facet
     struct LiteralPayload
       getter kind : LiteralKind
       getter content_span : Span?
+      getter style : LiteralStyle
+      getter delimiter : UInt8
 
-      def initialize(@kind : LiteralKind, @content_span : Span? = nil)
+      def initialize(
+        @kind : LiteralKind,
+        @content_span : Span? = nil,
+        @style : LiteralStyle = LiteralStyle::Source,
+        @delimiter : UInt8 = 0_u8,
+      )
       end
     end
 
@@ -228,9 +235,14 @@ module Facet
         @operators[id]
       end
 
-      def add_literal(kind : LiteralKind, content_span : Span? = nil) : LiteralId
+      def add_literal(
+        kind : LiteralKind,
+        content_span : Span? = nil,
+        style : LiteralStyle = LiteralStyle::Source,
+        delimiter : UInt8 = 0_u8,
+      ) : LiteralId
         id = @literals.size.to_i32
-        @literals << LiteralPayload.new(kind, content_span)
+        @literals << LiteralPayload.new(kind, content_span, style, delimiter)
         id
       end
 
@@ -242,8 +254,14 @@ module Facet
         add_node(NodeKind::Ident, span, payload_index: symbol_id)
       end
 
-      def add_literal_node(kind : LiteralKind, span : Span, content_span : Span? = nil) : NodeId
-        literal_id = add_literal(kind, content_span)
+      def add_literal_node(
+        kind : LiteralKind,
+        span : Span,
+        content_span : Span? = nil,
+        style : LiteralStyle = LiteralStyle::Source,
+        delimiter : UInt8 = 0_u8,
+      ) : NodeId
+        literal_id = add_literal(kind, content_span, style, delimiter)
         node_kind = case kind
                     when LiteralKind::Number then NodeKind::LiteralNumber
                     when LiteralKind::String then NodeKind::LiteralString
@@ -359,6 +377,31 @@ module Facet
 
       def literal_content_string(node_id : NodeId) : String
         String.new(literal_content(node_id))
+      end
+
+      def literal_style(node_id : NodeId) : LiteralStyle?
+        node = @arena.node(node_id)
+        return nil unless {
+                            NodeKind::LiteralNumber,
+                            NodeKind::LiteralString,
+                            NodeKind::LiteralChar,
+                            NodeKind::LiteralRegex,
+                            NodeKind::LiteralSymbol,
+                          }.includes?(node.kind)
+        return nil unless node.payload_index.in?(0...@arena.literals.size)
+        @arena.literal(node.payload_index).style
+      end
+
+      def decoded_literal_string(node_id : NodeId) : String
+        node = @arena.node(node_id)
+        return node_string(node_id) unless literal_style(node_id)
+        payload = @arena.literal(node.payload_index)
+        LiteralDecoder.decode(
+          literal_content_string(node_id),
+          payload.style,
+          node_string(node_id),
+          payload.delimiter
+        )
       end
 
       def macro_control_tag(node_id : NodeId) : TokenKind

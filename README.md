@@ -81,9 +81,14 @@ children by integer IDs; use `AstFile#node`, `AstFile#children`, and
 Literal nodes retain their outer syntax span and, when the value occupies a
 different source range, a separate payload-backed content span. Use
 `AstFile#literal_content_span`, `AstFile#literal_content`, or
-`AstFile#literal_content_string` when decoding strings, regexes, and heredocs.
-This is required for multiple heredocs declared on one header line, whose
-outer syntax spans overlap while their bodies remain distinct.
+`AstFile#literal_content_string` to inspect the raw source-backed body. Use
+`AstFile#decoded_literal_string` for its Crystal value. Literal payloads retain
+the spelling style because `"\n"`, `%q(\n)`, and `%w(\n)` share similar source
+bytes but obey different escape rules. The decoder also handles character and
+quoted-symbol escapes, regex delimiters, heredoc indentation, and imported
+literal payloads inside `#{...}`. Distinct content spans remain necessary for
+multiple heredocs declared on one header line, whose outer syntax spans overlap
+while their bodies remain separate.
 
 `Facet::Compiler::AstIntegrity.contract_violations(ast)` validates Facet's
 native AST contract.
@@ -228,7 +233,7 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 7,306 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Facet native suite | — | 7,312 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

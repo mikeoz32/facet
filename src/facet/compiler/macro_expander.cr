@@ -491,7 +491,7 @@ module Facet
         node = ast.node(node_id)
         case node.kind
         when NodeKind::LiteralString
-          content : String = ast.literal_content_string(node_id)
+          content : String = ast.decoded_literal_string(node_id)
           MacroEvaluation.new(content)
         when NodeKind::LiteralNumber
           str = ast.node_string(node_id).delete('_')
