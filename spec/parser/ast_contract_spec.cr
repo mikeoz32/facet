@@ -30,6 +30,11 @@ AST_CONTRACT_CASES = [
     expected: %q(File(Expressions(Alias(Ident["Name"], Path(Ident["Foo"], Ident["Bar"])), TypeDef(Ident["Handle"], TypeApply(Ident["Pointer"], Args(Ident["Int32"]))), Require(LiteralString["\"./dep\""])))),
   },
   {
+    name:     "type-context edge forms",
+    source:   %(value : ::Foo::Bar; alias Generated = Foo[]; uninitialized Foo(Int32); uninitialized { name : Int32 }),
+    expected: %q|File(Expressions(VarDecl(Ident["value"], Path(Ident["::"], Path(Ident["Foo"], Ident["Bar"])), Nop), Index(Alias(Ident["Generated"], Ident["Foo"])), Call(Ident["uninitialized"], Args(TypeApply(Ident["Foo"], Args(Ident["Int32"])))), CallWithBlock{storage=1}(Ident["uninitialized"], Args, Expressions(VarDecl(Ident["name"], Ident["Int32"], Nop)))))|,
+  },
+  {
     name:     "type declarations and annotations",
     source:   %(annotation Marker; end; @[Marker] class Box(T) < Base; end; module Mix; end; struct Point; end; enum Color : UInt8; Red; end),
     expected: %q(File(Expressions(AnnotationDef(Ident["Marker"], Expressions), Annotation(Ident["Marker"], Class(TypeApply(Ident["Box"], Args(Ident["T"])), Ident["Base"], Expressions)), Module(Ident["Mix"], Nop, Expressions), Struct(Ident["Point"], Nop, Expressions), Enum(Ident["Color"], Ident["UInt8"], Expressions(Ident["Red"]))))),

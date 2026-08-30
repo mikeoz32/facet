@@ -95,4 +95,23 @@ describe "Parser upstream parity (types and literals)" do
   it_parses "[] of {String, ->}"
   it_parses "x([] of Foo, Bar.new)"
   it_parses "Foo(_)"
+
+  it_parses "value : ::Foo::Bar"
+  it_parses "value : Foo[]"
+  it_parses "alias Generated = Foo[]"
+  it_parses "[] of Foo[]"
+  it_parses "uninitialized"
+  it_parses "uninitialized | Int32"
+  it_parses "uninitialized {name : Int32}"
+  it_parses "uninitialized Foo[ ]"
+  it_parses "mode.is_a? ::File::Permissions"
+
+  assert_syntax_error "value : nil"
+  assert_syntax_error "value : lowercase"
+  assert_syntax_error "value : Foo[1 + 2]"
+  assert_syntax_error "value : Foo[ ]"
+  assert_syntax_error "value : {name : Int32}"
+  assert_syntax_error "value : {}"
+  assert_syntax_error "value : sizeof(Int32)"
+  assert_syntax_error "uninitialized Int32 -> String"
 end

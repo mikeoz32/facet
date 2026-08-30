@@ -130,7 +130,7 @@ module FacetAstNormalizer
       left = node.children[0]
       right = node.children[1]
       if left.kind == "Ident" && left.payload == "::"
-        return sem(right.kind, right.children, right.payload, right.flags + ["GlobalRoot"])
+        return add_global_root(right)
       end
     end
 
@@ -364,6 +364,16 @@ module FacetAstNormalizer
     end
 
     node
+  end
+
+  private def add_global_root(node : SemanticAstNode) : SemanticAstNode
+    if node.kind == "Path" && !node.children.empty?
+      children = node.children.dup
+      children[0] = add_global_root(children[0])
+      sem(node.kind, children, node.payload, node.flags)
+    else
+      sem(node.kind, node.children, node.payload, node.flags + ["GlobalRoot"])
+    end
   end
 
   private def expand_sigil_parameters(node : SemanticAstNode) : SemanticAstNode

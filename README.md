@@ -167,6 +167,7 @@ crystal run scripts/check_regex_literal_parity.cr
 crystal run scripts/check_heredoc_literal_parity.cr
 crystal run scripts/check_symbol_literal_parity.cr
 crystal run scripts/check_operator_parity.cr
+crystal run scripts/check_type_syntax_parity.cr
 ```
 
 The percent-literal matrix adds 1,060 generated cases across every ASCII letter
@@ -187,6 +188,10 @@ Symbol and operator-context matrices add 58 and 228 cases. They cover quoted
 and unquoted symbol bodies plus every operator token in infix, prefix, postfix,
 and parenthesized positions, including implicit-dot scoping and compound
 assignment before local definition. Both currently report zero mismatches.
+The type-syntax cross-product adds 354 cases across local declarations,
+parameters, return types, aliases, `uninitialized`, and typed arrays. It gates
+both acceptance and the common semantic AST projection and currently reports
+zero acceptance, contract, shape, or unsupported-node mismatches.
 
 The full suite includes lexer coverage against the installed Crystal stdlib and
 ported parser compatibility cases. `check_parser_compat.cr` parses each source
@@ -259,7 +264,7 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 7,340 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Facet native suite | — | 7,358 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often
