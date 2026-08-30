@@ -90,6 +90,17 @@ describe Facet::Compiler::QueryDb do
     db.expand(use_fid).source.text.strip.should eq("42")
   end
 
+  it "does not queue newly registered files before an expansion is materialized" do
+    manager = Facet::Compiler::SourceManager.new
+    queries = Facet::Compiler::QueryDb.new(manager)
+
+    file_id, changed = queries.upsert("value = 1", "new.cr")
+
+    changed.should be_true
+    file_id.should be >= 0
+    queries.pending_expansion_file_ids.should be_empty
+  end
+
   it "does not recompute queries for unchanged source bytes" do
     mgr = Facet::Compiler::SourceManager.new
     fid = mgr.add("value = 1", "same.cr")

@@ -182,7 +182,6 @@ module Facet
         existing = @manager.file_id(filename)
         file_id, changed = @manager.upsert(text, filename, kind)
         invalidate(file_id) if existing && changed
-        @pending_expansion_file_ids << file_id if changed
         @global_index_cache = nil if changed
         {file_id, changed}
       end
