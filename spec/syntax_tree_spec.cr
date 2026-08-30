@@ -84,6 +84,38 @@ describe Facet::Compiler::SyntaxTree do
     call.named_arguments.map(&.name).should eq(["cached"])
   end
 
+  it "exposes exact parameter and named-argument name spans" do
+    source = Facet::Compiler::Source.new(<<-CRYSTAL)
+      def fetch(client : Client = Client.new, external internal : Bool, *rest : Int32, **options : String, &block : Char)
+        client.load(cached: true)
+      end
+    CRYSTAL
+    tree = Facet::Compiler::SyntaxTree.new(Facet::Compiler::Parser.new(source).parse_file)
+    parameters = tree.nodes(Facet::Compiler::NodeKind::Def).first.parameters
+
+    parameters.map(&.name).should eq(["client", "internal", "rest", "options", "block"])
+    parameters.map { |parameter| parameter.name_span.try { |span| source.text.byte_slice(span.start, span.length) } }.should eq([
+      "client",
+      "internal",
+      "rest",
+      "options",
+      "block",
+    ])
+    parameters.map(&.external_name).should eq([nil, "external", nil, nil, nil])
+    parameters[1].external_name_span.try { |span| source.text.byte_slice(span.start, span.length) }.should eq("external")
+    parameters.map { |parameter| parameter.declared_type.try(&.text) }.should eq([
+      "Client",
+      "Bool",
+      "Int32",
+      "String",
+      "Char",
+    ])
+    parameters.first.value.try(&.text).should eq("Client.new")
+
+    named = tree.nodes(Facet::Compiler::NodeKind::NamedArg).first
+    named.name_span.try { |span| source.text.byte_slice(span.start, span.length) }.should eq("cached")
+  end
+
   it "converts byte offsets to UTF-8 and UTF-16 editor positions" do
     source = Facet::Compiler::Source.new("a😀b\nnext")
     index = Facet::Compiler::LineIndex.new(source)

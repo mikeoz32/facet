@@ -318,13 +318,28 @@ module Facet
              NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum, NodeKind::Lib,
              NodeKind::Alias, NodeKind::TypeDef, NodeKind::AnnotationDef
           child(0)
-        when NodeKind::Param, NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam,
+        when NodeKind::Param
+          candidate = child(children.size == 4 ? 1 : 0)
+          candidate && candidate.kind != NodeKind::Nop ? candidate : nil
+        when NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam,
              NodeKind::NamedArg, NodeKind::Ident, NodeKind::Const, NodeKind::InstanceVar,
              NodeKind::ClassVar, NodeKind::Global, NodeKind::MacroVar
           self
         else
           nil
         end
+      end
+
+      def external_name_node : SyntaxNode?
+        kind == NodeKind::Param && children.size == 4 ? present_child(0) : nil
+      end
+
+      def external_name : String?
+        external_name_node.try(&.symbol_name)
+      end
+
+      def external_name_span : Span?
+        external_name_node.try(&.span)
       end
 
       def name : String?
@@ -337,7 +352,18 @@ module Facet
         target = target.child(0) if target.kind == NodeKind::TypeApply
         return nil unless target
         node = target.raw
-        if {NodeKind::Param, NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam, NodeKind::MacroVar}.includes?(node.kind) &&
+        if node.kind == NodeKind::NamedArg && node.payload_index.in?(0...@tree.ast.arena.symbols.entries.size)
+          name = @tree.ast.arena.symbols[node.payload_index]
+          return Span.new(node.span.start, Math.min(node.span.start + name.bytesize, node.span.finish))
+        end
+        if {NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(node.kind) &&
+           node.payload_index.in?(0...@tree.ast.arena.symbols.entries.size)
+          name = @tree.ast.arena.symbols[node.payload_index]
+          prefix = node.kind == NodeKind::DoubleSplat ? 2 : 1
+          start = Math.min(node.span.start + prefix, node.span.finish)
+          return Span.new(start, Math.min(start + name.bytesize, node.span.finish))
+        end
+        if node.kind == NodeKind::MacroVar &&
            node.payload_index.in?(0...@tree.ast.arena.symbols.entries.size)
           name = @tree.ast.arena.symbols[node.payload_index]
           finish = node.span.finish
@@ -445,7 +471,7 @@ module Facet
         when NodeKind::VarDecl
           present_child(2)
         when NodeKind::Param
-          present_child(2)
+          present_child(children.size == 4 ? 3 : 2)
         else
           nil
         end
@@ -453,8 +479,10 @@ module Facet
 
       def declared_type : SyntaxNode?
         case kind
-        when NodeKind::VarDecl, NodeKind::Param
+        when NodeKind::VarDecl
           present_child(1)
+        when NodeKind::Param
+          present_child(children.size == 4 ? 2 : 1)
         when NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam
           present_child(0)
         else
