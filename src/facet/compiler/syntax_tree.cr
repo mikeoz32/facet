@@ -393,9 +393,15 @@ module Facet
         case kind
         when NodeKind::Call, NodeKind::CallWithBlock
           child(0)
+        when NodeKind::Binary
+          member_access? ? child(1).try { |right| right.kind == NodeKind::Call ? right.callee : right } : nil
         else
           nil
         end
+      end
+
+      def call_name : String?
+        callee.try(&.symbol_name)
       end
 
       def arguments : Array(SyntaxNode)
@@ -403,12 +409,21 @@ module Facet
           child(1).try(&.children) || [] of SyntaxNode
         elsif kind == NodeKind::CallWithBlock
           callee.try(&.arguments) || [] of SyntaxNode
+        elsif kind == NodeKind::Binary && member_access?
+          child(1).try { |right| right.kind == NodeKind::Call ? right.arguments : [] of SyntaxNode } || [] of SyntaxNode
         else
           [] of SyntaxNode
         end
       end
 
+      def named_arguments : Array(SyntaxNode)
+        arguments.select { |argument| argument.kind == NodeKind::NamedArg }
+      end
+
       def receiver : SyntaxNode?
+        if kind == NodeKind::Binary
+          return member_access? ? child(0) : nil
+        end
         call = kind == NodeKind::CallWithBlock ? callee : self
         return nil unless call && call.kind == NodeKind::Call
         target = call.callee
@@ -429,13 +444,22 @@ module Facet
           child(kind == NodeKind::Assign ? 1 : 0)
         when NodeKind::VarDecl
           present_child(2)
+        when NodeKind::Param
+          present_child(2)
         else
           nil
         end
       end
 
       def declared_type : SyntaxNode?
-        kind == NodeKind::VarDecl ? present_child(1) : nil
+        case kind
+        when NodeKind::VarDecl, NodeKind::Param
+          present_child(1)
+        when NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam
+          present_child(0)
+        else
+          nil
+        end
       end
 
       def semantic_flag?(flag : SemanticFlag) : Bool
@@ -449,6 +473,17 @@ module Facet
       private def present_child(index : Int32) : SyntaxNode?
         value = child(index)
         value && value.kind != NodeKind::Nop ? value : nil
+      end
+
+      private def member_access? : Bool
+        return false unless kind == NodeKind::Binary
+        operator = raw.payload_index
+        return false unless operator.in?(0...@tree.ast.arena.operators.size)
+        {
+          TokenKind::Dot,
+          TokenKind::SafeNav,
+          TokenKind::DoubleColon,
+        }.includes?(@tree.ast.arena.operator_kind(operator))
       end
     end
   end

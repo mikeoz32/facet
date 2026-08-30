@@ -62,6 +62,28 @@ describe Facet::Compiler::SyntaxTree do
     tree.nodes(Facet::Compiler::NodeKind::When).first.condition.try(&.text).should eq("expected")
   end
 
+  it "exposes receiver calls, named arguments, and parameter types" do
+    source = Facet::Compiler::Source.new(<<-CRYSTAL)
+      def fetch(client : Client, limit = 10, *rest : Int32)
+        client.load(limit, cached: true)
+      end
+    CRYSTAL
+    tree = Facet::Compiler::SyntaxTree.new(Facet::Compiler::Parser.new(source).parse_file)
+    method = tree.nodes(Facet::Compiler::NodeKind::Def).first
+
+    method.parameters.map { |parameter| parameter.declared_type.try(&.text) }.should eq([
+      "Client",
+      nil,
+      "Int32",
+    ])
+    method.parameters[1].value.try(&.text).should eq("10")
+
+    call = tree.nodes(Facet::Compiler::NodeKind::Binary).find { |node| node.call_name == "load" }.not_nil!
+    call.receiver.try(&.symbol_name).should eq("client")
+    call.arguments.map(&.text).should eq(["limit", "cached: true"])
+    call.named_arguments.map(&.name).should eq(["cached"])
+  end
+
   it "converts byte offsets to UTF-8 and UTF-16 editor positions" do
     source = Facet::Compiler::Source.new("a😀b\nnext")
     index = Facet::Compiler::LineIndex.new(source)
