@@ -16,6 +16,11 @@ module Facet
     class MacroExpander
       YIELD_ENV_KEY = "__facet_macro_yield__"
 
+      private record MacroEvalBlock,
+        ast : AstFile,
+        body_id : NodeId,
+        parameters : Array(String)
+
       private record BuiltinProperty,
         name : String,
         type : String?,
@@ -998,6 +1003,7 @@ module Facet
         member = ast.node(member_id)
         name = nil
         args = [] of MacroValue
+        block = nil.as(MacroEvalBlock?)
         case member.kind
         when NodeKind::Ident
           name = ast.arena.symbols[member.payload_index]
@@ -1015,14 +1021,77 @@ module Facet
               args << evaluation.value
             end
           end
+        when NodeKind::CallWithBlock
+          call = syntax_tree(ast).node(member_id)
+          name = call.call_name
+          call.arguments.each do |argument|
+            evaluation = eval_value(argument.id, ast)
+            return nil unless evaluation
+            args << evaluation.value
+          end
+          body = call.body
+          return nil unless body
+          block = MacroEvalBlock.new(ast, body.id, call.parameters.compact_map(&.name))
         else
           return nil
         end
-        apply_macro_method(receiver.value, name, args)
+        return nil unless name
+        apply_macro_method(receiver.value, name, args, block)
       end
 
-      private def apply_macro_method(receiver : MacroValue, name : String, args : Array(MacroValue)) : MacroEvaluation?
+      private def apply_macro_method(
+        receiver : MacroValue,
+        name : String,
+        args : Array(MacroValue),
+        block : MacroEvalBlock? = nil,
+      ) : MacroEvaluation?
         case name
+        when "map", "map_with_index"
+          return nil unless block && args.empty?
+          values = macro_iteration_values(receiver, block.parameters.size, name == "map_with_index")
+          return nil unless values
+          mapped = [] of MacroValue
+          values.each do |iteration|
+            evaluation = eval_macro_eval_block(block, iteration)
+            return nil unless evaluation
+            mapped << evaluation.value
+          end
+          MacroEvaluation.new(mapped)
+        when "select", "reject"
+          return nil unless block && args.empty? && receiver.is_a?(Array(MacroValue))
+          selected = receiver.select do |value|
+            evaluation = eval_macro_eval_block(block, [value] of MacroValue)
+            return nil unless evaluation
+            keep = truthy?(evaluation.value)
+            name == "select" ? keep : !keep
+          end
+          MacroEvaluation.new(selected)
+        when "any?", "all?"
+          return nil unless block && args.empty?
+          values = macro_iteration_values(receiver, block.parameters.size, false)
+          return nil unless values
+          result = name == "all?"
+          values.each do |iteration|
+            evaluation = eval_macro_eval_block(block, iteration)
+            return nil unless evaluation
+            truthy = truthy?(evaluation.value)
+            if name == "any?" && truthy
+              result = true
+              break
+            elsif name == "all?" && !truthy
+              result = false
+              break
+            end
+          end
+          MacroEvaluation.new(result)
+        when "each", "each_with_index"
+          return nil unless block && args.empty?
+          values = macro_iteration_values(receiver, block.parameters.size, name == "each_with_index")
+          return nil unless values
+          values.each do |iteration|
+            return nil unless eval_macro_eval_block(block, iteration)
+          end
+          MacroEvaluation.new(receiver)
         when "size"
           size = case receiver
                  when String                   then receiver.size
@@ -1131,6 +1200,59 @@ module Facet
         else
           nil
         end
+      end
+
+      private def macro_iteration_values(
+        receiver : MacroValue,
+        parameter_count : Int32,
+        with_index : Bool,
+      ) : Array(Array(MacroValue))?
+        values = [] of Array(MacroValue)
+        case receiver
+        when Array(MacroValue)
+          receiver.each_with_index do |value, index|
+            iteration = [value] of MacroValue
+            iteration << index.to_i64 if with_index
+            values << iteration
+          end
+        when Hash(String, MacroValue)
+          receiver.each_with_index do |(key, value), index|
+            iteration = if parameter_count <= 1
+                          [[key.as(MacroValue), value] of MacroValue] of MacroValue
+                        else
+                          [key.as(MacroValue), value] of MacroValue
+                        end
+            iteration << index.to_i64 if with_index
+            values << iteration
+          end
+        when String
+          receiver.each_char_with_index do |char, index|
+            iteration = [char.to_s.as(MacroValue)] of MacroValue
+            iteration << index.to_i64 if with_index
+            values << iteration
+          end
+        else
+          return nil
+        end
+        values
+      end
+
+      private def eval_macro_eval_block(block : MacroEvalBlock, values : Array(MacroValue)) : MacroEvaluation?
+        parent = current_macro_env
+        env = parent.dup
+        block.parameters.each_with_index do |parameter, index|
+          env[parameter] = values[index]? || nil
+        end
+        @env_stack << env
+        evaluation = begin
+          eval_value(block.body_id, block.ast)
+        ensure
+          @env_stack.pop
+        end
+        env.each do |name, value|
+          parent[name] = value unless block.parameters.includes?(name)
+        end
+        evaluation
       end
 
       private def eval_macro_index(receiver : MacroValue, index : MacroValue) : MacroEvaluation?

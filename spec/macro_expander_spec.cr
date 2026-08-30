@@ -537,6 +537,41 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "evaluates collection macro blocks with lexical parameters" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      {% words = ["one", "two", "three"] %}
+      mapped = {{words.select { |word| word.size > 3 }.map { |word| word.upcase }.join(",")}}
+      any = {{words.any? { |word| word.starts_with?("t") }}}
+      all = {{words.all? { |word| !word.empty? }}}
+      indexed = [{{words.map_with_index { |word, index| index }.join(",")}}]
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand(ast)
+
+    expanded.source.text.should contain("mapped = THREE")
+    expanded.source.text.should contain("any = true")
+    expanded.source.text.should contain("all = true")
+    expanded.source.text.should contain("indexed = [0,1,2]")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "preserves outer macro assignments across collection block iterations" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      {% total = 0 %}
+      {% [1, 2, 3].each { |value| total += value } %}
+      total = {{total}}
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand(ast)
+
+    expanded.source.text.should contain("total = 6")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "expands nested controls and macro calls with the active parameter environment" do
     src_def = Facet::Compiler::Source.new(<<-CR)
       macro inner(x)

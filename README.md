@@ -169,6 +169,11 @@ iterations and expressions. Arguments outside the evaluable subset are kept as
 opaque source-backed AST values, so calls, generic types, and other syntax are
 substituted by `{{arg}}` instead of being discarded.
 
+Collection expressions support lexical `map`, `map_with_index`, `select`,
+`reject`, `any?`, `all?`, `each`, and `each_with_index` blocks over evaluated
+arrays, hashes, and strings. Block parameters stay local while assignments to
+outer macro variables propagate between iterations.
+
 Both `{{ macro_call(...) }}` and ordinary receiverless Crystal macro calls are
 expanded. Ordinary calls resolve through lexical type scopes, select overloads
 by arity, and support bare zero-argument calls while respecting parameters and
