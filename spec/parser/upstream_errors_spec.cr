@@ -270,6 +270,18 @@ describe "Parser upstream parity (selected errors)" do
   assert_syntax_error "a = 1; b = 2; a, b += 1, 2"
   assert_syntax_error "lib LibC\n$Errno : Int32\nend", "external variables must start with lowercase, use for example `$errno = Errno : Int32`"
   assert_syntax_error "a += 1", "'+=' before definition of 'a'"
+  ["-=", "*=", "/=", "//=", "%=", "|=", "&=", "^=", "**=", "<<=", ">>=",
+   "&&=", "||=", "&+=", "&-=", "&*=", "&**="].each do |operator|
+    it "rejects #{operator} before local definition" do
+      parser = parse_error("local #{operator} 1")
+      parser.diagnostics.first.message.should eq("'#{operator}' before definition of 'local'")
+    end
+  end
+  it_diagnoses "& value", %(unexpected token: "&")
+  it_diagnoses "&* value", %(unexpected token: "&*")
+  it_diagnoses ".foo", %(unexpected token: ".")
+  it_diagnoses "left : right", %(unexpected token: "right")
+  it_diagnoses "left : Foo::right", "expecting token 'CONST', not 'right'"
   assert_syntax_error "self = 1", "can't change the value of self"
   assert_syntax_error "self += 1", "can't change the value of self"
   assert_syntax_error "FOO, BAR = 1, 2", "Multiple assignment is not allowed for constants"

@@ -31,20 +31,22 @@ describe "Parser upstream parity (operators and edge calls)" do
   it_parses "1...2"
   it_parses "1 || 2"
   it_parses "1 && 2"
-  it_parses "a ||= 1"
-  it_parses "a &&= 1"
+  it_parses "a = nil; a ||= 1"
+  it_parses "a = true; a &&= 1"
   it "builds binary ops for ||, && and op-assign" do
     ast = parse_ok("1 || 2")
     exprs = root_exprs(ast)[0]
     bin = ast.children(exprs)[0]
     binary_op_kind(ast, bin).should eq(Facet::Compiler::TokenKind::OrOr)
 
-    ast2 = parse_ok("a ||= 1")
+    ast2 = parse_ok("a = nil; a ||= 1")
     exprs2 = root_exprs(ast2)[0]
-    bin2 = ast2.children(exprs2)[0]
+    bin2 = ast2.children(exprs2)[1]
     binary_op_kind(ast2, bin2).should eq(Facet::Compiler::TokenKind::OrOrEqual)
   end
   it_parses "foo !false"
+  it_parses "def document(&); yield.tap { close }; end"
+  it_parses "def initialize(@free_vars = nil); free_vars ||= {} of String => Int32; end"
   it_parses "!a && b"
   it_parses "foo.bar.baz"
   it_parses "f.x Foo.new"
