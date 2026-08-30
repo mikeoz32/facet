@@ -71,4 +71,5 @@ describe "Parser upstream parity (strings and percent literals)" do
   it_parses "<<-FOO\n\t 1\n\t FOO"
   it_parses "x, y = <<-FOO, <<-BAR\nhello\nFOO\nworld\nBAR"
   it_parses "x, y, z = <<-FOO, <<-BAR, <<-BAZ\nhello\nFOO\nworld\nBAR\n!\nBAZ"
+  it_parses "write(path, <<-CODE)\n  value\nCODE\nafter"
 end

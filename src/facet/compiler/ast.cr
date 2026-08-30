@@ -192,6 +192,11 @@ module Facet
         payload_index : Int32 = -1,
         flags : UInt16 = 0_u16,
       ) : NodeId
+        unless children.empty?
+          child_start = children.min_of { |child| @nodes[child].span.start }
+          child_finish = children.max_of { |child| @nodes[child].span.finish }
+          span = Span.new(Math.min(span.start, child_start), Math.max(span.finish, child_finish))
+        end
         first_child = @edges.size
         children.each { |child| @edges << child }
         node = Node.new(

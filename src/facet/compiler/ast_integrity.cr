@@ -400,6 +400,9 @@ module Facet
             asm_option_token_owned?(node, token, text)
           when NodeKind::MacroLiteral
             true
+          when NodeKind::MacroControl
+            token.kind == TokenKind::Identifier && text == "verbatim" &&
+              node.payload_index == TokenKind::KeywordVerbatim.to_i32
           when NodeKind::NamedArg
             if token.kind == TokenKind::Symbol && token.span.start > node.span.start &&
                ast.source.bytes[token.span.start] == ':'.ord.to_u8

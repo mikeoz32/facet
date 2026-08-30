@@ -1441,27 +1441,30 @@ module Facet
           label = String.new(@bytes[label_start, @i - label_start])
         end
 
-        while @i < n && @bytes[@i] != LF
-          @i += 1
+        header_finish = @i
+        header_line_end = header_finish
+        while header_line_end < n && @bytes[header_line_end] != LF
+          header_line_end += 1
         end
-        if @i >= n
+        if header_line_end >= n
+          @i = n
           @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unexpected EOF on heredoc identifier")
           return Token.new(TokenKind::String, Span.new(start, @i))
-        end
-        if @i < n && @bytes[@i] == LF
-          @i += 1
-          @line_starts << @i
         end
 
         terminated = false
         closing_indent = 0
         line_indents = [] of Tuple(Int32, Int32)
-        while @i < n
-          line_start = @i
-          while @i < n && @bytes[@i] != LF
-            @i += 1
+        body_start = header_line_end + 1
+        body_finish = body_start
+        full_finish = body_start
+        cursor = body_start
+        while cursor < n
+          line_start = cursor
+          while cursor < n && @bytes[cursor] != LF
+            cursor += 1
           end
-          line_end = @i
+          line_end = cursor
           line_end_no_cr = line_end
           if line_end_no_cr > line_start && @bytes[line_end_no_cr - 1] == CR
             line_end_no_cr -= 1
@@ -1485,20 +1488,31 @@ module Facet
              @bytes[compare_start, compare_length] == label.to_slice
             terminated = true
             closing_indent = indented ? indent_count : 0
-            if @i < n && @bytes[@i] == LF
-              @i += 1
-              @line_starts << @i
-            end
+            body_finish = line_start
+            full_finish = line_end < n ? line_end + 1 : line_end
             break
           end
           if indented
             blank = scan_pos >= line_end_no_cr
             line_indents << {line_start, indent_count} unless blank
           end
-          if @i < n && @bytes[@i] == LF
-            @i += 1
-            @line_starts << @i
+          cursor += 1 if cursor < n && @bytes[cursor] == LF
+        end
+
+        if terminated
+          @multi_heredoc_header_finishes[start] = header_finish
+          @multi_heredoc_full_spans[start] = Span.new(start, full_finish)
+          @multi_heredoc_body_bounds[start] = {body_start, body_finish}
+          @multi_heredoc_line_skips[header_line_end] = full_finish
+          @active_multi_heredoc_line_end = header_line_end
+          @i = header_finish
+        else
+          position = header_line_end
+          while position < n
+            @line_starts << position + 1 if @bytes[position] == LF
+            position += 1
           end
+          @i = n
         end
 
         if @parser_mode && terminated && indented && closing_indent > 0
@@ -1514,7 +1528,7 @@ module Facet
           @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unterminated heredoc: can't find \"#{label}\" anywhere before the end of file")
         end
 
-        Token.new(TokenKind::String, Span.new(start, @i))
+        Token.new(TokenKind::String, Span.new(start, terminated ? header_finish : @i))
       end
 
       private def scan_regex : Token

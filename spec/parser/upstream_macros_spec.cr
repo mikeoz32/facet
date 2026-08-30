@@ -81,6 +81,8 @@ describe "Parser upstream parity (macros)" do
     CRYSTAL
   end
 
+  it_parses "verbatim = 1; verbatim.to_s"
+
   [{'(', ')'}, {'[', ']'}, {'<', '>'}, {'{', '}'}, {'|', '|'}].each do |open, close|
     it_parses "{% begin %}%#{open} %s #{close}{% end %}"
     it_parses "{% begin %}%q#{open} %s #{close}{% end %}"

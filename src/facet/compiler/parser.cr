@@ -6964,7 +6964,7 @@ module Facet
         start = advance
         advance if current.kind == TokenKind::Percent
         tag_token = current
-        tag_kind = tag_token.kind
+        tag_kind = macro_control_kind(tag_token)
         single_block = @macro_def_depth > 0 && macro_single_block?
         consume_tag = true
         control_kinds = {
@@ -7024,7 +7024,7 @@ module Facet
         depth = 1
         loop do
           if macro_control_start?
-            kind = peek2.kind
+            kind = macro_control_kind(peek2)
             if {TokenKind::KeywordIf, TokenKind::KeywordUnless, TokenKind::KeywordFor,
                 TokenKind::KeywordBegin, TokenKind::KeywordVerbatim}.includes?(kind)
               depth += 1
@@ -7094,8 +7094,16 @@ module Facet
         end
         return false if escaped_macro_start?(current)
         return false unless current.kind == TokenKind::LBrace && peek1.kind == TokenKind::Percent
-        kind = peek2.kind
+        kind = macro_control_kind(peek2)
         kinds.empty? || kinds.includes?(kind)
+      end
+
+      private def macro_control_kind(token : Token) : TokenKind
+        if token.kind == TokenKind::Identifier && token_text(token) == "verbatim"
+          TokenKind::KeywordVerbatim
+        else
+          token.kind
+        end
       end
 
       private def macro_single_block? : Bool

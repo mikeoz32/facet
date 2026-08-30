@@ -62,7 +62,6 @@ module Facet
         "union"            => TokenKind::KeywordUnion,
         "unless"           => TokenKind::KeywordUnless,
         "until"            => TokenKind::KeywordUntil,
-        "verbatim"         => TokenKind::KeywordVerbatim,
         "when"             => TokenKind::KeywordWhen,
         "while"            => TokenKind::KeywordWhile,
         "with"             => TokenKind::KeywordWith,

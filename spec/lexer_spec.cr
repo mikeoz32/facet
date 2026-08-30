@@ -305,6 +305,23 @@ describe Facet::Compiler::Lexer do
     ])
   end
 
+  it "preserves tokens following a heredoc header" do
+    source = Facet::Compiler::Source.new("write(path, <<-CODE)\nvalue\nCODE\nafter")
+    lexer = Facet::Compiler::Lexer.new(source)
+    tokens = lexer.tokenize_all
+    tokens.map(&.kind).should eq([
+      Facet::Compiler::TokenKind::Identifier,
+      Facet::Compiler::TokenKind::LParen,
+      Facet::Compiler::TokenKind::Identifier,
+      Facet::Compiler::TokenKind::Comma,
+      Facet::Compiler::TokenKind::String,
+      Facet::Compiler::TokenKind::RParen,
+      Facet::Compiler::TokenKind::Identifier,
+      Facet::Compiler::TokenKind::Eof,
+    ])
+    source.text.byte_slice(tokens[4].span.start, tokens[4].span.length).should eq("<<-CODE")
+  end
+
   it "reports unterminated escape sequences" do
     source = Facet::Compiler::Source.new(%("bad\\))
     lexer = Facet::Compiler::Lexer.new(source)
