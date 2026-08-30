@@ -5,6 +5,7 @@ require "./macro_footprint"
 module Facet
   module Compiler
     alias MacroValue = Int64 | String | Bool | Nil | Array(MacroValue) | Hash(String, MacroValue)
+
     class MacroExpander
       getter diagnostics : Array(Diagnostic)
       getter cache_hits : Int32
@@ -84,7 +85,7 @@ module Facet
         slice_span : Span? = nil,
         caller_idents : Hash(String, Bool)? = nil,
         footprint : MacroFootprint? = nil,
-        replacements : Array(Tuple(Span, String)) = [] of Tuple(Span, String)
+        replacements : Array(Tuple(Span, String)) = [] of Tuple(Span, String),
       ) : String
         macros.sort_by! { |id| ast.node(id).span.start }
         start_pos = slice_span ? slice_span.start : 0
@@ -374,7 +375,7 @@ module Facet
         end_pos : Int32,
         replacements : Array(Tuple(Span, String)),
         builder : String::Builder,
-        rep_index : Int32
+        rep_index : Int32,
       ) : Int32
         i = start_pos
         idx = rep_index
@@ -476,9 +477,8 @@ module Facet
         node = ast.node(node_id)
         case node.kind
         when NodeKind::LiteralString
-          text = ast.node_string(node_id)
-          return text[1, text.size - 2] if text.size >= 2 && text.starts_with?("\"") && text.ends_with?("\"")
-          text
+          content : String = ast.literal_content_string(node_id)
+          return content
         when NodeKind::LiteralNumber
           str = ast.node_string(node_id).delete('_')
           str.to_i64? || str

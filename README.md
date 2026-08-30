@@ -19,10 +19,14 @@ for future name resolution, type checking, and compilation stages.
 - `SourceManager` and `QueryDb` caching for parse, index, and expansion queries.
 - Compatibility checks against the actual upstream Crystal 1.21 lexer/parser
   spec inputs. Facet currently matches Crystal::Parser acceptance/rejection on
-  all 4,378 unique parser inputs, retains every significant token in a bounded
-  AST node, and fully consumes all 690 unique lexer inputs without unknown
-  tokens or non-trivia gaps. Lexer diagnostic presence also matches on all 687
-  inputs whose upstream state can be reconstructed from source text alone.
+  all 4,378 unique parser inputs. Every accepted input must retain each
+  significant token in a reachable semantic AST node and pass the native AST
+  schema for child roles, arity, payloads, flags, spans, and graph integrity.
+  All 3,437 accepted inputs also match a committed common semantic projection
+  covering construct shape, names, operators, child order, and semantic flags.
+  The lexer fully consumes all 690 unique inputs without unknown tokens or
+  non-trivia gaps. Lexer diagnostic presence also matches on all 687 inputs
+  whose upstream state can be reconstructed from source text alone.
 - A committed Crystal 1.21 parser fixture makes all 4,378 upstream parser
   inputs permanent native Facet specs. It also retains the upstream AST inspect
   oracle for accepted inputs and the exact message/location oracle for rejected
@@ -73,6 +77,20 @@ puts root.kind
 children by integer IDs; use `AstFile#node`, `AstFile#children`, and
 `AstFile#node_string` to inspect them.
 
+Literal nodes retain their outer syntax span and, when the value occupies a
+different source range, a separate payload-backed content span. Use
+`AstFile#literal_content_span`, `AstFile#literal_content`, or
+`AstFile#literal_content_string` when decoding strings, regexes, and heredocs.
+This is required for multiple heredocs declared on one header line, whose
+outer syntax spans overlap while their bodies remain distinct.
+
+`Facet::Compiler::AstIntegrity.contract_violations(ast)` validates Facet's
+native AST contract.
+It traverses only nodes reachable from the root: arena nodes left behind by
+parser speculation cannot satisfy semantic-token ownership or affect the
+meaning of the returned tree. Immutable child nodes may be shared, so the
+reachable representation is a DAG, but cycles are rejected.
+
 ## Incremental queries
 
 ```crystal
@@ -114,13 +132,16 @@ crystal spec spec/parser_spec.cr
 crystal spec spec/parser/ast_contract_spec.cr
 crystal run scripts/bench_lexer.cr
 crystal run scripts/check_parser_compat.cr
+crystal run scripts/check_upstream_ast_shape.cr
 ```
 
 The full suite includes lexer coverage against the installed Crystal stdlib and
 ported parser compatibility cases. `check_parser_compat.cr` parses each source
-file in an isolated subprocess so a parser crash cannot abort the corpus run.
-Pass files or directories after `--` to scan another Crystal codebase, for
-example `crystal run scripts/check_parser_compat.cr -- src`.
+file in an isolated subprocess so a parser crash cannot abort the corpus run;
+diagnostic-free files must also pass the recursive AST contract and reachable
+semantic-token checks. Pass files or directories after `--` to scan another
+Crystal codebase, for example `crystal run scripts/check_parser_compat.cr --
+src`.
 
 ### Upstream spec parity
 
@@ -151,6 +172,10 @@ crystal run scripts/generate_upstream_parser_fixture.cr -- \
   /tmp/crystal-parser-inputs.b64 spec/fixtures/crystal_1_21_parser.jsonl \
   spec/compiler/parser
 
+# Regenerate and verify the portable semantic AST projection oracle.
+crystal run scripts/generate_upstream_ast_shape_fixture.cr
+crystal run scripts/check_upstream_ast_shape.cr
+
 # Report exact message/location parity against the committed error oracle.
 crystal run scripts/report_upstream_parser_diagnostics.cr
 ```
@@ -162,20 +187,27 @@ compares whether each input raises a lexer diagnostic. Three source-only cases
 are reported separately because the upstream result depends on mutable lexer
 state (`slash_is_regex` for `/` and `/=`) or on consuming only the heredoc
 opener instead of the whole input. Parser AST node classes also differ and are
-not compared with Crystal's tree shape. `spec/parser/ast_contract_spec.cr`
-instead snapshots Facet's own compact contract: node kinds, child ordering,
-symbol/operator payloads, semantic flags, and raw macro segments. The contract
-corpus covers every node kind produced by accepted syntax; `Error`, the unused
-`Const` kind, and rejected global variables are intentionally outside it.
+not required to match. Instead, both trees are normalized into a common
+semantic projection that compares construct shape, names, operators, child
+ordering, and semantic flags without imposing Crystal's AST representation on
+Facet. The resulting 3,437 expected projections are committed as a portable
+fixture and checked by the regular native spec suite.
+
+`spec/parser/ast_contract_spec.cr` separately snapshots Facet's own compact
+contract: node kinds, child ordering, symbol/operator payloads, semantic flags,
+raw macro segments, source-backed literal forms, and distinct heredoc content
+spans. Eighteen focused golden inputs cover every node kind produced by
+accepted syntax, including FFI globals; only the recovery-only `Error` kind and
+currently unused `Const` kind are outside the accepted-tree goldens.
 
 Current Crystal 1.21.0 parity baseline:
 
 | Surface | Upstream suite | Facet replay result |
 | --- | ---: | --- |
-| Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
+| Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 7,277 examples passing; all 4,378 upstream parser inputs committed locally |
-| Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 crashes |
+| Facet native suite | — | 7,294 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often
 exercise multiple inputs inside one example, and Facet's compact token and AST
@@ -186,13 +218,15 @@ diagnostic presence, span invariants, and anti-skip token retention checks.
 Native input and first-diagnostic coverage are complete for the captured
 Crystal 1.21 parser suite. For all 941 rejected inputs, Facet matches Crystal's
 exact first diagnostic message and line/column. The committed fixture gates
-acceptance/rejection, AST span integrity, absence of error nodes in accepted
+acceptance/rejection, reachable AST graph and span integrity, node arity and
+child roles, payload and flag validity, absence of error nodes in accepted
 trees, semantic-token ownership, diagnostic span validity, and the complete
-first-diagnostic oracle. Significant identifiers and literals must be owned by
-an explicit Facet payload or literal node; container nodes and `Nop` cannot
-satisfy this check. Crystal/Facet AST shapes are intentionally unrelated, and
-later recovery diagnostics after the first error are not yet part of the
-parity oracle.
+first-diagnostic oracle. Accepted inputs additionally gate the common semantic
+projection. Significant identifiers and literals must be owned by an explicit
+reachable Facet payload or literal node; unreachable arena nodes, containers,
+and `Nop` cannot satisfy this check. Facet retains its own AST representation;
+the projection compares semantics, not node-class identity. Later recovery
+diagnostics after the first error are not yet part of the parity oracle.
 
 ## Contributing
 

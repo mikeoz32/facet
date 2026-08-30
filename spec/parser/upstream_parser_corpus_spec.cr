@@ -1,6 +1,7 @@
 require "json"
 require "../spec_helper"
 require "./upstream_support"
+require "../../scripts/support/facet_ast_normalizer"
 
 record UpstreamParserFixtureHeader,
   kind : String,
@@ -20,10 +21,32 @@ record UpstreamParserFixtureCase,
   include JSON::Serializable
 end
 
+record UpstreamAstShapeFixtureHeader,
+  kind : String,
+  crystal_version : String,
+  accepted_input_count : Int32 do
+  include JSON::Serializable
+end
+
+record UpstreamAstShapeFixtureCase,
+  input_index : Int32,
+  shape : String do
+  include JSON::Serializable
+end
+
 fixture_path = File.expand_path("../fixtures/crystal_1_21_parser.jsonl", __DIR__)
 fixture_lines = File.read_lines(fixture_path)
 fixture_header = UpstreamParserFixtureHeader.from_json(fixture_lines.shift)
 fixture_cases = fixture_lines.map { |line| UpstreamParserFixtureCase.from_json(line) }
+
+shape_fixture_path = File.expand_path("../fixtures/crystal_1_21_ast_shape.jsonl", __DIR__)
+shape_fixture_lines = File.read_lines(shape_fixture_path)
+shape_fixture_header = UpstreamAstShapeFixtureHeader.from_json(shape_fixture_lines.shift)
+shape_by_input = {} of Int32 => String
+shape_fixture_lines.each do |line|
+  fixture = UpstreamAstShapeFixtureCase.from_json(line)
+  shape_by_input[fixture.input_index] = fixture.shape
+end
 
 describe "Crystal 1.21 parser corpus" do
   it "loads the complete captured parser suite corpus" do
@@ -32,6 +55,10 @@ describe "Crystal 1.21 parser corpus" do
     fixture_header.suite.should eq("spec/compiler/parser")
     fixture_header.input_count.should eq(4_378)
     fixture_cases.size.should eq(fixture_header.input_count)
+    shape_fixture_header.kind.should eq("facet-upstream-semantic-ast-fixture")
+    shape_fixture_header.crystal_version.should eq("1.21.0")
+    shape_fixture_header.accepted_input_count.should eq(3_437)
+    shape_by_input.size.should eq(shape_fixture_header.accepted_input_count)
   end
 
   it "maintains the first-diagnostic parity baseline" do
@@ -84,6 +111,8 @@ describe "Crystal 1.21 parser corpus" do
           fail "unexpected diagnostic: #{first.message} @ #{first.span.start}"
         end
         UpstreamSupport.validate_ast_integrity(ast)
+        expected_shape = shape_by_input[index]? || fail "missing semantic AST oracle for input #{index}"
+        FacetAstNormalizer.normalize(ast).render.should eq(expected_shape)
       else
         fixture_case.ast.should be_nil
         fixture_case.error.should_not be_nil

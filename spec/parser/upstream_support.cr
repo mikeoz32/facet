@@ -6,11 +6,9 @@ module UpstreamSupport
       raise "root span #{root.span} does not cover source size #{source.size}"
     end
 
-    if bad = ast.arena.nodes.find { |node| node.span.start < 0 || node.span.finish < node.span.start || node.span.finish > source.size }
-      raise "invalid AST span #{bad.span}"
-    end
-    if ast.arena.nodes.any? { |node| node.kind == Facet::Compiler::NodeKind::Error }
-      raise "accepted input contains an Error AST node"
+    violations = Facet::Compiler::AstIntegrity.contract_violations(ast)
+    unless violations.empty?
+      raise "AST contract violations: #{violations.first(8).join("; ")}"
     end
 
     lexer = Facet::Compiler::Lexer.new(source)

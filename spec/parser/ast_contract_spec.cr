@@ -22,7 +22,7 @@ AST_CONTRACT_CASES = [
   {
     name:     "definitions, parameters, and types",
     source:   %(def transform(x : Foo::Bar = value, *rest : Int32, **options, &block : Int32 -> String) : Array(String) | Nil; yield x; end),
-    expected: %q(File(Expressions(Def(Ident["transform"], Args(Param["x"](Ident["x"], Path(Ident["Foo"], Ident["Bar"]), Ident["value"]), Splat["rest"](Ident["Int32"]), DoubleSplat["options"](Nop), BlockParam["block"](ProcType(Args(Ident["Int32"]), Ident["String"]))), Binary[Pipe](TypeApply(Ident["Array"], Args(Ident["String"])), Ident["Nil"]), Expressions(Yield(Ident["x"])), Nop)))),
+    expected: %q(File(Expressions(Def(Ident["transform"], Args(Param["x"](Ident["x"], Path(Ident["Foo"], Ident["Bar"]), Ident["value"]), Splat["rest"](Ident["Int32"]), DoubleSplat["options"](Nop), BlockParam["block"](ProcType(Args(Ident["Int32"]), Ident["String"]))), Binary[Pipe](TypeApply(Ident["Array"], Args(Ident["String"])), LiteralNil["Nil"]), Expressions(Yield(Ident["x"])), Nop)))),
   },
   {
     name:     "aliases, type definitions, and require",
@@ -47,22 +47,32 @@ AST_CONTRACT_CASES = [
   {
     name:     "exception handlers",
     source:   %(begin; risky; rescue; recover; else; success; ensure; cleanup; end),
-    expected: %q(File(Expressions(Begin(Expressions(Ident["risky"]), Rescue(Expressions(Ident["recover"])), Rescue(Expressions(Ident["success"])), Ensure(Expressions(Ident["cleanup"])))))),
+    expected: %q(File(Expressions(Begin(Expressions(Ident["risky"]), Expressions(Rescue{RescueClause}(Nop, Expressions(Ident["recover"]))), Expressions(Ident["success"]), Ensure(Expressions(Ident["cleanup"])))))),
+  },
+  {
+    name:     "multiple rescue clause headers",
+    source:   %(begin; risky; rescue ex : Foo | Bar; one; rescue Baz; two; rescue fallback; three; end),
+    expected: %q(File(Expressions(Begin(Expressions(Ident["risky"]), Expressions(Rescue{RescueClause}(VarDecl(Ident["ex"], Binary[Pipe](Ident["Foo"], Ident["Bar"]), Nop), Expressions(Ident["one"])), Rescue{RescueClause}(Ident["Baz"], Expressions(Ident["two"])), Rescue{RescueClause}(Ident["fallback"], Expressions(Ident["three"]))), Nop, Nop)))),
   },
   {
     name:     "proc blocks and destructuring",
     source:   %(callback = ->(x : Int32) { x }; items.each { |head, (left, (right, *rest))| left }),
-    expected: %q(File(Expressions(Assign(Ident["callback"], Block(Args(Param["x"](Ident["x"], Ident["Int32"], Nop)), Expressions(Ident["x"]))), Binary[Dot](Ident["items"], CallWithBlock(Ident["each"], Args(Ident["head"], Destructure(Ident["left"], Destructure(Ident["right"], Splat["rest"](Ident["rest"])))), Expressions(Ident["left"])))))),
+    expected: %q(File(Expressions(Assign(Ident["callback"], Block(Args(Param["x"](Ident["x"], Ident["Int32"], Nop)), Nop, Expressions(Ident["x"]))), Binary[Dot](Ident["items"], CallWithBlock{storage=1}(Ident["each"], Args(Ident["head"], Destructure(Ident["left"], Destructure(Ident["right"], Splat["rest"](Ident["rest"])))), Expressions(Ident["left"])))))),
+  },
+  {
+    name:     "proc return types and external variables",
+    source:   %(callback = ->(x : Int32) : String { x.to_s }; lib LibC; $errno = Foo : Int32; end),
+    expected: %q(File(Expressions(Assign(Ident["callback"], Block(Args(Param["x"](Ident["x"], Ident["Int32"], Nop)), Ident["String"], Expressions(Binary[Dot](Ident["x"], Ident["to_s"])))), Lib(Ident["LibC"], Nop, Expressions(VarDecl(Global["$errno"], Ident["Int32"], Nop, Ident["Foo"])))))),
   },
   {
     name:     "macro structure",
     source:   %(macro render(x);before {{ x }} {% if x %}yes{% else %}no{% end %} after;end; {% for key, value in pairs %}{{ %key }}{% end %}),
-    expected: %q(File(Expressions(MacroDef(Ident["render"], Args(Param["x"](Ident["x"], Nop, Nop)), Nop, Expressions(Call(Call(Call(Ident["before"], Args(MacroExpr(Expressions(Ident["x"])))), Args(MacroControl[KeywordIf](Expressions(Ident["x"]), Expressions(MacroLiteral["yes"]), Expressions(MacroLiteral["no"])))), Args(Ident["after"]))), Nop), MacroControl[KeywordFor](MacroForHeader(Args(Ident["key"], Ident["value"]), Ident["pairs"]), Expressions(MacroExpr(Expressions(MacroVar["key"]))))))),
+    expected: %q(File(Expressions(MacroDef(Ident["render"], Args(Param["x"](Ident["x"], Nop, Nop)), Nop, Expressions(MacroLiteral["before "], MacroExpr(Expressions(Ident["x"])), MacroLiteral[" "], MacroControl[KeywordIf](Expressions(Ident["x"]), Expressions(MacroLiteral["yes"]), Expressions(MacroLiteral["no"])), MacroLiteral[" after;"]), Nop), MacroControl[KeywordFor](MacroForHeader(Args(Ident["key"], Ident["value"]), Ident["pairs"]), Expressions(MacroExpr(Expressions(MacroVar["key"]))))))),
   },
   {
     name:     "compact declaration flags",
     source:   %(abstract class Box(T) < Base; end; union Value; field : Int32; end; private def run; end; protected macro build; end; def value=(new_value); end),
-    expected: %q(File(Expressions(Class{Abstract}(TypeApply(Ident["Box"], Args(Ident["T"])), Ident["Base"], Expressions), Struct{Union}(Ident["Value"], Nop, Expressions(VarDecl(Ident["field"], Ident["Int32"], Nop))), Def{Private}(Ident["run"], Args, Nop, Expressions, Nop), MacroDef{Protected}(Ident["build"], Args, Nop, Expressions, Nop), Def(Ident["value="], Args(Param["new_value"](Ident["new_value"], Nop, Nop)), Nop, Expressions, Nop)))),
+    expected: %q(File(Expressions(Class{Abstract}(TypeApply(Ident["Box"], Args(Ident["T"])), Ident["Base"], Expressions), Struct{Union}(Ident["Value"], Nop, Expressions(VarDecl(Ident["field"], Ident["Int32"], Nop))), Def{Private}(Ident["run"], Args, Nop, Expressions, Nop), MacroDef{Protected}(Ident["build"], Args, Nop, Expressions(MacroLiteral[" "]), Nop), Def(Ident["value="], Args(Param["new_value"](Ident["new_value"], Nop, Nop)), Nop, Expressions, Nop)))),
   },
   {
     name:     "case variants",
@@ -72,7 +82,17 @@ AST_CONTRACT_CASES = [
   {
     name:     "verbatim and escaped macro literals",
     source:   %(macro raw; {% verbatim do %}{{ untouched }}{% end %}; \\{{ escaped }}; end),
-    expected: %q(File(Expressions(MacroDef(Ident["raw"], Args, Nop, Expressions(MacroControl[KeywordVerbatim](Nop, MacroLiteral["{{ untouched }}"]), MacroLiteral["\\{{ escaped }}"]{Escaped}), Nop)))),
+    expected: %q(File(Expressions(MacroDef(Ident["raw"], Args, Nop, Expressions(MacroLiteral[" "], MacroControl[KeywordVerbatim](Nop, MacroLiteral["{{ untouched }}"]), MacroLiteral["; \\"], MacroLiteral["\\{{ escaped }}"]{Escaped}, MacroLiteral["; "]), Nop)))),
+  },
+  {
+    name:     "interpolation and inline assembly",
+    source:   %q("a#{b}"; asm("nop" : "a"(0) : "b"(1))),
+    expected: %q(File(Expressions(StringInterpolation(LiteralString["a"], Ident["b"]), Asm(LiteralString["\"nop\""], Args(AsmOperand(LiteralString["\"a\""], LiteralNumber["0"])), Args(AsmOperand(LiteralString["\"b\""], LiteralNumber["1"])), Args)))),
+  },
+  {
+    name:     "source-backed literal forms",
+    source:   "__FILE__; __LINE__; $1; %w(one two); %i(foo bar); \"a\" \\\n\"b\"",
+    expected: %q(File(Expressions(LiteralString["__FILE__"], LiteralNumber["__LINE__"], Index(Global["$~"], LiteralNumber["1"]), Array{storage=1}(LiteralString["one"], LiteralString["two"], Path(Ident["::"], Ident["String"])), Array{storage=1}(LiteralSymbol["foo"], LiteralSymbol["bar"], Path(Ident["::"], Ident["Symbol"])), StringInterpolation(LiteralString["\"a\""], LiteralString["\"b\""])))),
   },
 ]
 
@@ -122,6 +142,18 @@ describe "Facet AST contract" do
     verbatim.node_string(literal).should eq("\n  {{ untouched }}\n")
   end
 
+  it "retains distinct content spans for multiple heredocs on one header line" do
+    ast = facet_ast("<<-ONE; <<-TWO\na\nONE\nb\nTWO\n")
+    expressions = ast.children(ast.root)[0]
+    first, second = ast.children(expressions)
+
+    ast.node(first).kind.should eq(Facet::Compiler::NodeKind::LiteralString)
+    ast.node(second).kind.should eq(Facet::Compiler::NodeKind::LiteralString)
+    ast.literal_content_string(first).should eq("a\n")
+    ast.literal_content_string(second).should eq("b\n")
+    ast.literal_content_span(first).should_not eq(ast.literal_content_span(second))
+  end
+
   it "does not let Nop or container spans hide a significant token" do
     source = Facet::Compiler::Source.new("lost")
     arena = Facet::Compiler::AstArena.new
@@ -136,17 +168,98 @@ describe "Facet AST contract" do
     missing.first.kind.should eq(Facet::Compiler::TokenKind::Identifier)
   end
 
+  it "does not let unreachable arena nodes hide a significant token" do
+    source = Facet::Compiler::Source.new("lost")
+    arena = Facet::Compiler::AstArena.new
+    arena.add_ident(Facet::Compiler::Span.new(0, source.size), arena.symbols.intern("lost"))
+    nop = arena.add_node(Facet::Compiler::NodeKind::Nop, Facet::Compiler::Span.new(0, source.size))
+    expressions = arena.add_node(Facet::Compiler::NodeKind::Expressions, Facet::Compiler::Span.new(0, source.size), [nop])
+    root = arena.add_node(Facet::Compiler::NodeKind::File, Facet::Compiler::Span.new(0, source.size), [expressions])
+    ast = Facet::Compiler::AstFile.new(source, root, arena, [] of Facet::Compiler::Diagnostic)
+    tokens = Facet::Compiler::Lexer.new(source).tokenize_all
+
+    Facet::Compiler::AstIntegrity.missing_semantic_tokens(ast, tokens).map(&.kind).should eq([
+      Facet::Compiler::TokenKind::Identifier,
+    ])
+  end
+
+  it "rejects malformed child roles in the native AST contract" do
+    source = Facet::Compiler::Source.new("")
+    arena = Facet::Compiler::AstArena.new
+    nop = arena.add_node(Facet::Compiler::NodeKind::Nop, Facet::Compiler::Span.new(0, 0))
+    root = arena.add_node(Facet::Compiler::NodeKind::File, Facet::Compiler::Span.new(0, 0), [nop])
+    ast = Facet::Compiler::AstFile.new(source, root, arena, [] of Facet::Compiler::Diagnostic)
+
+    violations = Facet::Compiler::AstIntegrity.contract_violations(ast)
+    violations.should contain("File##{root} child 0 is Nop; expected Expressions")
+  end
+
+  it "rejects cycles and mismatched literal payloads" do
+    empty_source = Facet::Compiler::Source.new("")
+    cyclic_arena = Facet::Compiler::AstArena.new
+    nop = cyclic_arena.add_node(Facet::Compiler::NodeKind::Nop, Facet::Compiler::Span.new(0, 0))
+    expressions = cyclic_arena.add_node(Facet::Compiler::NodeKind::Expressions, Facet::Compiler::Span.new(0, 0), [nop])
+    cyclic_arena.edges[cyclic_arena.node(expressions).first_child] = expressions
+    root = cyclic_arena.add_node(Facet::Compiler::NodeKind::File, Facet::Compiler::Span.new(0, 0), [expressions])
+    cyclic_ast = Facet::Compiler::AstFile.new(empty_source, root, cyclic_arena, [] of Facet::Compiler::Diagnostic)
+
+    Facet::Compiler::AstIntegrity.contract_violations(cyclic_ast)
+      .should contain("node #{expressions} forms a cycle in the reachable AST")
+
+    source = Facet::Compiler::Source.new("1")
+    payload_arena = Facet::Compiler::AstArena.new
+    payload = payload_arena.add_literal(Facet::Compiler::LiteralKind::Number)
+    literal = payload_arena.add_node(Facet::Compiler::NodeKind::LiteralString, Facet::Compiler::Span.new(0, 1), payload_index: payload)
+    expressions = payload_arena.add_node(Facet::Compiler::NodeKind::Expressions, Facet::Compiler::Span.new(0, 1), [literal])
+    root = payload_arena.add_node(Facet::Compiler::NodeKind::File, Facet::Compiler::Span.new(0, 1), [expressions])
+    payload_ast = Facet::Compiler::AstFile.new(source, root, payload_arena, [] of Facet::Compiler::Diagnostic)
+
+    Facet::Compiler::AstIntegrity.contract_violations(payload_ast)
+      .should contain("LiteralString##{literal} has Number literal payload; expected String")
+
+    content_arena = Facet::Compiler::AstArena.new
+    content_payload = content_arena.add_literal(
+      Facet::Compiler::LiteralKind::String,
+      Facet::Compiler::Span.new(0, 2)
+    )
+    content_literal = content_arena.add_node(
+      Facet::Compiler::NodeKind::LiteralString,
+      Facet::Compiler::Span.new(0, 1),
+      payload_index: content_payload
+    )
+    expressions = content_arena.add_node(
+      Facet::Compiler::NodeKind::Expressions,
+      Facet::Compiler::Span.new(0, 1),
+      [content_literal]
+    )
+    root = content_arena.add_node(
+      Facet::Compiler::NodeKind::File,
+      Facet::Compiler::Span.new(0, 1),
+      [expressions]
+    )
+    content_ast = Facet::Compiler::AstFile.new(
+      source,
+      root,
+      content_arena,
+      [] of Facet::Compiler::Diagnostic
+    )
+
+    Facet::Compiler::AstIntegrity.contract_violations(content_ast)
+      .any? { |violation| violation.includes?("LiteralString##{content_literal} has invalid literal content span") }
+      .should be_true
+  end
+
   it "covers every node kind produced by accepted syntax" do
     covered = [] of Facet::Compiler::NodeKind
     AST_CONTRACT_CASES.each do |contract|
       ast = facet_ast(contract[:source])
-      covered.concat(ast.arena.nodes.map(&.kind))
+      reachable = Facet::Compiler::AstIntegrity.reachable_node_ids(ast)
+      covered.concat(reachable.map { |node_id| ast.node(node_id).kind })
     end
 
     intentionally_nonsemantic = {
       Facet::Compiler::NodeKind::Error,
       Facet::Compiler::NodeKind::Const,
-      Facet::Compiler::NodeKind::Global,
     }
     expected = Facet::Compiler::NodeKind.values.reject { |kind| intentionally_nonsemantic.includes?(kind) }
     (expected - covered.uniq).should be_empty

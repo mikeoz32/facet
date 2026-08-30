@@ -12,6 +12,7 @@ module ParserCompat
     column : Int32,
     source_line : String
   record CrashFailure, path : String, exit_code : Int32
+  record AstFailure, path : String, message : String
 
   def run(args : Array(String)) : Int32
     if args.first? == CHILD_FLAG
@@ -22,9 +23,10 @@ module ParserCompat
     files = roots.flat_map { |root| source_files(root) }.uniq.sort
     abort "no Crystal files found" if files.empty?
 
-    executable = Process.executable_path || abort "cannot resolve scanner executable"
+    executable = scanner_executable
     diagnostics = [] of DiagnosticFailure
     crashes = [] of CrashFailure
+    ast_failures = [] of AstFailure
     clean = 0
 
     files.each do |path|
@@ -42,24 +44,39 @@ module ParserCompat
       when 2
         message, line, column, source_line = output.to_s.chomp.split('\t', 4)
         diagnostics << DiagnosticFailure.new(path, message, line.to_i, column.to_i, source_line)
+      when 4
+        ast_failures << AstFailure.new(path, output.to_s.chomp)
       else
         crashes << CrashFailure.new(path, status.exit_code)
       end
     end
 
-    print_summary(files, clean, diagnostics, crashes)
-    diagnostics.empty? && crashes.empty? ? 0 : 1
+    print_summary(files, clean, diagnostics, ast_failures, crashes)
+    diagnostics.empty? && ast_failures.empty? && crashes.empty? ? 0 : 1
   end
 
   private def parse_one(path : String) : Int32
     source = Facet::Compiler::Source.new(File.read(path), path)
     parser = Facet::Compiler::Parser.new(source)
-    parser.parse_file
+    ast = parser.parse_file
     if diagnostic = parser.diagnostics.first?
       line, column = line_and_column(source, diagnostic.span.start)
       source_line = source.text.lines[line - 1]?.try(&.chomp) || ""
       puts [diagnostic.message, line, column, source_line].join('\t')
       return 2
+    end
+
+    violations = Facet::Compiler::AstIntegrity.contract_violations(ast)
+    unless violations.empty?
+      puts violations.first(8).join("; ")
+      return 4
+    end
+
+    tokens = Facet::Compiler::Lexer.new(source).tokenize_all
+    missing = Facet::Compiler::AstIntegrity.missing_semantic_tokens(ast, tokens)
+    unless missing.empty?
+      puts missing.first(8).map { |token| "#{token.kind}@#{token.span.start}" }.join(", ")
+      return 4
     end
     0
   rescue ex
@@ -104,15 +121,27 @@ module ParserCompat
     end || abort "Crystal stdlib not found"
   end
 
+  private def scanner_executable : String
+    proc_self = "/proc/self/exe"
+    return proc_self if File::Info.executable?(proc_self)
+    Process.executable_path || abort "cannot resolve scanner executable"
+  end
+
   private def print_summary(
     files : Array(String),
     clean : Int32,
     diagnostics : Array(DiagnosticFailure),
-    crashes : Array(CrashFailure)
+    ast_failures : Array(AstFailure),
+    crashes : Array(CrashFailure),
   )
     clean_percent = clean * 100.0 / files.size
     puts "files=#{files.size} clean=#{clean} diagnostics=#{diagnostics.size} " \
-         "crashes=#{crashes.size} clean_percent=#{clean_percent.round(2)}"
+         "ast_errors=#{ast_failures.size} crashes=#{crashes.size} clean_percent=#{clean_percent.round(2)}"
+
+    unless ast_failures.empty?
+      puts "\nAST integrity failures:"
+      ast_failures.first(30).each { |failure| puts "  #{failure.path}: #{failure.message}" }
+    end
 
     unless crashes.empty?
       puts "\nCrashes:"

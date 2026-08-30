@@ -74,6 +74,20 @@ module Facet
         @last_token_span = nil
         @previous_token_kind = TokenKind::Eof
         @parser_mode = false
+        @multi_heredoc_header_finishes = {} of Int32 => Int32
+        @multi_heredoc_full_spans = {} of Int32 => Span
+        @multi_heredoc_body_bounds = {} of Int32 => Tuple(Int32, Int32)
+        @multi_heredoc_line_skips = {} of Int32 => Int32
+        @active_multi_heredoc_line_end = nil.as(Int32?)
+        scan_multi_heredoc_layouts
+      end
+
+      def heredoc_full_span(header_start : Int32) : Span?
+        @multi_heredoc_full_spans[header_start]?
+      end
+
+      def heredoc_body_bounds(header_start : Int32) : Tuple(Int32, Int32)?
+        @multi_heredoc_body_bounds[header_start]?
       end
 
       def next_token : Token
@@ -219,6 +233,9 @@ module Facet
           when SPACE, TAB
             @i += 1
           when CR
+            if @i + 1 < n && @bytes[@i + 1] == LF && skip_active_multi_heredocs_at?(@i + 1)
+              next
+            end
             start = @i
             @i += 1
             if @i < n && @bytes[@i] == LF
@@ -228,6 +245,9 @@ module Facet
               @diagnostics << Diagnostic.new(Span.new(start, @i), "unexpected carriage return")
             end
           when LF
+            if skip_active_multi_heredocs_at?(@i)
+              next
+            end
             @i += 1
             @line_starts << @i
           when HASH
@@ -240,6 +260,19 @@ module Facet
             break
           end
         end
+      end
+
+      private def skip_active_multi_heredocs_at?(newline_position : Int32) : Bool
+        return false unless @active_multi_heredoc_line_end == newline_position
+        return false unless target = @multi_heredoc_line_skips[newline_position]?
+        position = newline_position
+        while position < target
+          @line_starts << position + 1 if @bytes[position] == LF
+          position += 1
+        end
+        @i = target
+        @active_multi_heredoc_line_end = nil
+        true
       end
 
       private def skip_line_comment
@@ -372,6 +405,7 @@ module Facet
         n = @bytes.size
         start = @i
         return nil if @i + 1 >= n
+        return nil if @parser_mode && start > 0 && ident_continue?(@bytes[start - 1])
         next_byte = @bytes[@i + 1]
         return nil if next_byte == COLON
 
@@ -1024,7 +1058,6 @@ module Facet
         if start >= 2 && @bytes[start - 1] == LBRACE && @bytes[start - 2] == BACKSLASH
           return nil
         end
-        return nil if after_macro_control_end?(start)
         type = percent_literal_type(@bytes[@i + 1])
         delimiter_index = @i + 1
         if type
@@ -1033,6 +1066,10 @@ module Facet
         end
 
         delimiter = @bytes[delimiter_index]
+        if after_macro_control_end?(start) && type.nil? &&
+           !{LPAREN, LBRACKET, LBRACE, LT}.includes?(delimiter)
+          return nil
+        end
         if delimiter == EQUAL || ident_start?(delimiter) || delimiter == SPACE || delimiter == TAB || delimiter == CR || delimiter == LF
           return nil
         end
@@ -1058,6 +1095,11 @@ module Facet
         body_finish = terminated ? @i - 1 : @i
         validate_regex_body(body_start, body_finish, start) if type == 'r'.ord.to_u8
         validate_string_array_interpolation(body_start, body_finish) if type == 'W'.ord.to_u8
+        if type == 'r'.ord.to_u8
+          while @i < n && ascii_alpha?(@bytes[@i])
+            @i += 1
+          end
+        end
         kind = type == 'r'.ord.to_u8 ? TokenKind::Regex : TokenKind::String
         Token.new(kind, Span.new(start, @i))
       end
@@ -1191,7 +1233,7 @@ module Facet
       private def percent_literal_interpolates?(type : UInt8?) : Bool
         return true if type.nil?
         case type
-        when 'Q'.ord.to_u8, 'W'.ord.to_u8, 'I'.ord.to_u8, 'r'.ord.to_u8
+        when 'Q'.ord.to_u8, 'W'.ord.to_u8, 'I'.ord.to_u8, 'x'.ord.to_u8, 'r'.ord.to_u8
           true
         else
           false
@@ -1213,8 +1255,121 @@ module Facet
         end
       end
 
+      private def scan_multi_heredoc_layouts : Nil
+        n = @bytes.size
+        line_start = 0
+        while line_start < n
+          line_end = line_start
+          while line_end < n && @bytes[line_end] != LF
+            line_end += 1
+          end
+          break if line_end >= n
+
+          headers = [] of Tuple(Int32, Int32, String, Bool)
+          position = line_start
+          while position + 3 < line_end
+            unless @bytes[position] == LT && @bytes[position + 1] == LT &&
+                   (@bytes[position + 2] == MINUS || @bytes[position + 2] == TILDE)
+              position += 1
+              next
+            end
+            indented = true
+            cursor = position + 3
+            quote = if cursor < line_end && (@bytes[cursor] == DQUOTE || @bytes[cursor] == SQUOTE)
+                      value = @bytes[cursor]
+                      cursor += 1
+                      value
+                    end
+            label_start = cursor
+            if quote
+              while cursor < line_end && @bytes[cursor] != quote
+                cursor += 1
+              end
+              unless cursor < line_end
+                position += 1
+                next
+              end
+              label = String.new(@bytes[label_start, cursor - label_start])
+              cursor += 1
+              headers << {position, cursor, label, indented}
+            else
+              unless cursor < line_end && (ascii_alpha?(@bytes[cursor]) || @bytes[cursor] == UNDERSCORE)
+                position += 1
+                next
+              end
+              cursor += 1
+              while cursor < line_end &&
+                    (ascii_alpha?(@bytes[cursor]) || ascii_digit?(@bytes[cursor]) || @bytes[cursor] == UNDERSCORE)
+                cursor += 1
+              end
+              headers << {position, cursor, String.new(@bytes[label_start, cursor - label_start]), indented}
+            end
+            position = cursor
+          end
+
+          if headers.size >= 2
+            body_cursor = line_end + 1
+            layouts = [] of Tuple(Int32, Int32, Int32, Int32, Int32)
+            complete = true
+            headers.each do |header_start, header_finish, label, indented|
+              body_start = body_cursor
+              found = false
+              while body_cursor <= n
+                closing_start = body_cursor
+                closing_end = closing_start
+                while closing_end < n && @bytes[closing_end] != LF
+                  closing_end += 1
+                end
+                content_end = closing_end
+                content_end -= 1 if content_end > closing_start && @bytes[content_end - 1] == CR
+                compare_start = closing_start
+                if indented
+                  while compare_start < content_end &&
+                        (@bytes[compare_start] == SPACE || @bytes[compare_start] == TAB)
+                    compare_start += 1
+                  end
+                end
+                if content_end - compare_start == label.bytesize &&
+                   @bytes[compare_start, label.bytesize] == label.to_slice
+                  full_finish = closing_end < n ? closing_end + 1 : closing_end
+                  layouts << {header_start, header_finish, body_start, closing_start, full_finish}
+                  body_cursor = full_finish
+                  found = true
+                  break
+                end
+                break if closing_end >= n
+                body_cursor = closing_end + 1
+              end
+              unless found
+                complete = false
+                break
+              end
+            end
+            if complete
+              layouts.each do |header_start, header_finish, body_start, body_finish, full_finish|
+                @multi_heredoc_header_finishes[header_start] = header_finish
+                @multi_heredoc_full_spans[header_start] = Span.new(header_start, full_finish)
+                @multi_heredoc_body_bounds[header_start] = {body_start, body_finish}
+              end
+              @multi_heredoc_line_skips[line_end] = body_cursor
+            end
+          end
+          line_start = line_end + 1
+        end
+      end
+
       private def scan_heredoc : Token?
         n = @bytes.size
+        if finish = @multi_heredoc_header_finishes[@i]?
+          start = @i
+          @i = finish
+          line_end = finish
+          while line_end < n && @bytes[line_end] != LF
+            line_end += 1
+          end
+          @active_multi_heredoc_line_end = line_end
+          return Token.new(TokenKind::String, Span.new(start, finish))
+        end
         return nil unless @i + 1 < n && @bytes[@i + 1] == LT
         return nil if @i + 2 >= n
         next_byte = @bytes[@i + 2]

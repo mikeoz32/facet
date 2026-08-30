@@ -26,12 +26,24 @@ describe "Crystal 1.21 upstream parser parity regressions" do
     "lib Foo\n  fun c(Void*) : Char[2]*\nend",
     "macro foo\n  %ǲ{1} = 2\nend",
     "macro foo\n  %ǲ = 1\nend",
+    "record Change, type : ModuleType, def : Def",
+    "def foo\n  LibC.get(out first)\n  first += 1\nend",
+    "def foo\n  out = Pointer(Int32).null\n  out.value = 1\nend",
+    "def foo\n  begin\n    yield\n  rescue ex : Error\n    ex\n  else\n    1\n  end\nend",
+    "if a && (!b || (\n  c && d\n)) && e\n  1\nend",
+    "macro outer\n  private def foo\n    1\n  end\nend",
+    "macro outer\n  fun foo : Int32\n    1\n  end\nend",
+    "macro outer\n  macro inner\n    1\n  end\nend",
+    "macro outer\n  lib LibC\n    fun foo : Int32\n  end\nend",
   ]
 
   valid_sources.each do |source_text|
     it "accepts #{source_text.dump}" do
-      parser, _ = parity_parse(source_text)
+      parser, ast = parity_parse(source_text)
       parser.diagnostics.should be_empty
+      Facet::Compiler::AstIntegrity.contract_violations(ast).should be_empty
+      tokens = Facet::Compiler::Lexer.new(ast.source).tokenize_all
+      Facet::Compiler::AstIntegrity.missing_semantic_tokens(ast, tokens).should be_empty
     end
   end
 

@@ -63,7 +63,9 @@ describe Facet::Compiler::MacroExpander do
     expander = Facet::Compiler::MacroExpander.new(index)
     expanded = expander.expand_all([ast_use], index)
 
-    expanded.first.source.text.should eq("1")
+    # Crystal's MacroLiteral for this body is exactly "1\n". Preserve that
+    # trailing newline instead of normalizing source owned by the macro AST.
+    expanded.first.source.text.should eq("1\n")
   end
 
   it "binds macro params with defaults and named/double splats" do

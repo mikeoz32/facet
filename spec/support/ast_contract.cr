@@ -31,6 +31,7 @@ module AstContractSupport
     Facet::Compiler::SemanticFlag::Select,
     Facet::Compiler::SemanticFlag::Exhaustive,
     Facet::Compiler::SemanticFlag::Escaped,
+    Facet::Compiler::SemanticFlag::RescueClause,
   }
 
   def facet_ast(code : String) : Facet::Compiler::AstFile
@@ -40,6 +41,10 @@ module AstContractSupport
     unless parser.diagnostics.empty?
       details = parser.diagnostics.map { |diagnostic| "#{diagnostic.message}@#{diagnostic.span.start}" }.join("; ")
       raise "AST contract input produced diagnostics: #{details}"
+    end
+    violations = Facet::Compiler::AstIntegrity.contract_violations(ast)
+    unless violations.empty?
+      raise "AST contract violation: #{violations.first(8).join("; ")}"
     end
     ast
   end

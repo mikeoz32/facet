@@ -78,19 +78,23 @@ module Facet
       Ternary
       Destructure
       MacroLiteral
+      StringInterpolation
+      Asm
+      AsmOperand
     end
 
     # High bits are reserved for semantic distinctions that share a compact
     # NodeKind representation. Low bits remain available for kind-specific
     # storage details (for example range exclusivity and typed literals).
     enum SemanticFlag : UInt16
-      Abstract   = 0x0100_u16
-      Private    = 0x0200_u16
-      Protected  = 0x0400_u16
-      Union      = 0x0800_u16
-      Select     = 0x1000_u16
-      Exhaustive = 0x2000_u16
-      Escaped    = 0x4000_u16
+      Abstract     = 0x0100_u16
+      Private      = 0x0200_u16
+      Protected    = 0x0400_u16
+      Union        = 0x0800_u16
+      Select       = 0x1000_u16
+      Exhaustive   = 0x2000_u16
+      Escaped      = 0x4000_u16
+      RescueClause = 0x8000_u16
     end
 
     enum LiteralKind
@@ -103,8 +107,9 @@ module Facet
 
     struct LiteralPayload
       getter kind : LiteralKind
+      getter content_span : Span?
 
-      def initialize(@kind : LiteralKind)
+      def initialize(@kind : LiteralKind, @content_span : Span? = nil)
       end
     end
 
@@ -223,9 +228,9 @@ module Facet
         @operators[id]
       end
 
-      def add_literal(kind : LiteralKind) : LiteralId
+      def add_literal(kind : LiteralKind, content_span : Span? = nil) : LiteralId
         id = @literals.size.to_i32
-        @literals << LiteralPayload.new(kind)
+        @literals << LiteralPayload.new(kind, content_span)
         id
       end
 
@@ -237,8 +242,8 @@ module Facet
         add_node(NodeKind::Ident, span, payload_index: symbol_id)
       end
 
-      def add_literal_node(kind : LiteralKind, span : Span) : NodeId
-        literal_id = add_literal(kind)
+      def add_literal_node(kind : LiteralKind, span : Span, content_span : Span? = nil) : NodeId
+        literal_id = add_literal(kind, content_span)
         node_kind = case kind
                     when LiteralKind::Number then NodeKind::LiteralNumber
                     when LiteralKind::String then NodeKind::LiteralString
@@ -331,6 +336,29 @@ module Facet
 
       def node_string(node_id : NodeId) : String
         String.new(node_text(node_id))
+      end
+
+      def literal_content_span(node_id : NodeId) : Span?
+        node = @arena.node(node_id)
+        return nil unless {
+                            NodeKind::LiteralNumber,
+                            NodeKind::LiteralString,
+                            NodeKind::LiteralChar,
+                            NodeKind::LiteralRegex,
+                            NodeKind::LiteralSymbol,
+                          }.includes?(node.kind)
+        return nil unless node.payload_index.in?(0...@arena.literals.size)
+        @arena.literal(node.payload_index).content_span
+      end
+
+      def literal_content(node_id : NodeId) : Slice(UInt8)
+        span = literal_content_span(node_id) || @arena.node(node_id).span
+        return Slice(UInt8).new(0) if span.length == 0
+        @source.bytes[span.start, span.length]
+      end
+
+      def literal_content_string(node_id : NodeId) : String
+        String.new(literal_content(node_id))
       end
 
       def macro_control_tag(node_id : NodeId) : TokenKind
