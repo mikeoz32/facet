@@ -20,8 +20,8 @@ for future name resolution, type checking, and compilation stages.
 - `SourceManager` and `QueryDb` caching for parse, syntax, index, and expansion
   queries with automatic revision-based invalidation.
 - `SyntaxTree` / `SyntaxNode` named declaration, call, type, body, parameter,
-  traversal, cursor lookup, documentation, and UTF-16 position queries for
-  editor and compiler consumers.
+  control-flow condition, traversal, cursor lookup, documentation, and UTF-16
+  position queries for editor and compiler consumers.
 - Compatibility checks against the actual upstream Crystal 1.21 lexer/parser
   spec inputs. Facet currently matches Crystal::Parser acceptance/rejection on
   all 4,378 unique parser inputs. Every accepted input must retain each
@@ -119,8 +119,8 @@ puts tree.position_at(method.span.start) # zero-based UTF-16 editor position
 The compact arena remains Facet's native AST. `SyntaxTree` is an indexed query
 facade over it, not a compatibility copy of Crystal's AST. It centralizes child
 roles, parent/ancestor traversal, qualified names, name spans, contiguous doc
-comments, byte-offset cursor lookup, and UTF-8/UTF-16 conversion so downstream
-tools do not depend on arena layout details.
+comments, control-flow conditions, byte-offset cursor lookup, and UTF-8/UTF-16
+conversion so downstream tools do not depend on arena layout details.
 
 ## Incremental queries
 
