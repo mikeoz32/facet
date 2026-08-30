@@ -1,0 +1,65 @@
+require "json"
+require "../spec_helper"
+require "./upstream_support"
+
+record UpstreamParserFixtureHeader,
+  kind : String,
+  crystal_version : String,
+  suite : String,
+  input_count : Int32 do
+  include JSON::Serializable
+end
+
+record UpstreamParserFixtureCase,
+  source : String,
+  accepted : Bool,
+  ast : String?,
+  error : String?,
+  line : Int32?,
+  column : Int32? do
+  include JSON::Serializable
+end
+
+fixture_path = File.expand_path("../fixtures/crystal_1_21_parser.jsonl", __DIR__)
+fixture_lines = File.read_lines(fixture_path)
+fixture_header = UpstreamParserFixtureHeader.from_json(fixture_lines.shift)
+fixture_cases = fixture_lines.map { |line| UpstreamParserFixtureCase.from_json(line) }
+
+describe "Crystal 1.21 parser corpus" do
+  it "loads the complete captured parser suite corpus" do
+    fixture_header.kind.should eq("facet-upstream-parser-fixture")
+    fixture_header.crystal_version.should eq("1.21.0")
+    fixture_header.suite.should eq("spec/compiler/parser")
+    fixture_header.input_count.should eq(4_378)
+    fixture_cases.size.should eq(fixture_header.input_count)
+  end
+
+  fixture_cases.each_with_index do |fixture_case, index|
+    expectation = fixture_case.accepted ? "accepts" : "rejects"
+    preview = fixture_case.source.lines.first?.to_s.strip
+    preview = preview[0, Math.min(preview.size, 60)]
+
+    it "#{expectation} upstream parser input #{index}: #{preview.dump}" do
+      source = Facet::Compiler::Source.new(fixture_case.source, "upstream_parser_#{index}")
+      parser = Facet::Compiler::Parser.new(source)
+      ast = parser.parse_file
+
+      if fixture_case.accepted
+        fixture_case.ast.should_not be_nil
+        fixture_case.error.should be_nil
+        if parser.diagnostics.any?
+          first = parser.diagnostics.first
+          fail "unexpected diagnostic: #{first.message} @ #{first.span.start}"
+        end
+        UpstreamSupport.validate_ast_integrity(ast)
+      else
+        fixture_case.ast.should be_nil
+        fixture_case.error.should_not be_nil
+        fixture_case.line.should_not be_nil
+        fixture_case.column.should_not be_nil
+        parser.diagnostics.should_not be_empty
+        UpstreamSupport.validate_diagnostics(parser.diagnostics, source)
+      end
+    end
+  end
+end

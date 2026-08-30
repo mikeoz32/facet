@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Ported all 4,378 unique Crystal 1.21 parser-suite inputs into a committed
+  native Facet fixture, including upstream AST and diagnostic oracles. The
+  native parser suite now gates acceptance/rejection, AST integrity, semantic
+  token retention, and diagnostic spans without requiring a Crystal checkout.
+- Added a reproducible fixture generator and an exact parser diagnostic parity
+  report. The initial explicit baseline is 365/941 exact messages, 422/941 exact
+  locations, and 276/941 matching both, keeping output parity distinct from
+  complete input and acceptance coverage.
 - Added reproducible upstream Crystal 1.21 spec-input audits: 4,378 unique
   parser inputs now have full acceptance/rejection parity and AST token
   retention, while 690 unique lexer inputs are fully consumed without unknown

@@ -23,6 +23,10 @@ for future name resolution, type checking, and compilation stages.
   AST node, and fully consumes all 690 unique lexer inputs without unknown
   tokens or non-trivia gaps. Lexer diagnostic presence also matches on all 687
   inputs whose upstream state can be reconstructed from source text alone.
+- A committed Crystal 1.21 parser fixture makes all 4,378 upstream parser
+  inputs permanent native Facet specs. It also retains the upstream AST inspect
+  oracle for accepted inputs and the exact message/location oracle for rejected
+  inputs so deeper parity can be tightened without another Crystal checkout.
 - A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
 
@@ -140,6 +144,14 @@ cd -
 crystal run scripts/check_upstream_parser_parity.cr -- /tmp/crystal-parser-inputs.b64
 crystal run scripts/check_upstream_lexer_coverage.cr -- \
   /tmp/crystal-lexer-inputs.b64 /tmp/crystal-lexer-errors.b64
+
+# Regenerate the committed native parser corpus (requires Crystal 1.21.0).
+crystal run scripts/generate_upstream_parser_fixture.cr -- \
+  /tmp/crystal-parser-inputs.b64 spec/fixtures/crystal_1_21_parser.jsonl \
+  spec/compiler/parser
+
+# Report exact message/location parity against the committed error oracle.
+crystal run scripts/report_upstream_parser_diagnostics.cr
 ```
 
 Crystal and Facet intentionally expose different lexer token models, so the
@@ -158,7 +170,7 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 2,879 examples passing |
+| Facet native parser suite | — | 7,172 examples passing; all 4,378 upstream inputs committed locally |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often
@@ -166,6 +178,14 @@ exercise multiple inputs inside one example, and Facet's compact token and AST
 models intentionally differ. The replay results are the stronger parity signal
 because they execute every unique upstream input and include invalid syntax,
 diagnostic presence, span invariants, and anti-skip token retention checks.
+
+Native input coverage is now complete, but exact output parity is a separate
+metric. For the 941 rejected parser inputs, Facet currently matches Crystal's
+exact first diagnostic message in 365 cases, its line/column in 422 cases, and
+both in 276 cases. The committed fixture gates acceptance/rejection, AST span
+integrity, absence of error nodes in accepted trees, semantic-token retention,
+and diagnostic span validity. It does not yet claim identical Crystal/Facet
+AST shapes or identical diagnostic wording for every case.
 
 ## Contributing
 
