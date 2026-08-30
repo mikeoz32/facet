@@ -11,6 +11,11 @@ module Facet
     record MacroEvaluation, value : MacroValue
 
     class MacroExpander
+      private record BuiltinProperty,
+        name : String,
+        type : String?,
+        default : String?
+
       getter diagnostics : Array(Diagnostic)
       getter cache_hits : Int32
       getter last_footprint : MacroFootprint?
@@ -134,14 +139,18 @@ module Facet
           acc << node_id
           return
         end
-        if ordinary_call_allowed && node.kind == NodeKind::Call && index
+        if ordinary_call_allowed && {NodeKind::Call, NodeKind::CallWithBlock}.includes?(node.kind)
           if name = macro_call_name(node_id, ast)
             footprint.try(&.macro_use(name))
-            if refs = index.macros_for(name, lexical_scope(node_id, ast))
+            if refs = index.try { |value| value.macros_for(name, lexical_scope(node_id, ast)) }
               unless refs.empty?
                 acc << node_id
                 return
               end
+            end
+            if builtin_macro_expansion(node_id, ast)
+              acc << node_id
+              return
             end
           end
         end
@@ -260,7 +269,7 @@ module Facet
           expand_macro_control(node_id, ast, index, footprint)
         when NodeKind::MacroVar
           expand_macro_var(node_id, ast)
-        when NodeKind::Call
+        when NodeKind::Call, NodeKind::CallWithBlock
           expand_indexed_macro_call(node_id, ast, index, footprint)
         when NodeKind::Ident
           expand_indexed_macro_call(node_id, ast, index, footprint)
@@ -286,13 +295,12 @@ module Facet
         index : ProgramIndex?,
         footprint : MacroFootprint?,
       ) : String?
-        return nil unless index
         name = macro_call_name(node_id, ast)
         return nil unless name
-        refs = index.macros_for(name, lexical_scope(node_id, ast))
-        return nil unless refs && !refs.empty?
-
         footprint.try &.macro_use(name)
+        refs = index.try { |value| value.macros_for(name, lexical_scope(node_id, ast)) }
+        return builtin_macro_expansion(node_id, ast) unless refs && !refs.empty?
+
         call_args = macro_call_args(node_id, ast)
         ref = select_macro_ref(refs, node_id, ast)
         key = cache_key(ref, call_args)
@@ -309,12 +317,7 @@ module Facet
       end
 
       private def select_macro_ref(refs : Array(DeclRef), call_id : NodeId, call_ast : AstFile) : DeclRef
-        call_arity = if call_ast.node(call_id).kind == NodeKind::Call
-                       args_id = call_ast.children(call_id)[1]?
-                       args_id ? call_ast.children(args_id).size : 0
-                     else
-                       0
-                     end
+        call_arity = syntax_tree(call_ast).node(call_id).arguments.size
         refs.find do |ref|
           tree = syntax_tree(ref.ast)
           parameters = tree.node(ref.node_id).parameters
@@ -349,6 +352,143 @@ module Facet
         @syntax_trees[key] ||= SyntaxTree.new(ast)
       end
 
+      private def builtin_macro_expansion(node_id : NodeId, ast : AstFile) : String?
+        name = macro_call_name(node_id, ast)
+        return nil unless name
+        call = syntax_tree(ast).node(node_id)
+        case name
+        when "record"
+          expand_builtin_record(call)
+        when "getter", "getter?", "getter!", "setter", "property", "property?", "property!",
+             "class_getter", "class_getter?", "class_getter!", "class_setter",
+             "class_property", "class_property?", "class_property!"
+          expand_builtin_accessors(name, call)
+        else
+          nil
+        end
+      end
+
+      private def expand_builtin_accessors(name : String, call : SyntaxNode) : String?
+        properties = call.arguments.compact_map { |argument| builtin_property(argument) }
+        return nil if properties.empty?
+        class_accessor = name.starts_with?("class_")
+        base = class_accessor ? name.lchop("class_") : name
+
+        String.build do |io|
+          properties.each do |property|
+            case base
+            when "getter"
+              write_builtin_getter(io, property, class_accessor, "")
+            when "getter?"
+              write_builtin_getter(io, property, class_accessor, "?")
+            when "getter!"
+              write_builtin_getter(io, property, class_accessor, "?", nilable: true)
+              write_builtin_getter(io, property, class_accessor, "")
+            when "setter"
+              write_builtin_setter(io, property, class_accessor)
+            when "property"
+              write_builtin_getter(io, property, class_accessor, "")
+              write_builtin_setter(io, property, class_accessor)
+            when "property?"
+              write_builtin_getter(io, property, class_accessor, "?")
+              write_builtin_setter(io, property, class_accessor)
+            when "property!"
+              write_builtin_getter(io, property, class_accessor, "?", nilable: true)
+              write_builtin_getter(io, property, class_accessor, "")
+              write_builtin_setter(io, property, class_accessor)
+            end
+          end
+        end
+      end
+
+      private def write_builtin_getter(
+        io : IO,
+        property : BuiltinProperty,
+        class_accessor : Bool,
+        suffix : String,
+        nilable : Bool = false,
+      ) : Nil
+        receiver = class_accessor ? "self." : ""
+        variable = class_accessor ? "@@#{property.name}" : "@#{property.name}"
+        return_type = property.type
+        return_type = "#{return_type}?" if nilable && return_type
+        io << "def " << receiver << property.name << suffix
+        io << " : " << return_type if return_type
+        io << '\n' << "  " << variable << '\n' << "end\n"
+      end
+
+      private def write_builtin_setter(io : IO, property : BuiltinProperty, class_accessor : Bool) : Nil
+        receiver = class_accessor ? "self." : ""
+        variable = class_accessor ? "@@#{property.name}" : "@#{property.name}"
+        io << "def " << receiver << property.name << "=(value"
+        io << " : " << property.type if property.type
+        io << ")\n  " << variable << " = value\nend\n"
+      end
+
+      private def expand_builtin_record(call : SyntaxNode) : String?
+        arguments = call.arguments
+        name_node = arguments.first?
+        return nil unless name_node
+        record_name = builtin_identifier(name_node)
+        return nil unless record_name
+        properties = arguments.skip(1).compact_map { |argument| builtin_property(argument) }
+
+        String.build do |io|
+          io << "struct " << record_name << '\n'
+          properties.each do |property|
+            io << "  getter " << property.name
+            io << " : " << property.type if property.type
+            io << '\n'
+          end
+          io << "  def initialize("
+          properties.each_with_index do |property, index|
+            io << ", " if index > 0
+            io << '@' << property.name
+            io << " : " << property.type if property.type
+            io << " = " << property.default if property.default
+          end
+          io << ")\n  end\nend\n"
+        end
+      end
+
+      private def builtin_property(node : SyntaxNode) : BuiltinProperty?
+        target = node
+        type = nil.as(String?)
+        default = nil.as(String?)
+        if node.kind == NodeKind::VarDecl
+          target = node.target || node
+          type = node.declared_type.try(&.text)
+          default = node.value.try(&.text)
+        elsif node.kind == NodeKind::Assign
+          target = node.target || node
+          if target.kind == NodeKind::VarDecl
+            type = target.declared_type.try(&.text)
+            target = target.target || target
+          end
+          default = node.value.try(&.text)
+        end
+        name = builtin_identifier(target)
+        return nil unless name
+        BuiltinProperty.new(name.lstrip('@'), type, default)
+      end
+
+      private def builtin_identifier(node : SyntaxNode) : String?
+        value = case node.kind
+                when NodeKind::LiteralSymbol
+                  node.tree.ast.decoded_literal_string(node.id)
+                when NodeKind::Ident, NodeKind::Const, NodeKind::InstanceVar, NodeKind::ClassVar,
+                     NodeKind::Path, NodeKind::TypeApply
+                  node.symbol_name || node.name || node.text
+                when NodeKind::Call
+                  node.receiver ? nil : node.call_name
+                else
+                  nil
+                end
+        return nil unless value
+        normalized = value.lchop(":").lstrip('@')
+        normalized.empty? ? nil : normalized
+      end
+
       private def macro_call_name(node_id : NodeId, ast : AstFile) : String?
         node = ast.node(node_id)
         case node.kind
@@ -359,6 +499,9 @@ module Facet
           callee = ast.node(callee_id)
           return nil unless callee.kind == NodeKind::Ident
           ast.arena.symbols[callee.payload_index]
+        when NodeKind::CallWithBlock
+          call_id = ast.children(node_id)[0]?
+          call_id ? macro_call_name(call_id, ast) : nil
         else
           nil
         end
@@ -368,6 +511,10 @@ module Facet
         node = ast.node(node_id)
         positional = [] of MacroValue
         named = {} of String => MacroValue
+        if node.kind == NodeKind::CallWithBlock
+          call_id = ast.children(node_id)[0]?
+          return call_id ? macro_call_args(call_id, ast) : {positional, named}
+        end
         return {positional, named} unless node.kind == NodeKind::Call
         args_id = ast.children(node_id)[1]?
         return {positional, named} unless args_id

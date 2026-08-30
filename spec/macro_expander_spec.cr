@@ -315,6 +315,55 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.should match(/top_level =\s+42/)
   end
 
+  it "lowers standard accessor macro families without the stdlib index" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      class Settings
+        getter name
+        property age : Int32
+        getter? ready
+        class_property version : String
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expanded = Facet::Compiler::MacroExpander.new.expand(ast)
+
+    expanded.source.text.should contain("def name")
+    expanded.source.text.should contain("def age : Int32")
+    expanded.source.text.should contain("def age=(value : Int32)")
+    expanded.source.text.should contain("def ready?")
+    expanded.source.text.should contain("def self.version : String")
+    expanded.source.text.should contain("def self.version=(value : String)")
+    expanded.diagnostics.should be_empty
+  end
+
+  it "lowers record and its generated getter calls across passes" do
+    source = Facet::Compiler::Source.new("record Point, x : Int32, y = 1")
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expanded = Facet::Compiler::MacroExpander.new.expand(ast)
+
+    expanded.source.text.should contain("struct Point")
+    expanded.source.text.should contain("def x : Int32")
+    expanded.source.text.should contain("def y")
+    expanded.source.text.should contain("def initialize(@x : Int32, @y = 1)")
+    expanded.diagnostics.should be_empty
+  end
+
+  it "lowers accessor macros with blocks as one invocation" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      class Lazy
+        getter value do
+          1
+        end
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expanded = Facet::Compiler::MacroExpander.new.expand(ast)
+
+    expanded.source.text.should contain("def value")
+    expanded.source.text.should_not contain("getter value")
+    expanded.diagnostics.should be_empty
+  end
+
   it "does not expand macro definition templates before they are invoked" do
     src = Facet::Compiler::Source.new(<<-CR)
       macro echo(x)

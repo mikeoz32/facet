@@ -172,6 +172,11 @@ by arity, and support bare zero-argument calls while respecting parameters and
 previous local assignments that shadow the macro name. Calls with an explicit
 receiver remain runtime calls.
 
+The standard `getter`, `setter`, and `property` families (including class,
+query, bang, typed, and block forms) plus `record` have Facet-native lowering.
+They therefore work without loading the stdlib macro templates and expand
+across the same cached multi-pass pipeline as user macros.
+
 `%name` and `%name{key}` nodes produce stable hygienic identifiers within one
 expansion and distinct identifiers across keys and invocations. Expansions
 that use `%name` or `gensym` bypass the text cache so cached output cannot
