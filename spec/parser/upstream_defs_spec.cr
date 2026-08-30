@@ -214,17 +214,17 @@ describe "Parser upstream parity (defs and params)" do
 
   # Disallow constructs inside def
   {
-    "def" => "expected identifier for definition name",
-    "macro" => "expected identifier for definition name",
-    "class" => "expected identifier",
-    "struct" => "expected identifier",
-    "module" => "expected identifier",
-    "fun" => "expected identifier",
-    "alias" => "expected identifier",
-    "abstract" => "unexpected token after 'abstract'",
-    "include" => "include expects at least one argument",
-    "extend" => "extend expects at least one argument",
-    "lib" => "expected identifier",
+    "def"      => "can't define def inside def",
+    "macro"    => "can't define macro inside def",
+    "class"    => "can't define class inside def",
+    "struct"   => "can't define struct inside def",
+    "module"   => "can't define module inside def",
+    "fun"      => "can't define fun inside def",
+    "alias"    => "can't define alias inside def",
+    "abstract" => "can't use abstract inside def",
+    "include"  => "can't include inside def",
+    "extend"   => "can't extend inside def",
+    "lib"      => "can't define lib inside def",
   }.each do |kw, msg|
     it_diagnoses "def foo\n#{kw}\nend", msg
   end

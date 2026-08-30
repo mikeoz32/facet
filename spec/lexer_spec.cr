@@ -137,7 +137,7 @@ describe Facet::Compiler::Lexer do
     lexer = Facet::Compiler::Lexer.new(source)
     lexer.tokenize_all
     lexer.diagnostics.size.should eq(1)
-    lexer.diagnostics.first.message.should eq("unterminated string literal")
+    lexer.diagnostics.first.message.should eq("Unterminated string literal")
   end
 
   it "reports unterminated char literals" do

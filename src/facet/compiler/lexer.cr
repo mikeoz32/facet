@@ -392,7 +392,7 @@ module Facet
             end
           end
           unless terminated
-            @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated symbol literal")
+            @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated quoted symbol")
           end
           return Token.new(TokenKind::Symbol, Span.new(start, @i))
         end
@@ -781,7 +781,7 @@ module Facet
           end
         end
         unless terminated
-          @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated string literal")
+          @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unterminated string literal")
         end
         Token.new(TokenKind::String, Span.new(start, @i))
       end
@@ -807,7 +807,7 @@ module Facet
           end
         end
         unless terminated
-          @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated command literal")
+          @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unterminated command literal")
         end
         Token.new(TokenKind::String, Span.new(start, @i))
       end
@@ -1050,10 +1050,10 @@ module Facet
           type != 'q'.ord.to_u8
         )
         unless terminated
-          @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated percent literal")
+          @diagnostics << Diagnostic.new(Span.new(@i, @i), unterminated_percent_literal_message(type))
         end
         body_finish = terminated ? @i - 1 : @i
-        validate_regex_body(body_start, body_finish) if type == 'r'.ord.to_u8
+        validate_regex_body(body_start, body_finish, start) if type == 'r'.ord.to_u8
         validate_string_array_interpolation(body_start, body_finish) if type == 'W'.ord.to_u8
         kind = type == 'r'.ord.to_u8 ? TokenKind::Regex : TokenKind::String
         Token.new(kind, Span.new(start, @i))
@@ -1070,14 +1070,18 @@ module Facet
         @bytes[i - 1] == PERCENT
       end
 
-      private def validate_regex_body(start_pos : Int32, finish_pos : Int32) : Nil
+      private def validate_regex_body(start_pos : Int32, finish_pos : Int32, diagnostic_start : Int32) : Nil
         i = start_pos
         in_class = false
         while i < finish_pos
           byte = @bytes[i]
           if byte == BACKSLASH
             if i + 1 < finish_pos && @bytes[i + 1] == LOWER_U
-              @diagnostics << Diagnostic.new(Span.new(i, Math.min(i + 2, finish_pos)), "invalid unicode escape in regex literal")
+              offset = i - start_pos + 2
+              @diagnostics << Diagnostic.new(
+                Span.new(diagnostic_start, diagnostic_start),
+                "invalid regex: PCRE2 does not support \\F, \\L, \\l, \\N{name}, \\U, or \\u at #{offset}"
+              )
             end
             i += 2
             next
@@ -1089,7 +1093,10 @@ module Facet
           i += 1
         end
         if in_class
-          @diagnostics << Diagnostic.new(Span.new(start_pos, finish_pos), "unterminated character class in regex literal")
+          @diagnostics << Diagnostic.new(
+            Span.new(diagnostic_start, diagnostic_start),
+            "invalid regex: missing terminating ] for character class at #{finish_pos - start_pos}"
+          )
         end
       end
 
@@ -1112,7 +1119,8 @@ module Facet
               isolated_start = i == start_pos || @bytes[i - 1] == SPACE || @bytes[i - 1] == TAB || @bytes[i - 1] == CR || @bytes[i - 1] == LF
               isolated_end = k >= finish_pos || @bytes[k] == SPACE || @bytes[k] == TAB || @bytes[k] == CR || @bytes[k] == LF
               unless isolated_start && isolated_end
-                @diagnostics << Diagnostic.new(Span.new(j, j + 1), "splat interpolation must occupy an entire string-array element")
+                diagnostic_pos = isolated_start ? k : j
+                @diagnostics << Diagnostic.new(Span.new(diagnostic_pos, diagnostic_pos), "splat interpolation must be the only piece in a string array element")
               end
               i = k
               next
@@ -1159,6 +1167,21 @@ module Facet
           byte
         else
           nil
+        end
+      end
+
+      private def unterminated_percent_literal_message(type : UInt8?) : String
+        case type
+        when 'w'.ord.to_u8, 'W'.ord.to_u8
+          "Unterminated string array literal"
+        when 'i'.ord.to_u8, 'I'.ord.to_u8
+          "Unterminated symbol array literal"
+        when 'r'.ord.to_u8
+          "Unterminated regular expression"
+        when 'x'.ord.to_u8
+          "Unterminated command literal"
+        else
+          "Unterminated string literal"
         end
       end
 
@@ -1219,7 +1242,7 @@ module Facet
           end
           if @i >= n || @bytes[@i] == LF || @bytes[@i] == CR
             message = quote == SQUOTE ? "expecting closing single quote" : "expecting closing double quote"
-            @diagnostics << Diagnostic.new(Span.new(start, @i), message)
+            @diagnostics << Diagnostic.new(Span.new(@i, @i), message)
             return Token.new(TokenKind::String, Span.new(start, @i))
           end
           label = String.new(@bytes[label_start, @i - label_start])
@@ -1247,6 +1270,10 @@ module Facet
         while @i < n && @bytes[@i] != LF
           @i += 1
         end
+        if @i >= n
+          @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unexpected EOF on heredoc identifier")
+          return Token.new(TokenKind::String, Span.new(start, @i))
+        end
         if @i < n && @bytes[@i] == LF
           @i += 1
           @line_starts << @i
@@ -1254,7 +1281,7 @@ module Facet
 
         terminated = false
         closing_indent = 0
-        line_indents = [] of Int32
+        line_indents = [] of Tuple(Int32, Int32)
         while @i < n
           line_start = @i
           while @i < n && @bytes[@i] != LF
@@ -1292,7 +1319,7 @@ module Facet
           end
           if indented
             blank = scan_pos >= line_end_no_cr
-            line_indents << indent_count unless blank
+            line_indents << {line_start, indent_count} unless blank
           end
           if @i < n && @bytes[@i] == LF
             @i += 1
@@ -1301,16 +1328,16 @@ module Facet
         end
 
         if @parser_mode && terminated && indented && closing_indent > 0
-          line_indents.each do |indent|
+          line_indents.each do |line_start, indent|
             if indent < closing_indent
-              @diagnostics << Diagnostic.new(Span.new(start, @i), "heredoc line must have an indent greater than or equal to #{closing_indent}")
+              @diagnostics << Diagnostic.new(Span.new(line_start, line_start), "heredoc line must have an indent greater than or equal to #{closing_indent}")
               break
             end
           end
         end
 
         unless terminated
-          @diagnostics << Diagnostic.new(Span.new(start, @i), "Unterminated heredoc: can't find \"#{label}\" anywhere before the end of file")
+          @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unterminated heredoc: can't find \"#{label}\" anywhere before the end of file")
         end
 
         Token.new(TokenKind::String, Span.new(start, @i))
@@ -1322,14 +1349,18 @@ module Facet
         @i += 1
         in_class = false
         paren_depth = 0
-        invalid_regex = false
+        invalid_regex_offset : Int32? = nil
         terminated = false
         while @i < n
           byte = @bytes[@i]
           @i += 1
           if byte == BACKSLASH
             if @i < n && @bytes[@i] == LOWER_U
-              @diagnostics << Diagnostic.new(Span.new(@i - 1, @i + 1), "invalid unicode escape in regex literal")
+              offset = @i - start
+              @diagnostics << Diagnostic.new(
+                Span.new(start, start),
+                "invalid regex: PCRE2 does not support \\F, \\L, \\l, \\N{name}, \\U, or \\u at #{offset}"
+              )
             end
             @i += 1 if @i < n
           elsif byte == LBRACKET
@@ -1340,7 +1371,7 @@ module Facet
             paren_depth += 1
           elsif byte == RPAREN && !in_class
             paren_depth -= 1
-            invalid_regex = true if paren_depth < 0
+            invalid_regex_offset ||= @i - start - 2 if paren_depth < 0
           elsif byte == HASH && @i < n && @bytes[@i] == LBRACE
             @i += 1
             skip_interpolation
@@ -1353,9 +1384,18 @@ module Facet
         end
 
         unless terminated
-          @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated regex literal")
+          if in_class
+            @diagnostics << Diagnostic.new(
+              Span.new(start, start),
+              "invalid regex: missing terminating ] for character class at #{@i - start - 2}"
+            )
+          else
+            @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unterminated regular expression")
+          end
         end
-        if invalid_regex || paren_depth != 0
+        if offset = invalid_regex_offset
+          @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid regex: unmatched closing parenthesis at #{offset}")
+        elsif paren_depth != 0
           @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid regex")
         end
 
@@ -1397,7 +1437,7 @@ module Facet
         end
 
         if depth > 0
-          @diagnostics << Diagnostic.new(Span.new(@i, @i), "unterminated interpolation")
+          @diagnostics << Diagnostic.new(Span.new(@i, @i), "Unterminated string interpolation")
         end
       end
 
@@ -1477,6 +1517,9 @@ module Facet
              TokenKind::KeywordSuper
           return true if newline_since_last_token?
           false
+        when TokenKind::KeywordBreak, TokenKind::KeywordReturn, TokenKind::KeywordNext
+          return false if slash_op || following_space
+          true
         else
           true
         end

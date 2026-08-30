@@ -31,6 +31,7 @@ message_matches = 0
 location_matches = 0
 full_matches = 0
 mismatches = [] of Mismatch
+message_pairs = Hash(Tuple(String, String), Int32).new(0)
 
 cases.each_with_index do |fixture_case, index|
   next if fixture_case.accepted
@@ -53,12 +54,16 @@ cases.each_with_index do |fixture_case, index|
   end
 
   lexer = F::Lexer.new(source)
+  lexer.tokenize_all
   actual_location = lexer.line_and_column(diagnostic.span.start)
   message_match = fixture_case.error == diagnostic.message
   location_match = fixture_case.line == actual_location[0] && fixture_case.column == actual_location[1]
   message_matches += 1 if message_match
   location_matches += 1 if location_match
   full_matches += 1 if message_match && location_match
+  unless message_match
+    message_pairs[{fixture_case.error.to_s, diagnostic.message}] += 1
+  end
 
   unless message_match && location_match
     mismatches << Mismatch.new(
@@ -73,10 +78,27 @@ cases.each_with_index do |fixture_case, index|
 end
 
 puts "rejected=#{rejected} exact_messages=#{message_matches} exact_locations=#{location_matches} exact_message_and_location=#{full_matches} mismatches=#{mismatches.size}"
-mismatches.first(50).each do |mismatch|
+display_mismatches = if filter = ENV["DIAGNOSTIC_FILTER"]?
+                       mismatches.select do |mismatch|
+                         mismatch.source.includes?(filter) ||
+                           mismatch.expected_message.to_s.includes?(filter) ||
+                           mismatch.actual_message.includes?(filter)
+                       end
+                     else
+                       mismatches
+                     end
+limit = ENV["DIAGNOSTIC_LIMIT"]?.try(&.to_i) || 50
+display_mismatches.first(limit).each do |mismatch|
   puts "\n##{mismatch.index}: #{mismatch.source.dump}"
   puts "expected #{mismatch.expected_location}: #{mismatch.expected_message}"
   puts "actual   #{mismatch.actual_location}: #{mismatch.actual_message}"
+end
+
+if ENV["SHOW_DIAGNOSTIC_GROUPS"]? == "1"
+  puts "\nMost common message mismatches:"
+  message_pairs.to_a.sort_by { |(_, count)| -count }.first(30).each do |(messages, count)|
+    puts "#{count}x expected=#{messages[0].dump} actual=#{messages[1].dump}"
+  end
 end
 
 strict = ENV["STRICT_PARSER_DIAGNOSTICS"]? == "1"

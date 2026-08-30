@@ -7,9 +7,11 @@
   native parser suite now gates acceptance/rejection, AST integrity, semantic
   token retention, and diagnostic spans without requiring a Crystal checkout.
 - Added a reproducible fixture generator and an exact parser diagnostic parity
-  report. The initial explicit baseline is 365/941 exact messages, 422/941 exact
-  locations, and 276/941 matching both, keeping output parity distinct from
-  complete input and acceptance coverage.
+  report. Parser and lexer recovery now match 872/941 exact first messages,
+  858/941 exact locations, and 837/941 matching both (up from the initial
+  365/422/276 baseline), with aggregate non-regression gates in the native
+  suite. Output parity remains distinct from complete input and acceptance
+  coverage.
 - Added reproducible upstream Crystal 1.21 spec-input audits: 4,378 unique
   parser inputs now have full acceptance/rejection parity and AST token
   retention, while 690 unique lexer inputs are fully consumed without unknown

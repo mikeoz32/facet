@@ -34,6 +34,38 @@ describe "Crystal 1.21 parser corpus" do
     fixture_cases.size.should eq(fixture_header.input_count)
   end
 
+  it "maintains the first-diagnostic parity baseline" do
+    rejected = 0
+    exact_messages = 0
+    exact_locations = 0
+    exact_both = 0
+
+    fixture_cases.each_with_index do |fixture_case, index|
+      next if fixture_case.accepted
+      rejected += 1
+
+      source = Facet::Compiler::Source.new(fixture_case.source, "upstream_diagnostic_#{index}")
+      parser = Facet::Compiler::Parser.new(source)
+      parser.parse_file
+      diagnostic = parser.diagnostics.first
+
+      lexer = Facet::Compiler::Lexer.new(source)
+      lexer.tokenize_all
+      line, column = lexer.line_and_column(diagnostic.span.start)
+      message_match = diagnostic.message == fixture_case.error
+      location_match = line == fixture_case.line && column == fixture_case.column
+
+      exact_messages += 1 if message_match
+      exact_locations += 1 if location_match
+      exact_both += 1 if message_match && location_match
+    end
+
+    rejected.should eq(941)
+    exact_messages.should be >= 872
+    exact_locations.should be >= 858
+    exact_both.should be >= 837
+  end
+
   fixture_cases.each_with_index do |fixture_case, index|
     expectation = fixture_case.accepted ? "accepts" : "rejects"
     preview = fixture_case.source.lines.first?.to_s.strip

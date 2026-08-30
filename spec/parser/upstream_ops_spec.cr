@@ -183,7 +183,7 @@ describe "Parser upstream parity (operators and edge calls)" do
     it_parses "a.b #{op}=\n1"
   end
 
-  it_diagnoses "case 1\nwhen .=(2)", "unexpected token"
-  it_diagnoses "case 1\nwhen .+=(2)", "unexpected token"
-  it_diagnoses "case 1\nwhen .&&(2)", "unexpected token"
+  it_diagnoses "case 1\nwhen .=(2)", "expecting any of these tokens"
+  it_diagnoses "case 1\nwhen .+=(2)", "expecting any of these tokens"
+  it_diagnoses "case 1\nwhen .&&(2)", "expecting any of these tokens"
 end

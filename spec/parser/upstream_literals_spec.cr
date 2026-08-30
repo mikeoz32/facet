@@ -118,8 +118,8 @@ describe "Parser upstream parity (literals)" do
   it_parses "puts %w{one two}"
   it_parses "puts %i(one two)"
 
-  it_diagnoses "{*1 => 2}", "expected '}' to close literal"
-  it_diagnoses "{*a: 1}", "expected '}' to close literal"
+  it_diagnoses "{*1 => 2}", "unexpected token: \"=>\""
+  it_diagnoses "{*a: 1}", "unexpected token: \"1\""
   it_diagnoses "{1 => 2, *3}", "mixed tuple/hash/named tuple entries"
   it_diagnoses "{a: 1, *2}", "mixed tuple/hash/named tuple entries"
   assert_syntax_error "case {*1}\nwhen {2}; 3; end"
