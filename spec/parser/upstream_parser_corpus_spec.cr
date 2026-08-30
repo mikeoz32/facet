@@ -61,9 +61,9 @@ describe "Crystal 1.21 parser corpus" do
     end
 
     rejected.should eq(941)
-    exact_messages.should be >= 872
-    exact_locations.should be >= 858
-    exact_both.should be >= 837
+    exact_messages.should eq(941)
+    exact_locations.should eq(941)
+    exact_both.should eq(941)
   end
 
   fixture_cases.each_with_index do |fixture_case, index|

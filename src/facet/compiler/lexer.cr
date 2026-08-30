@@ -392,7 +392,7 @@ module Facet
             end
           end
           unless terminated
-            @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated quoted symbol")
+            @diagnostics << Diagnostic.new(Span.new(start + 1, start + 1), "unterminated quoted symbol")
           end
           return Token.new(TokenKind::Symbol, Span.new(start, @i))
         end
@@ -817,6 +817,9 @@ module Facet
         n = @bytes.size
         terminated = false
         @i += 1
+        if @i < n && @bytes[@i] == SQUOTE
+          @diagnostics << Diagnostic.new(Span.new(start, start + 1), "invalid empty char literal (did you mean '\\''?)")
+        end
         while @i < n
           byte = @bytes[@i]
           @i += 1

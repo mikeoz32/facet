@@ -168,7 +168,7 @@ Current Crystal 1.21.0 parity baseline:
 
 | Surface | Upstream suite | Facet replay result |
 | --- | ---: | --- |
-| Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 0 invariant failures; 0 uncovered significant tokens |
+| Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
 | Facet native parser suite | — | 7,173 examples passing; all 4,378 upstream inputs committed locally |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 crashes |
@@ -179,14 +179,13 @@ models intentionally differ. The replay results are the stronger parity signal
 because they execute every unique upstream input and include invalid syntax,
 diagnostic presence, span invariants, and anti-skip token retention checks.
 
-Native input coverage is now complete, but exact output parity is a separate
-metric. For the 941 rejected parser inputs, Facet currently matches Crystal's
-exact first diagnostic message in 872 cases, its line/column in 858 cases, and
-both in 837 cases. The committed fixture gates acceptance/rejection, AST span
-integrity, absence of error nodes in accepted trees, semantic-token retention,
-diagnostic span validity, and non-regression thresholds for the exact first
-diagnostic oracle. It does not yet claim identical Crystal/Facet AST shapes or
-identical diagnostic wording for every case.
+Native input and first-diagnostic coverage are complete for the captured
+Crystal 1.21 parser suite. For all 941 rejected inputs, Facet matches Crystal's
+exact first diagnostic message and line/column. The committed fixture gates
+acceptance/rejection, AST span integrity, absence of error nodes in accepted
+trees, semantic-token retention, diagnostic span validity, and the complete
+first-diagnostic oracle. It does not yet claim identical Crystal/Facet AST
+shapes or later recovery diagnostics after the first error.
 
 ## Contributing
 
