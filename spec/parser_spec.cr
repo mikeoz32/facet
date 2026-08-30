@@ -451,7 +451,7 @@ describe Facet::Compiler::Parser do
   end
 
   it "parses visibility + def and sigiled variables" do
-    source = Facet::Compiler::Source.new("protected def foo; @x = @@y = $z?; end")
+    source = Facet::Compiler::Source.new("protected def foo; @x = @@y = $~; end")
     parser = Facet::Compiler::Parser.new(source)
     ast = parser.parse_file
 

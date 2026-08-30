@@ -4,7 +4,6 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (basic port)" do
-
   it "parses basic literals" do
     %w(nil true false 1 +1 -1 1_i64 -1_i64).each do |code|
       parse_ok(code)
@@ -177,8 +176,8 @@ describe "Parser upstream parity (basic port)" do
 
   it_parses "@foo"
   it_parses "@@foo"
-  it_parses "$foo"
-  it_parses "$foo :: Foo"
-  it_parses "@foo :: Foo"
-  it_parses "@@foo :: Foo"
+  assert_syntax_error "$foo"
+  assert_syntax_error "$foo :: Foo"
+  assert_syntax_error "@foo :: Foo"
+  assert_syntax_error "@@foo :: Foo"
 end

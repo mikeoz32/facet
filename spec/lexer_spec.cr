@@ -69,7 +69,7 @@ describe Facet::Compiler::Lexer do
   end
 
   it "lexes string literals with escapes" do
-    source = Facet::Compiler::Source.new(%("a\\\"b" "c"))
+    source = Facet::Compiler::Source.new(%("a\\"b" "c"))
     lexer = Facet::Compiler::Lexer.new(source)
     kinds = lexer.tokenize_all.map(&.kind)
     kinds.should eq([
@@ -168,6 +168,67 @@ describe Facet::Compiler::Lexer do
     messages.should contain("invalid octal literal")
   end
 
+  it "matches Crystal numeric range and suffix diagnostics" do
+    invalid = [
+      "128_i8", "-129_i8", "256_u8", "-0_u64",
+      "32768_i16", "4294967296_u32", "9223372036854775808_i64",
+      "340282366920938463463374607431768211456",
+      "-170141183460469231731687303715884105729",
+      "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+      "0xFF_i8", "0b11_f32", "0o73_f64",
+      "0_12", "0123", "1_.1", "4i33", "4F32",
+      "4.0_u32", "2e8i8", ".42", "-.42",
+    ]
+    missed = invalid.select do |text|
+      lexer = Facet::Compiler::Lexer.new(Facet::Compiler::Source.new(text))
+      lexer.tokenize_all
+      lexer.diagnostics.empty?
+    end
+    missed.should be_empty
+
+    valid = [
+      "127_i8", "-128_i8", "255_u8", "0_u64",
+      "170141183460469231731687303715884105727_i128",
+      "340282366920938463463374607431768211455_u128",
+      "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF_u128",
+      "0f32", "1f64", "1.0_f32",
+    ]
+    unexpected = valid.select do |text|
+      lexer = Facet::Compiler::Lexer.new(Facet::Compiler::Source.new(text))
+      lexer.tokenize_all
+      !lexer.diagnostics.empty?
+    end
+    unexpected.should be_empty
+  end
+
+  it "matches Crystal escape and unicode diagnostics" do
+    valid = [%("\\h"), %("\\1"), %("\\110"), %("\\u{A5 A6 10FFFF}")]
+    invalid = [%('\\1'), %("\\400"), %("\\u{110000}"), %("\\uD800"), %('\\u{DFFF}')]
+
+    unexpected = valid.select do |text|
+      lexer = Facet::Compiler::Lexer.new(Facet::Compiler::Source.new(text))
+      lexer.tokenize_all
+      !lexer.diagnostics.empty?
+    end
+    missed = invalid.select do |text|
+      lexer = Facet::Compiler::Lexer.new(Facet::Compiler::Source.new(text))
+      lexer.tokenize_all
+      lexer.diagnostics.empty?
+    end
+    unexpected.should be_empty
+    missed.should be_empty
+  end
+
+  it "reports invalid globals, heredoc labels, and raw carriage returns" do
+    invalid = ["$01", "$0?", ":+1", "<<-123\n456\n123", "\r1"]
+    missed = invalid.select do |text|
+      lexer = Facet::Compiler::Lexer.new(Facet::Compiler::Source.new(text))
+      lexer.tokenize_all
+      lexer.diagnostics.empty?
+    end
+    missed.should be_empty
+  end
+
   it "reports invalid escape sequences" do
     source = Facet::Compiler::Source.new(%("bad\\q" "bad\\x1" '\\q'))
     lexer = Facet::Compiler::Lexer.new(source)
@@ -211,7 +272,7 @@ describe Facet::Compiler::Lexer do
   end
 
   it "handles interpolation with nested strings" do
-    source = Facet::Compiler::Source.new(%("a #{"b"} c"))
+    source = Facet::Compiler::Source.new(%q("a #{"b"} c"))
     lexer = Facet::Compiler::Lexer.new(source)
     kinds = lexer.tokenize_all.map(&.kind)
     kinds.should eq([

@@ -17,8 +17,13 @@ for future name resolution, type checking, and compilation stages.
 - Compact `AstArena` representation with interned symbols and source-backed text.
 - Multi-file macro indexing and partial macro expansion with origin tracking.
 - `SourceManager` and `QueryDb` caching for parse, index, and expansion queries.
-- A compatibility suite ported from the upstream Crystal parser specs. The
-  current parser baseline is clean across all 1,625 files in the Crystal 1.21
+- Compatibility checks against the actual upstream Crystal 1.21 lexer/parser
+  spec inputs. Facet currently matches Crystal::Parser acceptance/rejection on
+  all 4,378 unique parser inputs, retains every significant token in a bounded
+  AST node, and fully consumes all 690 unique lexer inputs without unknown
+  tokens or non-trivia gaps. Lexer diagnostic presence also matches on all 687
+  inputs whose upstream state can be reconstructed from source text alone.
+- A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
@@ -111,6 +116,56 @@ ported parser compatibility cases. `check_parser_compat.cr` parses each source
 file in an isolated subprocess so a parser crash cannot abort the corpus run.
 Pass files or directories after `--` to scan another Crystal codebase, for
 example `crystal run scripts/check_parser_compat.cr -- src`.
+
+### Upstream spec parity
+
+The stdlib scan only proves that valid files produce no diagnostics. The
+upstream parity checks additionally compare valid and invalid parser inputs,
+validate AST spans and semantic-token retention, and verify that the lexer did
+not silently skip non-trivia bytes.
+
+Capture the inputs from a disposable Crystal 1.21.0 checkout:
+
+```bash
+git clone --depth 1 --branch 1.21.0 https://github.com/crystal-lang/crystal.git /tmp/crystal-1.21-parity
+git -C /tmp/crystal-1.21-parity apply "$PWD/scripts/upstream_input_trace.patch"
+
+cd /tmp/crystal-1.21-parity
+CRYSTAL_PARSER_INPUT_TRACE=/tmp/crystal-parser-inputs.b64 crystal spec spec/compiler/parser
+CRYSTAL_LEXER_INPUT_TRACE=/tmp/crystal-lexer-inputs.b64 \
+CRYSTAL_LEXER_ERROR_TRACE=/tmp/crystal-lexer-errors.b64 \
+  crystal spec spec/compiler/lexer
+cd -
+
+crystal run scripts/check_upstream_parser_parity.cr -- /tmp/crystal-parser-inputs.b64
+crystal run scripts/check_upstream_lexer_coverage.cr -- \
+  /tmp/crystal-lexer-inputs.b64 /tmp/crystal-lexer-errors.b64
+```
+
+Crystal and Facet intentionally expose different lexer token models, so the
+lexer check verifies total consumption, spans, unknown tokens, crashes, and
+non-trivia gaps rather than requiring identical token-array shapes. It also
+compares whether each input raises a lexer diagnostic. Three source-only cases
+are reported separately because the upstream result depends on mutable lexer
+state (`slash_is_regex` for `/` and `/=`) or on consuming only the heredoc
+opener instead of the whole input. Parser AST node classes also differ;
+acceptance parity and token retention do not yet claim structural or semantic
+AST equivalence with the compiler.
+
+Current Crystal 1.21.0 parity baseline:
+
+| Surface | Upstream suite | Facet replay result |
+| --- | ---: | --- |
+| Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 0 invariant failures; 0 uncovered significant tokens |
+| Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
+| Facet native suite | — | 2,879 examples passing |
+| Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 crashes |
+
+Raw example counts are not one-to-one coverage measures: Crystal helpers often
+exercise multiple inputs inside one example, and Facet's compact token and AST
+models intentionally differ. The replay results are the stronger parity signal
+because they execute every unique upstream input and include invalid syntax,
+diagnostic presence, span invariants, and anti-skip token retention checks.
 
 ## Contributing
 

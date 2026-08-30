@@ -122,8 +122,8 @@ describe "Parser upstream parity (literals)" do
   it_diagnoses "{*a: 1}", "expected '}' to close literal"
   it_diagnoses "{1 => 2, *3}", "mixed tuple/hash/named tuple entries"
   it_diagnoses "{a: 1, *2}", "mixed tuple/hash/named tuple entries"
-  it_parses "case {*1}\nwhen {2}; 3; end"
-  it_parses "case {1}\nwhen {*2}; 3; end"
+  assert_syntax_error "case {*1}\nwhen {2}; 3; end"
+  assert_syntax_error "case {1}\nwhen {*2}; 3; end"
 
   # Range literals and slicing
   it_parses "1 .. 2"

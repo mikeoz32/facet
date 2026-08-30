@@ -1,0 +1,70 @@
+diff --git a/src/compiler/crystal/syntax/lexer.cr b/src/compiler/crystal/syntax/lexer.cr
+index 488bec9..632956f 100644
+--- a/src/compiler/crystal/syntax/lexer.cr
++++ b/src/compiler/crystal/syntax/lexer.cr
+@@ -1,10 +1,12 @@
+ require "./token"
+ require "../exception"
+ require "string_pool"
++require "base64"
+ require "../warnings"
+ 
+ module Crystal
+   class Lexer
++    @trace_source : String
+     property? doc_enabled : Bool
+     property? comments_enabled : Bool
+     property? count_whitespace : Bool
+@@ -57,6 +59,10 @@ module Crystal
+     property warnings : WarningCollection
+ 
+     def initialize(string, string_pool : StringPool? = nil, warnings : WarningCollection? = nil)
++      if trace_path = ENV["CRYSTAL_LEXER_INPUT_TRACE"]?
++        File.open(trace_path, "a") { |io| io.puts Base64.strict_encode(string.to_s) }
++      end
++      @trace_source = string.to_s
+       @warnings = warnings || WarningCollection.new
+       @reader = Char::Reader.new(string)
+       check_reader_error
+@@ -2861,13 +2867,21 @@ module Crystal
+     end
+ 
+     def raise(message, line_number = @line_number, column_number = @column_number, filename = @filename)
++      trace_syntax_error
+       ::raise Crystal::SyntaxException.new(message, line_number, column_number, filename)
+     end
+ 
+     def raise(message, token : Token, size = nil)
++      trace_syntax_error
+       ::raise Crystal::SyntaxException.new(message, token.line_number, token.column_number, token.filename, size)
+     end
+ 
++    private def trace_syntax_error
++      if trace_path = ENV["CRYSTAL_LEXER_ERROR_TRACE"]?
++        File.open(trace_path, "a") { |io| io.puts Base64.strict_encode(@trace_source) }
++      end
++    end
++
+     def raise(message, location : Location)
+       raise message, location.line_number, location.column_number, location.filename
+     end
+diff --git a/src/compiler/crystal/syntax/parser.cr b/src/compiler/crystal/syntax/parser.cr
+index d86fe9e..296d2c6 100644
+--- a/src/compiler/crystal/syntax/parser.cr
++++ b/src/compiler/crystal/syntax/parser.cr
+@@ -1,4 +1,5 @@
+ require "set"
++require "base64"
+ require "./ast"
+ require "./lexer"
+ 
+@@ -25,6 +26,9 @@ module Crystal
+     end
+ 
+     def initialize(str, string_pool : StringPool? = nil, @var_scopes = [Set(String).new], warnings : WarningCollection? = nil)
++      if trace_path = ENV["CRYSTAL_PARSER_INPUT_TRACE"]?
++        File.open(trace_path, "a") { |io| io.puts Base64.strict_encode(str.to_s) }
++      end
+       super(str, string_pool, warnings)
+       @unclosed_stack = [] of Unclosed
+       @calls_super = false

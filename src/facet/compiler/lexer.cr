@@ -1,66 +1,69 @@
 module Facet
   module Compiler
     class Lexer
-      SPACE = 0x20_u8
-      TAB   = 0x09_u8
-      CR    = 0x0d_u8
-      LF    = 0x0a_u8
-      BANG  = 0x21_u8
-      HASH  = 0x23_u8
-      DOLLAR = 0x24_u8
-      EQUAL = 0x3d_u8
-      PERCENT = 0x25_u8
-      DQUOTE = 0x22_u8
-      AT = 0x40_u8
-      COLON = 0x3a_u8
-      QUESTION = 0x3f_u8
-      SQUOTE = 0x27_u8
-      BACKSLASH = 0x5c_u8
+      SPACE      = 0x20_u8
+      TAB        = 0x09_u8
+      CR         = 0x0d_u8
+      LF         = 0x0a_u8
+      BANG       = 0x21_u8
+      HASH       = 0x23_u8
+      DOLLAR     = 0x24_u8
+      EQUAL      = 0x3d_u8
+      PERCENT    = 0x25_u8
+      DQUOTE     = 0x22_u8
+      AT         = 0x40_u8
+      COLON      = 0x3a_u8
+      QUESTION   = 0x3f_u8
+      SQUOTE     = 0x27_u8
+      BACKSLASH  = 0x5c_u8
       UNDERSCORE = 0x5f_u8
-      ZERO = 0x30_u8
-      ONE = 0x31_u8
-      SEVEN = 0x37_u8
-      NINE = 0x39_u8
-      SLASH = 0x2f_u8
-      UPPER_A = 0x41_u8
-      UPPER_B = 0x42_u8
-      UPPER_F = 0x46_u8
-      UPPER_O = 0x4f_u8
-      UPPER_Z = 0x5a_u8
-      UPPER_E = 0x45_u8
-      UPPER_P = 0x50_u8
-      UPPER_X = 0x58_u8
-      LOWER_A = 0x61_u8
-      LOWER_B = 0x62_u8
-      LOWER_E = 0x65_u8
-      LOWER_F = 0x66_u8
-      LOWER_N = 0x6e_u8
-      LOWER_O = 0x6f_u8
-      LOWER_P = 0x70_u8
-      LOWER_R = 0x72_u8
-      LOWER_T = 0x74_u8
-      LOWER_U = 0x75_u8
-      LOWER_V = 0x76_u8
-      LOWER_X = 0x78_u8
-      LOWER_Z = 0x7a_u8
-      LBRACKET = 0x5b_u8
-      RBRACKET = 0x5d_u8
-      LPAREN = 0x28_u8
-      RPAREN = 0x29_u8
-      LT = 0x3c_u8
-      GT = 0x3e_u8
-      LBRACE = 0x7b_u8
-      RBRACE = 0x7d_u8
-      DOT = 0x2e_u8
-      PLUS = 0x2b_u8
-      MINUS = 0x2d_u8
-      TILDE = 0x7e_u8
-      BACKTICK = 0x60_u8
-      AMPERSAND = 0x26_u8
+      ZERO       = 0x30_u8
+      ONE        = 0x31_u8
+      SEVEN      = 0x37_u8
+      NINE       = 0x39_u8
+      SLASH      = 0x2f_u8
+      UPPER_A    = 0x41_u8
+      UPPER_B    = 0x42_u8
+      UPPER_F    = 0x46_u8
+      UPPER_O    = 0x4f_u8
+      UPPER_Z    = 0x5a_u8
+      UPPER_E    = 0x45_u8
+      UPPER_P    = 0x50_u8
+      UPPER_X    = 0x58_u8
+      LOWER_A    = 0x61_u8
+      LOWER_B    = 0x62_u8
+      LOWER_E    = 0x65_u8
+      LOWER_F    = 0x66_u8
+      LOWER_N    = 0x6e_u8
+      LOWER_O    = 0x6f_u8
+      LOWER_P    = 0x70_u8
+      LOWER_R    = 0x72_u8
+      LOWER_T    = 0x74_u8
+      LOWER_U    = 0x75_u8
+      LOWER_V    = 0x76_u8
+      LOWER_X    = 0x78_u8
+      LOWER_Z    = 0x7a_u8
+      LBRACKET   = 0x5b_u8
+      RBRACKET   = 0x5d_u8
+      LPAREN     = 0x28_u8
+      RPAREN     = 0x29_u8
+      LT         = 0x3c_u8
+      GT         = 0x3e_u8
+      LBRACE     = 0x7b_u8
+      RBRACE     = 0x7d_u8
+      DOT        = 0x2e_u8
+      PLUS       = 0x2b_u8
+      STAR       = 0x2a_u8
+      MINUS      = 0x2d_u8
+      TILDE      = 0x7e_u8
+      BACKTICK   = 0x60_u8
+      AMPERSAND  = 0x26_u8
+      PIPE       = 0x7c_u8
 
       getter source : Source
       getter line_starts : Array(Int32)
       getter diagnostics : Array(Diagnostic)
+      property parser_mode : Bool
 
       def initialize(@source : Source)
         @bytes = @source.bytes
@@ -69,6 +72,8 @@ module Facet
         @diagnostics = [] of Diagnostic
         @last_token_kind = TokenKind::Eof
         @last_token_span = nil
+        @previous_token_kind = TokenKind::Eof
+        @parser_mode = false
       end
 
       def next_token : Token
@@ -143,6 +148,10 @@ module Facet
           return record_token(scan_regex)
         end
 
+        if byte == DOT && @i + 1 < n && ascii_digit?(@bytes[@i + 1])
+          @diagnostics << Diagnostic.new(Span.new(@i, @i + 1), ".1 style number literal is not supported; put 0 before the dot")
+        end
+
         if byte == AMPERSAND && @i + 2 < n && @bytes[@i + 1] == MINUS && @bytes[@i + 2] == GT
           start = @i
           @i += 1
@@ -173,6 +182,7 @@ module Facet
       end
 
       private def record_token(token : Token) : Token
+        @previous_token_kind = @last_token_kind
         @last_token_kind = token.kind
         @last_token_span = token.span
         token
@@ -206,8 +216,17 @@ module Facet
               end
             end
             break
-          when SPACE, TAB, CR
+          when SPACE, TAB
             @i += 1
+          when CR
+            start = @i
+            @i += 1
+            if @i < n && @bytes[@i] == LF
+              @i += 1
+              @line_starts << @i
+            else
+              @diagnostics << Diagnostic.new(Span.new(start, @i), "unexpected carriage return")
+            end
           when LF
             @i += 1
             @line_starts << @i
@@ -327,6 +346,9 @@ module Facet
         start = @i
         @i += 1
         return nil if @i >= n || !(ident_start?(@bytes[@i]) || ascii_digit?(@bytes[@i]) || @bytes[@i] == TILDE || @bytes[@i] == QUESTION)
+        if @bytes[@i] == ZERO && @i + 1 < n && (ascii_digit?(@bytes[@i + 1]) || @bytes[@i + 1] == QUESTION)
+          @diagnostics << Diagnostic.new(Span.new(start, @i + 2), "invalid global match-data index")
+        end
         @i += 1
         while @i < n && ident_continue?(@bytes[@i])
           @i += 1
@@ -361,7 +383,7 @@ module Facet
             byte = @bytes[@i]
             @i += 1
             if byte == BACKSLASH
-              consume_escape(@i - 1)
+              consume_escape(@i - 1, allow_unknown: true, allow_octal: true)
             elsif byte == DQUOTE
               terminated = true
               break
@@ -389,9 +411,14 @@ module Facet
 
         # Operator symbols (:+, :**, etc.)
         if match = Operators.match(@bytes, @i + 1)
-          _kind, length = match
-          @i += 1 + length
-          return Token.new(TokenKind::Symbol, Span.new(start, @i))
+          kind, length = match
+          if kind >= TokenKind::Plus && kind <= TokenKind::AmpersandStarStar
+            @i += 1 + length
+            if @i < n && ascii_digit?(@bytes[@i])
+              @diagnostics << Diagnostic.new(Span.new(start, @i + 1), "operator symbol cannot be followed by a number")
+            end
+            return Token.new(TokenKind::Symbol, Span.new(start, @i))
+          end
         end
 
         return nil unless ident_start?(next_byte)
@@ -425,6 +452,7 @@ module Facet
         if @bytes[@i] == ZERO && @i + 1 < n
           next_byte = @bytes[@i + 1]
           if next_byte == LOWER_X || next_byte == UPPER_X
+            floating = false
             @i += 2
             hex_count, hex_ok, hex_trailing = scan_hex_digits
             underscore_invalid ||= !hex_ok
@@ -433,6 +461,7 @@ module Facet
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid hex literal")
             end
             if @i + 1 < n && @bytes[@i] == DOT && hex_digit?(@bytes[@i + 1])
+              floating = true
               @i += 1
               frac_count, frac_ok, frac_trailing = scan_hex_digits
               underscore_invalid ||= !frac_ok
@@ -442,6 +471,7 @@ module Facet
               end
             end
             if @i < n && (@bytes[@i] == LOWER_P || @bytes[@i] == UPPER_P)
+              floating = true
               @i += 1
               if @i < n && (@bytes[@i] == PLUS || @bytes[@i] == MINUS)
                 @i += 1
@@ -458,6 +488,7 @@ module Facet
             if underscore_invalid
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
             end
+            validate_numeric_literal(start, @i, 16, floating)
             return Token.new(TokenKind::Number, Span.new(start, @i))
           elsif next_byte == LOWER_B || next_byte == UPPER_B
             @i += 2
@@ -472,6 +503,7 @@ module Facet
             if underscore_invalid
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
             end
+            validate_numeric_literal(start, @i, 2, false)
             return Token.new(TokenKind::Number, Span.new(start, @i))
           elsif next_byte == LOWER_O || next_byte == UPPER_O
             @i += 2
@@ -486,14 +518,17 @@ module Facet
             if underscore_invalid
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
             end
+            validate_numeric_literal(start, @i, 8, false)
             return Token.new(TokenKind::Number, Span.new(start, @i))
           end
         end
 
+        floating = false
         int_count, int_ok, int_trailing = scan_decimal_digits
         underscore_invalid ||= !int_ok
         trailing_underscore = int_trailing
         if @i + 1 < n && @bytes[@i] == DOT && ascii_digit?(@bytes[@i + 1])
+          floating = true
           @i += 1
           frac_count, frac_ok, frac_trailing = scan_decimal_digits
           underscore_invalid ||= !frac_ok
@@ -504,6 +539,7 @@ module Facet
         end
 
         if @i < n && (@bytes[@i] == LOWER_E || @bytes[@i] == UPPER_E)
+          floating = true
           @i += 1
           if @i < n && (@bytes[@i] == PLUS || @bytes[@i] == MINUS)
             @i += 1
@@ -524,7 +560,116 @@ module Facet
           @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid underscore placement in numeric literal")
         end
 
+        validate_numeric_literal(start, @i, 10, floating)
+
         Token.new(TokenKind::Number, Span.new(start, @i))
+      end
+
+      private def validate_numeric_literal(start : Int32, finish : Int32, base : Int32, floating : Bool) : Nil
+        raw = String.new(@bytes[start, finish - start])
+        normalized = raw.delete('_')
+        suffix = numeric_suffix(normalized)
+        core = suffix ? normalized[0, normalized.bytesize - suffix.bytesize] : normalized
+
+        if invalid_numeric_suffix_ahead?(finish)
+          @diagnostics << Diagnostic.new(Span.new(start, invalid_numeric_suffix_finish(finish)), "invalid numeric suffix")
+        end
+
+        if raw.includes?("_.")
+          @diagnostics << Diagnostic.new(Span.new(start, finish), "underscore cannot appear before the decimal point")
+        end
+
+        if floating
+          if suffix && (suffix.not_nil!.starts_with?('i') || suffix.not_nil!.starts_with?('u'))
+            @diagnostics << Diagnostic.new(Span.new(start, finish), "invalid integer suffix for decimal number")
+          end
+          return
+        end
+
+        if suffix && suffix.not_nil!.starts_with?('f')
+          if base != 10
+            @diagnostics << Diagnostic.new(Span.new(start, finish), "non-decimal float literal is not supported")
+          end
+          return
+        end
+
+        if base == 10 && core.bytesize > 1 && core.starts_with?('0')
+          @diagnostics << Diagnostic.new(Span.new(start, finish), "octal constants must be prefixed with 0o")
+        end
+
+        digits = case base
+                 when 16, 8, 2
+                   core.bytesize >= 2 ? core[2..] : ""
+                 else
+                   core
+                 end
+        magnitude = digits.to_u128?(base)
+        unless magnitude
+          @diagnostics << Diagnostic.new(Span.new(start, finish), "integer literal is out of range")
+          return
+        end
+
+        negative = negative_numeric_literal?(start)
+        if suffix
+          suffix_value = suffix.not_nil!
+          bits = suffix_value[1..].to_i
+          if suffix_value.starts_with?('u')
+            max = bits == 128 ? UInt128::MAX : (1_u128 << bits) - 1
+            if negative || magnitude > max
+              @diagnostics << Diagnostic.new(Span.new(start, finish), "integer literal does not fit #{suffix_value}")
+            end
+          else
+            limit = 1_u128 << (bits - 1)
+            max = negative ? limit : limit - 1
+            if magnitude > max
+              @diagnostics << Diagnostic.new(Span.new(start, finish), "integer literal does not fit #{suffix_value}")
+            end
+          end
+        else
+          max = negative ? (1_u128 << 63) : UInt64::MAX.to_u128
+          if magnitude > max
+            @diagnostics << Diagnostic.new(Span.new(start, finish), "integer literal does not fit the default integer types")
+          end
+        end
+      end
+
+      private def numeric_suffix(normalized : String) : String?
+        {"i128", "u128", "i64", "u64", "i32", "u32", "f32", "f64", "i16", "u16", "i8", "u8"}.find do |suffix|
+          normalized.ends_with?(suffix)
+        end
+      end
+
+      private def invalid_numeric_suffix_ahead?(position : Int32) : Bool
+        return false if position >= @bytes.size
+        prefix = @bytes[position]
+        return false unless prefix == 'i'.ord.to_u8 || prefix == 'u'.ord.to_u8 || prefix == 'f'.ord.to_u8 || prefix == UPPER_F
+        position + 1 < @bytes.size && ascii_digit?(@bytes[position + 1])
+      end
+
+      private def invalid_numeric_suffix_finish(position : Int32) : Int32
+        i = position + 1
+        while i < @bytes.size && ascii_digit?(@bytes[i])
+          i += 1
+        end
+        i
+      end
+
+      private def negative_numeric_literal?(start : Int32) : Bool
+        span = @last_token_span
+        return false unless @last_token_kind == TokenKind::Minus && span && span.not_nil!.finish == start
+        !token_can_end_expression?(@previous_token_kind)
+      end
+
+      private def token_can_end_expression?(kind : TokenKind) : Bool
+        case kind
+        when TokenKind::Identifier, TokenKind::InstanceVar, TokenKind::ClassVar, TokenKind::GlobalVar,
+             TokenKind::Symbol, TokenKind::Number, TokenKind::String, TokenKind::Regex, TokenKind::Char,
+             TokenKind::KeywordFalse, TokenKind::KeywordNil, TokenKind::KeywordSelf, TokenKind::KeywordSuper,
+             TokenKind::KeywordTrue, TokenKind::RParen, TokenKind::RBracket, TokenKind::RBrace, TokenKind::KeywordEnd
+          true
+        else
+          false
+        end
       end
 
       private def scan_decimal_digits : Tuple(Int32, Bool, Bool)
@@ -624,7 +769,7 @@ module Facet
           byte = @bytes[@i]
           @i += 1
           if byte == BACKSLASH
-            consume_escape(@i - 1)
+            consume_escape(@i - 1, allow_unknown: true, allow_octal: true)
           elsif byte == HASH && @i < n && @bytes[@i] == LBRACE
             @i += 1
             skip_interpolation
@@ -700,7 +845,7 @@ module Facet
         nil
       end
 
-      private def consume_escape(start : Int32)
+      private def consume_escape(start : Int32, allow_unknown : Bool = false, allow_octal : Bool = false)
         n = @bytes.size
         if @i >= n
           @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated escape sequence")
@@ -710,7 +855,8 @@ module Facet
         byte = @bytes[@i]
         @i += 1
         case byte
-        when DQUOTE, SQUOTE, BACKSLASH, HASH, LOWER_N, LOWER_T, LOWER_R, LOWER_B, LOWER_F, LOWER_V, LOWER_E, LOWER_A
+        when DQUOTE, SQUOTE, BACKSLASH, HASH, PERCENT, LOWER_N, LOWER_T, LOWER_R, LOWER_B, LOWER_F, LOWER_V, LOWER_E, LOWER_A,
+             LPAREN, RPAREN, LBRACKET, RBRACKET, LBRACE, RBRACE, LT, GT, PIPE
           return
         when LF
           @line_starts << @i
@@ -728,25 +874,69 @@ module Facet
         when LOWER_U
           if @i < n && @bytes[@i] == LBRACE
             @i += 1
-            digits = consume_hex_digits_until(RBRACE)
-            if digits == 0
+            valid = true
+            loop do
+              codepoint_start = @i
+              digits = 0
+              while @i < n && hex_digit?(@bytes[@i])
+                @i += 1
+                digits += 1
+              end
+              valid = false if digits == 0 || digits > 6
+              valid = false if digits > 0 && !valid_unicode_codepoint?(codepoint_start, @i)
+              if @i < n && @bytes[@i] == RBRACE
+                @i += 1
+                break
+              elsif @i < n && @bytes[@i] == SPACE
+                @i += 1
+                next
+              else
+                @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated unicode escape sequence")
+                break
+              end
+            end
+            unless valid
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid unicode escape sequence")
             end
-            if @i < n && @bytes[@i] == RBRACE
-              @i += 1
-            else
-              @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated unicode escape sequence")
-            end
           else
-            unless consume_fixed_hex_digits(4)
+            codepoint_start = @i
+            unless consume_fixed_hex_digits(4) && valid_unicode_codepoint?(codepoint_start, @i)
               @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid unicode escape sequence")
             end
           end
         when ZERO..SEVEN
-          consume_octal_digits(2)
+          if allow_octal
+            consume_octal_escape(start, byte)
+          elsif byte != ZERO
+            @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid char escape sequence")
+          end
         else
-          @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid escape sequence")
+          unless allow_unknown
+            @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid escape sequence")
+          end
         end
+      end
+
+      private def consume_octal_escape(start : Int32, first_byte : UInt8) : Nil
+        n = @bytes.size
+        value = (first_byte - ZERO).to_i
+        read = 0
+        while read < 2 && @i < n
+          byte = @bytes[@i]
+          break unless byte >= ZERO && byte <= SEVEN
+          value = value * 8 + (byte - ZERO).to_i
+          @i += 1
+          read += 1
+        end
+        if value > 0xff
+          @diagnostics << Diagnostic.new(Span.new(start, @i), "octal escape value is too large")
+        end
+      end
+
+      private def valid_unicode_codepoint?(start : Int32, finish : Int32) : Bool
+        return false if finish <= start
+        value = String.new(@bytes[start, finish - start]).to_i(16)
+        value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff)
       end
 
       private def consume_octal_digits(max : Int32)
@@ -828,6 +1018,10 @@ module Facet
         return nil if @i + 1 >= n
 
         start = @i
+        if start >= 2 && @bytes[start - 1] == LBRACE && @bytes[start - 2] == BACKSLASH
+          return nil
+        end
+        return nil if after_macro_control_end?(start)
         type = percent_literal_type(@bytes[@i + 1])
         delimiter_index = @i + 1
         if type
@@ -836,7 +1030,7 @@ module Facet
         end
 
         delimiter = @bytes[delimiter_index]
-        if delimiter == EQUAL || ascii_alnum?(delimiter) || delimiter == SPACE || delimiter == TAB || delimiter == CR || delimiter == LF
+        if delimiter == EQUAL || ident_start?(delimiter) || delimiter == SPACE || delimiter == TAB || delimiter == CR || delimiter == LF
           return nil
         end
         if delimiter == RPAREN || delimiter == RBRACKET || delimiter == RBRACE || delimiter == GT
@@ -847,6 +1041,7 @@ module Facet
         return nil unless closing
 
         @i = delimiter_index + 1
+        body_start = @i
         terminated = scan_percent_body(
           delimiter,
           closing,
@@ -857,8 +1052,74 @@ module Facet
         unless terminated
           @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated percent literal")
         end
+        body_finish = terminated ? @i - 1 : @i
+        validate_regex_body(body_start, body_finish) if type == 'r'.ord.to_u8
+        validate_string_array_interpolation(body_start, body_finish) if type == 'W'.ord.to_u8
         kind = type == 'r'.ord.to_u8 ? TokenKind::Regex : TokenKind::String
         Token.new(kind, Span.new(start, @i))
+      end
+
+      private def after_macro_control_end?(position : Int32) : Bool
+        i = position - 1
+        while i >= 0
+          byte = @bytes[i]
+          break unless byte == SPACE || byte == TAB || byte == CR || byte == LF
+          i -= 1
+        end
+        return false if i < 1 || @bytes[i] != RBRACE
+        @bytes[i - 1] == PERCENT
+      end
+
+      private def validate_regex_body(start_pos : Int32, finish_pos : Int32) : Nil
+        i = start_pos
+        in_class = false
+        while i < finish_pos
+          byte = @bytes[i]
+          if byte == BACKSLASH
+            if i + 1 < finish_pos && @bytes[i + 1] == LOWER_U
+              @diagnostics << Diagnostic.new(Span.new(i, Math.min(i + 2, finish_pos)), "invalid unicode escape in regex literal")
+            end
+            i += 2
+            next
+          elsif byte == LBRACKET
+            in_class = true
+          elsif byte == RBRACKET
+            in_class = false
+          end
+          i += 1
+        end
+        if in_class
+          @diagnostics << Diagnostic.new(Span.new(start_pos, finish_pos), "unterminated character class in regex literal")
+        end
+      end
+
+      private def validate_string_array_interpolation(start_pos : Int32, finish_pos : Int32) : Nil
+        i = start_pos
+        while i + 2 < finish_pos
+          if @bytes[i] == HASH && @bytes[i + 1] == LBRACE
+            j = i + 2
+            while j < finish_pos && (@bytes[j] == SPACE || @bytes[j] == TAB)
+              j += 1
+            end
+            if j < finish_pos && @bytes[j] == STAR
+              depth = 1
+              k = j + 1
+              while k < finish_pos && depth > 0
+                depth += 1 if @bytes[k] == LBRACE
+                depth -= 1 if @bytes[k] == RBRACE
+                k += 1
+              end
+              isolated_start = i == start_pos || @bytes[i - 1] == SPACE || @bytes[i - 1] == TAB || @bytes[i - 1] == CR || @bytes[i - 1] == LF
+              isolated_end = k >= finish_pos || @bytes[k] == SPACE || @bytes[k] == TAB || @bytes[k] == CR || @bytes[k] == LF
+              unless isolated_start && isolated_end
+                @diagnostics << Diagnostic.new(Span.new(j, j + 1), "splat interpolation must occupy an entire string-array element")
+              end
+              i = k
+              next
+            end
+          end
+          i += 1
+        end
       end
 
       private def scan_percent_body(opening : UInt8, closing : UInt8, nested : Bool, interpolate : Bool, escapes : Bool) : Bool
@@ -965,12 +1226,21 @@ module Facet
           @i += 1
         else
           label_start = @i
+          unless @i < n && (ascii_alpha?(@bytes[@i]) || @bytes[@i] == UNDERSCORE)
+            @diagnostics << Diagnostic.new(Span.new(start, Math.min(@i + 1, n)), "heredoc identifier starts with invalid character")
+            @i = n
+            return Token.new(TokenKind::String, Span.new(start, @i))
+          end
           while @i < n
             byte = @bytes[@i]
             break unless ascii_alpha?(byte) || ascii_digit?(byte) || byte == UNDERSCORE
             @i += 1
           end
-          return nil if @i == label_start
+          if @i == label_start
+            @diagnostics << Diagnostic.new(Span.new(start, @i), "heredoc identifier starts with invalid character")
+            @i = n
+            return Token.new(TokenKind::String, Span.new(start, @i))
+          end
           label = String.new(@bytes[label_start, @i - label_start])
         end
 
@@ -1030,7 +1300,7 @@ module Facet
           end
         end
 
-        if terminated && indented && closing_indent > 0
+        if @parser_mode && terminated && indented && closing_indent > 0
           line_indents.each do |indent|
             if indent < closing_indent
               @diagnostics << Diagnostic.new(Span.new(start, @i), "heredoc line must have an indent greater than or equal to #{closing_indent}")
@@ -1058,6 +1328,9 @@ module Facet
           byte = @bytes[@i]
           @i += 1
           if byte == BACKSLASH
+            if @i < n && @bytes[@i] == LOWER_U
+              @diagnostics << Diagnostic.new(Span.new(@i - 1, @i + 1), "invalid unicode escape in regex literal")
+            end
             @i += 1 if @i < n
           elsif byte == LBRACKET
             in_class = true
@@ -1311,7 +1584,6 @@ module Facet
         end
         false
       end
-
 
       private def hex_digit?(byte : UInt8) : Bool
         ascii_digit?(byte) ||
