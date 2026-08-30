@@ -522,19 +522,22 @@ module Facet
           arg_node = ast.node(arg_id)
           if arg_node.kind == NodeKind::NamedArg
             value_id = ast.children(arg_id)[0]
-            if evaluation = eval_value(value_id, ast)
-              name = ast.arena.symbols[arg_node.payload_index]
-              named[name] = evaluation.value
-            end
+            name = ast.arena.symbols[arg_node.payload_index]
+            named[name] = macro_argument_value(value_id, ast)
           else
-            if evaluation = eval_value(arg_id, ast)
-              positional << evaluation.value
-            else
-              @diagnostics << Diagnostic.new(arg_node.span, "unsupported macro argument")
-            end
+            positional << macro_argument_value(arg_id, ast)
           end
         end
         {positional, named}
+      end
+
+      # Crystal macro parameters are AST nodes. The lightweight evaluator uses
+      # scalar values when it understands an expression, but an unsupported
+      # expression must still survive as source-backed syntax for `{{arg}}`
+      # substitution instead of being silently discarded.
+      private def macro_argument_value(node_id : NodeId, ast : AstFile) : MacroValue
+        evaluation = eval_value(node_id, ast)
+        evaluation ? evaluation.value : ast.node_string(node_id)
       end
 
       private def expand_macro_def(ref : DeclRef, args : {Array(MacroValue), Hash(String, MacroValue)}, index : ProgramIndex?, footprint : MacroFootprint?) : String
@@ -601,8 +604,8 @@ module Facet
               env[name] = trailing_named.delete(name)
             else
               default_node = ast.children(param_id)[2]?
-              if default_node && (evaluation = eval_value(default_node, ast))
-                env[name] = evaluation.value
+              if default_node && ast.node(default_node).kind != NodeKind::Nop
+                env[name] = macro_argument_value(default_node, ast)
               else
                 env[name] = nil
               end
@@ -1086,6 +1089,12 @@ module Facet
         when "id"
           return nil unless receiver.is_a?(String) && args.empty?
           MacroEvaluation.new(receiver)
+        when "stringify"
+          return nil unless args.empty?
+          MacroEvaluation.new(val_to_string(receiver).inspect)
+        when "symbolize"
+          return nil unless receiver.is_a?(String) && args.empty?
+          MacroEvaluation.new(":#{receiver}")
         else
           nil
         end

@@ -420,6 +420,68 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "preserves unsupported macro arguments as opaque AST source" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro define(name, type, value)
+        def {{name.id}} : {{type}}
+          {{value}}
+        end
+      end
+
+      define fetch, Array(String), build_value(1, nested: true)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("def fetch : Array(String)")
+    expanded.source.text.should contain("build_value(1, nested: true)")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "preserves opaque named and default macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro define(name, type = Array(String))
+        def {{name.id}} : {{type}}
+        end
+      end
+
+      define(name: fetch, type: Hash(String, Int32))
+      define cached
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("def fetch : Hash(String, Int32)")
+    expanded.source.text.should contain("def cached : Array(String)")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "supports stringify and symbolize on macro values" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe(name)
+        LABEL = {{name.stringify}}
+        SYMBOL = {{name.symbolize}}
+      end
+
+      describe value
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(LABEL = "value"))
+    expanded.source.text.should contain("SYMBOL = :value")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "expands nested controls and macro calls with the active parameter environment" do
     src_def = Facet::Compiler::Source.new(<<-CR)
       macro inner(x)

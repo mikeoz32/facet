@@ -163,8 +163,11 @@ positional, named, default, splat, and double-splat arguments. It evaluates
 Crystal truthiness (only `false` and `nil` are falsey), `if`/`unless`, `for`,
 `begin`, ordinary non-output `{% ... %}` expressions, assignments, ranges,
 tuples, named tuples, arrays, hashes, indexing, and common collection/string
-methods. Loop variables have iteration scope while other macro assignments
-remain visible to following iterations and expressions.
+methods, including `id`, `stringify`, and `symbolize`. Loop variables have
+iteration scope while other macro assignments remain visible to following
+iterations and expressions. Arguments outside the evaluable subset are kept as
+opaque source-backed AST values, so calls, generic types, and other syntax are
+substituted by `{{arg}}` instead of being discarded.
 
 Both `{{ macro_call(...) }}` and ordinary receiverless Crystal macro calls are
 expanded. Ordinary calls resolve through lexical type scopes, select overloads
