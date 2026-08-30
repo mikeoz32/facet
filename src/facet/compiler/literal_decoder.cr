@@ -167,19 +167,11 @@ module Facet
       end
 
       private def dedent_heredoc(content : String, syntax : String) : String
-        marker = syntax.starts_with?("<<~") ? '~' : '-'
         closing_start = syntax.rindex('\n', Math.max(syntax.bytesize - 2, 0))
         return content unless closing_start
         closing_line = syntax.byte_slice(closing_start + 1, syntax.bytesize - closing_start - 1)
         indent = leading_whitespace(closing_line)
-        width = if marker == '~'
-                  content.lines(chomp: false)
-                    .reject { |line| line.strip.empty? }
-                    .map { |line| leading_whitespace(line).bytesize }
-                    .min? || indent.bytesize
-                else
-                  indent.bytesize
-                end
+        width = indent.bytesize
         decoded = if width == 0
                     content
                   else

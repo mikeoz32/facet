@@ -1114,9 +1114,7 @@ module Facet
         validate_regex_body(body_start, body_finish, start) if type == 'r'.ord.to_u8
         validate_string_array_interpolation(body_start, body_finish) if type == 'W'.ord.to_u8
         if type == 'r'.ord.to_u8
-          while @i < n && ascii_alpha?(@bytes[@i])
-            @i += 1
-          end
+          consume_regex_options
         end
         kind = type == 'r'.ord.to_u8 ? TokenKind::Regex : TokenKind::String
         Token.new(kind, Span.new(start, @i))
@@ -1287,13 +1285,13 @@ module Facet
           position = line_start
           while position + 3 < line_end
             unless @bytes[position] == LT && @bytes[position + 1] == LT &&
-                   (@bytes[position + 2] == MINUS || @bytes[position + 2] == TILDE)
+                   @bytes[position + 2] == MINUS
               position += 1
               next
             end
             indented = true
             cursor = position + 3
-            quote = if cursor < line_end && (@bytes[cursor] == DQUOTE || @bytes[cursor] == SQUOTE)
+            quote = if cursor < line_end && @bytes[cursor] == SQUOTE
                       value = @bytes[cursor]
                       cursor += 1
                       value
@@ -1391,19 +1389,19 @@ module Facet
         return nil unless @i + 1 < n && @bytes[@i + 1] == LT
         return nil if @i + 2 >= n
         next_byte = @bytes[@i + 2]
-        return nil unless next_byte == MINUS || next_byte == TILDE || next_byte == DQUOTE || next_byte == SQUOTE
+        return nil unless next_byte == MINUS
 
         start = @i
         @i += 2
 
         indented = false
-        if @i < n && (@bytes[@i] == MINUS || @bytes[@i] == TILDE)
+        if @i < n && @bytes[@i] == MINUS
           indented = true
           @i += 1
         end
 
         quote = nil
-        if @i < n && (@bytes[@i] == DQUOTE || @bytes[@i] == SQUOTE)
+        if @i < n && @bytes[@i] == SQUOTE
           quote = @bytes[@i]
           @i += 1
         end
@@ -1575,11 +1573,22 @@ module Facet
           @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid regex")
         end
 
-        while @i < n && ascii_alpha?(@bytes[@i])
-          @i += 1
-        end
+        consume_regex_options
 
         Token.new(TokenKind::Regex, Span.new(start, @i))
+      end
+
+      private def consume_regex_options : Nil
+        while @i < @bytes.size && ascii_alpha?(@bytes[@i])
+          byte = @bytes[@i]
+          unless {'i'.ord.to_u8, 'm'.ord.to_u8, 'x'.ord.to_u8}.includes?(byte)
+            @diagnostics << Diagnostic.new(
+              Span.new(@i, @i + 1),
+              "unknown regex option: #{byte.unsafe_chr}"
+            )
+          end
+          @i += 1
+        end
       end
 
       private def skip_interpolation

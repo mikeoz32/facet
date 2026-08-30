@@ -29,6 +29,24 @@ describe Facet::Compiler::Parser do
     end
   end
 
+  it "rejects unknown regex options like Crystal" do
+    ["/a/z", "%r(a)I"].each do |code|
+      parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new(code))
+      parser.parse_file
+
+      parser.diagnostics.first.message.should eq("unknown regex option: #{code[-1]}")
+      parser.diagnostics.first.span.should eq(Facet::Compiler::Span.new(code.bytesize - 1, code.bytesize))
+    end
+  end
+
+  it "rejects non-Crystal heredoc openers" do
+    ["<<~TEXT\nbody\nTEXT\n", "<<\"TEXT\"\nbody\nTEXT\n", "<<'TEXT'\nbody\nTEXT\n", "<<-\"TEXT\"\nbody\nTEXT\n"].each do |code|
+      parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new(code))
+      parser.parse_file
+      parser.diagnostics.should_not be_empty
+    end
+  end
+
   it "parses identifiers and interns symbols" do
     source = Facet::Compiler::Source.new("foo; bar")
     parser = Facet::Compiler::Parser.new(source)

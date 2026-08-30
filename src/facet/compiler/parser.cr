@@ -3056,8 +3056,8 @@ module Facet
       end
 
       private def string_literal_style(text : String) : LiteralStyle
-        if text.starts_with?("<<-") || text.starts_with?("<<~")
-          text.starts_with?("<<-'") || text.starts_with?("<<~'") ? LiteralStyle::HeredocRaw : LiteralStyle::HeredocEscaped
+        if text.starts_with?("<<-")
+          text.starts_with?("<<-'") ? LiteralStyle::HeredocRaw : LiteralStyle::HeredocEscaped
         elsif text.starts_with?("%q")
           LiteralStyle::Raw
         else
@@ -3120,7 +3120,7 @@ module Facet
       end
 
       private def string_interpolates?(text : String) : Bool
-        return false if text.starts_with?("<<-'") || text.starts_with?("<<~'")
+        return false if text.starts_with?("<<-'")
         return true unless text.starts_with?('%')
         return true if text.size < 2
         {'Q', 'W', 'x'}.includes?(text[1]) || !text[1].ascii_letter?
@@ -3136,7 +3136,7 @@ module Facet
       end
 
       private def literal_body_bounds(token : Token, text : String) : Tuple(Int32, Int32)
-        if text.starts_with?("<<-") || text.starts_with?("<<~")
+        if text.starts_with?("<<-")
           if header_end = text.index('\n')
             closing_finish = text.bytesize
             closing_finish -= 1 if closing_finish > 0 && text.byte_at(closing_finish - 1) == '\n'.ord
