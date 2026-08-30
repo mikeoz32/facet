@@ -123,7 +123,9 @@ roles, parent/ancestor traversal, qualified names, name spans, contiguous doc
 comments, control-flow conditions, byte-offset cursor lookup, and UTF-8/UTF-16
 conversion so downstream tools do not depend on arena layout details. Call
 queries expose `callee`, `call_name`, `receiver`, positional and named arguments;
-parameter queries expose declared types and default values.
+they preserve the same roles through parenthesized and bare block calls.
+Parameter queries expose internal/external names, exact name spans, declared
+types, and default values across regular, splat, double-splat, and block params.
 
 ## Incremental queries
 
