@@ -15,7 +15,8 @@ for future name resolution, type checking, and compilation stages.
   macros, blocks, calls, literals, assignments, and control flow.
 - Error nodes and diagnostics so tooling can keep working on incomplete source.
 - Compact `AstArena` representation with interned symbols and source-backed text.
-- Multi-file macro indexing and partial macro expansion with origin tracking.
+- Multi-file macro indexing and partial macro expansion with origin tracking,
+  lexical environments, control flow, and hygienic macro variables.
 - `SourceManager` and `QueryDb` caching for parse, index, and expansion queries.
 - Compatibility checks against the actual upstream Crystal 1.21 lexer/parser
   spec inputs. Facet currently matches Crystal::Parser acceptance/rejection on
@@ -107,6 +108,27 @@ queries.invalidate(file_id)
 
 `QueryDb` caches parse, macro-index, and expansion results. Call `invalidate`
 after updating a source so dependent macro expansions are recalculated.
+
+## Macro expansion scope
+
+`MacroExpander` resolves indexed macro definitions across files and binds
+positional, named, default, splat, and double-splat arguments. It evaluates
+Crystal truthiness (only `false` and `nil` are falsey), `if`/`unless`, `for`,
+`begin`, ordinary non-output `{% ... %}` expressions, assignments, ranges,
+tuples, named tuples, arrays, hashes, indexing, and common collection/string
+methods. Loop variables have iteration scope while other macro assignments
+remain visible to following iterations and expressions.
+
+`%name` and `%name{key}` nodes produce stable hygienic identifiers within one
+expansion and distinct identifiers across keys and invocations. Expansions
+that use `%name` or `gensym` bypass the text cache so cached output cannot
+reintroduce identifier collisions.
+
+This remains a partial macro interpreter, not Crystal's type-aware compiler
+macro engine. Type introspection (`resolve`, `methods`, `instance_vars`, and
+similar APIs), compile-time command execution, and the complete AST-node macro
+method surface are not implemented yet. Unsupported non-output control
+expressions produce an explicit expansion diagnostic.
 
 ## Architecture
 
@@ -206,7 +228,7 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 7,294 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Facet native suite | — | 7,306 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

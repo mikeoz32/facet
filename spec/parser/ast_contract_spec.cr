@@ -154,6 +154,27 @@ describe "Facet AST contract" do
     ast.literal_content_span(first).should_not eq(ast.literal_content_span(second))
   end
 
+  it "retains source-backed content spans for static literal consumers" do
+    ast = facet_ast(%q('c'; '\n'; :foo; :"bar baz"; require "./dep"; asm("nop" : "=r"(x) :: "memory")))
+    expressions = ast.children(ast.root)[0]
+    char, escaped_char, symbol, quoted_symbol, require_node, asm_node = ast.children(expressions)
+
+    ast.literal_content_string(char).should eq("c")
+    ast.literal_content_string(escaped_char).should eq(%q(\n))
+    ast.literal_content_string(symbol).should eq("foo")
+    ast.literal_content_string(quoted_symbol).should eq("bar baz")
+
+    require_literal = ast.children(require_node)[0]
+    ast.literal_content_string(require_literal).should eq("./dep")
+
+    asm_children = ast.children(asm_node)
+    ast.literal_content_string(asm_children[0]).should eq("nop")
+    output = ast.children(asm_children[1])[0]
+    ast.literal_content_string(ast.children(output)[0]).should eq("=r")
+    clobber = ast.children(asm_children[3])[0]
+    ast.literal_content_string(clobber).should eq("memory")
+  end
+
   it "does not let Nop or container spans hide a significant token" do
     source = Facet::Compiler::Source.new("lost")
     arena = Facet::Compiler::AstArena.new

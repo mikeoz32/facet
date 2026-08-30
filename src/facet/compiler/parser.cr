@@ -2189,7 +2189,11 @@ module Facet
           node
         when TokenKind::Char
           advance
-          @arena.add_literal_node(LiteralKind::Char, token.span)
+          @arena.add_literal_node(
+            LiteralKind::Char,
+            token.span,
+            Span.new(token.span.start + 1, token.span.finish - 1)
+          )
         when TokenKind::Regex
           advance
           parse_regex_literal_token(token)
@@ -2287,7 +2291,7 @@ module Facet
           @arena.add_ident(token.span, symbol_id)
         when TokenKind::Symbol
           advance
-          @arena.add_literal_node(LiteralKind::Symbol, token.span)
+          @arena.add_literal_node(LiteralKind::Symbol, token.span, symbol_content_span(token))
         when TokenKind::Dot
           if peek1.kind == TokenKind::LBracket
             dot = advance
@@ -2931,7 +2935,7 @@ module Facet
         expect(TokenKind::LParen, "expected '(' after asm")
         text = if current.kind == TokenKind::String
                  tok = advance
-                 @arena.add_literal_node(LiteralKind::String, tok.span)
+                 static_string_literal_node(tok)
                else
                  @diagnostics << Diagnostic.new(current.span, "expected asm text")
                  @arena.add_literal_node(LiteralKind::String, Span.new(current.span.start, current.span.start))
@@ -2955,7 +2959,7 @@ module Facet
           when TokenKind::String
             item = advance
             if section == 1 || section == 2
-              constraint = @arena.add_literal_node(LiteralKind::String, item.span)
+              constraint = static_string_literal_node(item)
               if match(TokenKind::LParen)
                 expression = parse_expression(0, -> { current.kind == TokenKind::RParen })
                 closing = expect(TokenKind::RParen, "expected ')' after asm operand")
@@ -2968,7 +2972,7 @@ module Facet
               if token_text(item).includes?(%q(#{))
                 @diagnostics << Diagnostic.new(item.span, "interpolation not allowed in asm clobber")
               end
-              clobbers << @arena.add_literal_node(LiteralKind::String, item.span)
+              clobbers << static_string_literal_node(item)
               if current.kind == TokenKind::LParen
                 @diagnostics << Diagnostic.new(current.span, "unexpected token: \"(\"")
                 advance
@@ -3023,6 +3027,25 @@ module Facet
         callee = @arena.add_ident(callee_span, @arena.symbols.intern("`"))
         args = @arena.add_node(NodeKind::Args, outer_span, [literal])
         @arena.add_node(NodeKind::Call, outer_span, [callee, args])
+      end
+
+      private def static_string_literal_node(token : Token) : NodeId
+        text = span_text(token.span)
+        body_start, body_finish = literal_body_bounds(token, text)
+        @arena.add_literal_node(
+          LiteralKind::String,
+          token.span,
+          Span.new(body_start, body_finish)
+        )
+      end
+
+      private def symbol_content_span(token : Token) : Span
+        text = span_text(token.span)
+        if text.size >= 3 && text.starts_with?(%q(:")) && text.ends_with?('"')
+          Span.new(token.span.start + 2, token.span.finish - 1)
+        else
+          Span.new(Math.min(token.span.start + 1, token.span.finish), token.span.finish)
+        end
       end
 
       private def parse_regex_literal_token(token : Token) : NodeId
@@ -4824,7 +4847,7 @@ module Facet
       private def build_infix(kind : TokenKind, span : Span, left : NodeId, right : NodeId, operator_span : Span? = nil) : NodeId
         case kind
         when TokenKind::Assign
-          if @macro_def_depth > 0
+          if @macro_depth > 0 || @macro_def_depth > 0
             return @arena.add_node(NodeKind::Assign, span, [left, right])
           end
           lhs_node = @arena.node(left)
@@ -5087,7 +5110,7 @@ module Facet
              TokenKind::StarStarEqual, TokenKind::ShiftLeftEqual, TokenKind::ShiftRightEqual,
              TokenKind::AmpersandPlusEqual, TokenKind::AmpersandMinusEqual, TokenKind::AmpersandStarEqual,
              TokenKind::AmpersandStarStarEqual, TokenKind::OrOrEqual, TokenKind::AndAndEqual
-          if @macro_def_depth > 0
+          if @macro_depth > 0 || @macro_def_depth > 0
             return @arena.add_binary(kind, span, left, right)
           end
           op_span = operator_span || span
@@ -5947,7 +5970,7 @@ module Facet
         if current.kind == TokenKind::String
           str = advance
           span = Span.new(start.span.start, str.span.finish)
-          return @arena.add_node(NodeKind::Require, span, [@arena.add_literal_node(LiteralKind::String, str.span)])
+          return @arena.add_node(NodeKind::Require, span, [static_string_literal_node(str)])
         else
           token = current
           position = token.span.finish
