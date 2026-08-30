@@ -1,6 +1,18 @@
 require "./spec_helper"
 
 describe Facet::Compiler::Parser do
+  it "rejects unsupported percent literal prefixes like Crystal" do
+    ["%s(foo)", "%I(foo)"].each do |code|
+      source = Facet::Compiler::Source.new(code)
+      parser = Facet::Compiler::Parser.new(source)
+      parser.parse_file
+
+      parser.diagnostics.should_not be_empty
+      parser.diagnostics.first.message.should eq(%(unexpected token: "%"))
+      parser.diagnostics.first.span.should eq(Facet::Compiler::Span.new(0, 1))
+    end
+  end
+
   it "parses identifiers and interns symbols" do
     source = Facet::Compiler::Source.new("foo; bar")
     parser = Facet::Compiler::Parser.new(source)

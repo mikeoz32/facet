@@ -2359,7 +2359,7 @@ module Facet
             sym = @arena.symbols.intern(name)
             @arena.add_ident(span, sym)
           else
-            @diagnostics << Diagnostic.new(token.span, "unexpected token in expression")
+            @diagnostics << Diagnostic.new(token.span, "unexpected token: \"%\"")
             advance unless token.eof?
             @arena.add_node(NodeKind::Error, token.span)
           end
@@ -2415,6 +2415,8 @@ module Facet
             @diagnostics << Diagnostic.new(token.span, "expecting any of these tokens: #{CALL_METHOD_NAME_TOKENS} (not '#{diagnostic_token_text(token)}')")
           elsif token.kind == TokenKind::Pipe
             @diagnostics << Diagnostic.new(token.span, "unexpected token: \"|\"")
+          elsif token.kind == TokenKind::Percent
+            @diagnostics << Diagnostic.new(token.span, "unexpected token: \"%\"")
           elsif token.kind == TokenKind::RBrace
             if (@macro_depth > 0 || @macro_def_depth > 0) && peek1.kind == TokenKind::KeywordEnd
               @diagnostics << Diagnostic.new(peek1.span, "expecting token '}', not 'end'")
@@ -3110,7 +3112,7 @@ module Facet
 
       private def percent_word_array?(text : String) : Bool
         text.starts_with?("%w") || text.starts_with?("%W") ||
-          text.starts_with?("%i") || text.starts_with?("%I")
+          text.starts_with?("%i")
       end
 
       private def command_literal?(text : String) : Bool
@@ -3121,7 +3123,7 @@ module Facet
         return false if text.starts_with?("<<-'") || text.starts_with?("<<~'")
         return true unless text.starts_with?('%')
         return true if text.size < 2
-        {'Q', 'W', 'I', 'x'}.includes?(text[1]) || !text[1].ascii_letter?
+        {'Q', 'W', 'x'}.includes?(text[1]) || !text[1].ascii_letter?
       end
 
       private def heredoc_method_suffix(text : String) : String?
@@ -3173,8 +3175,8 @@ module Facet
       private def parse_percent_word_array(token : Token, text : String) : NodeId
         body_start, body_finish = literal_body_bounds(token, text)
         delimiter = literal_delimiter(text)
-        kind = {'i', 'I'}.includes?(text[1]) ? LiteralKind::Symbol : LiteralKind::String
-        interpolates = {'W', 'I'}.includes?(text[1])
+        kind = text[1] == 'i' ? LiteralKind::Symbol : LiteralKind::String
+        interpolates = text[1] == 'W'
         children = [] of NodeId
         position = body_start
         while position < body_finish

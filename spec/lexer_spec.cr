@@ -234,7 +234,7 @@ describe Facet::Compiler::Lexer do
     lexer = Facet::Compiler::Lexer.new(source)
     lexer.tokenize_all
     messages = lexer.diagnostics.map(&.message)
-    messages.should contain("invalid escape sequence")
+    messages.should contain("invalid char escape sequence '\\q'")
     messages.should contain("invalid hex escape sequence")
   end
 

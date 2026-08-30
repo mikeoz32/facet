@@ -858,7 +858,7 @@ module Facet
           byte = @bytes[@i]
           @i += 1
           if byte == BACKSLASH
-            consume_escape(@i - 1)
+            consume_escape(@i - 1, char_literal: true)
           elsif byte == SQUOTE
             terminated = true
             break
@@ -882,7 +882,12 @@ module Facet
         nil
       end
 
-      private def consume_escape(start : Int32, allow_unknown : Bool = false, allow_octal : Bool = false)
+      private def consume_escape(
+        start : Int32,
+        allow_unknown : Bool = false,
+        allow_octal : Bool = false,
+        char_literal : Bool = false,
+      )
         n = @bytes.size
         if @i >= n
           @diagnostics << Diagnostic.new(Span.new(start, @i), "unterminated escape sequence")
@@ -892,8 +897,12 @@ module Facet
         byte = @bytes[@i]
         @i += 1
         case byte
-        when DQUOTE, SQUOTE, BACKSLASH, HASH, PERCENT, LOWER_N, LOWER_T, LOWER_R, LOWER_B, LOWER_F, LOWER_V, LOWER_E, LOWER_A,
-             LPAREN, RPAREN, LBRACKET, RBRACKET, LBRACE, RBRACE, LT, GT, PIPE
+        when SQUOTE, BACKSLASH, LOWER_N, LOWER_T, LOWER_R, LOWER_B, LOWER_F, LOWER_V, LOWER_E, LOWER_A
+          return
+        when DQUOTE, HASH, PERCENT, LPAREN, RPAREN, LBRACKET, RBRACKET, LBRACE, RBRACE, LT, GT, PIPE
+          if char_literal
+            add_invalid_char_escape(start, byte)
+          end
           return
         when LF
           @line_starts << @i
@@ -905,7 +914,9 @@ module Facet
           @line_starts << @i
           return
         when LOWER_X
-          unless consume_fixed_hex_digits(2)
+          if char_literal
+            add_invalid_char_escape(start, byte)
+          elsif !consume_fixed_hex_digits(2)
             @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid hex escape sequence")
           end
         when LOWER_U
@@ -945,13 +956,24 @@ module Facet
           if allow_octal
             consume_octal_escape(start, byte)
           elsif byte != ZERO
-            @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid char escape sequence")
+            add_invalid_char_escape(start, byte)
           end
         else
           unless allow_unknown
-            @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid escape sequence")
+            if char_literal
+              add_invalid_char_escape(start, byte)
+            else
+              @diagnostics << Diagnostic.new(Span.new(start, @i), "invalid escape sequence")
+            end
           end
         end
+      end
+
+      private def add_invalid_char_escape(start : Int32, byte : UInt8) : Nil
+        @diagnostics << Diagnostic.new(
+          Span.new(start, @i),
+          "invalid char escape sequence '\\#{byte.unsafe_chr}'"
+        )
       end
 
       private def consume_octal_escape(start : Int32, first_byte : UInt8) : Nil
@@ -1208,7 +1230,7 @@ module Facet
       private def percent_literal_type(byte : UInt8) : UInt8?
         case byte
         when 'q'.ord.to_u8, 'Q'.ord.to_u8, 'w'.ord.to_u8, 'W'.ord.to_u8, 'x'.ord.to_u8,
-             'r'.ord.to_u8, 'i'.ord.to_u8, 'I'.ord.to_u8, 's'.ord.to_u8
+             'r'.ord.to_u8, 'i'.ord.to_u8
           byte
         else
           nil
@@ -1233,7 +1255,7 @@ module Facet
       private def percent_literal_interpolates?(type : UInt8?) : Bool
         return true if type.nil?
         case type
-        when 'Q'.ord.to_u8, 'W'.ord.to_u8, 'I'.ord.to_u8, 'x'.ord.to_u8, 'r'.ord.to_u8
+        when 'Q'.ord.to_u8, 'W'.ord.to_u8, 'x'.ord.to_u8, 'r'.ord.to_u8
           true
         else
           false

@@ -160,7 +160,17 @@ crystal spec spec/parser/ast_contract_spec.cr
 crystal run scripts/bench_lexer.cr
 crystal run scripts/check_parser_compat.cr
 crystal run scripts/check_upstream_ast_shape.cr
+crystal run scripts/check_percent_literal_parity.cr
+crystal run scripts/check_literal_value_parity.cr
 ```
+
+The percent-literal matrix adds 1,060 generated cases across every ASCII letter
+prefix, five delimiter forms, and representative raw/interpolated bodies. It
+currently has zero acceptance mismatches with Crystal::Parser and prevents
+unsupported prefixes from being silently treated as Facet-only literals.
+The literal-value oracle directly compares 21 decoded strings, chars, symbols,
+regexes, and heredocs with `Crystal::Parser`, plus all 30 supported and rejected
+character-escape forms. Both matrices currently report zero mismatches.
 
 The full suite includes lexer coverage against the installed Crystal stdlib and
 ported parser compatibility cases. `check_parser_compat.cr` parses each source
@@ -233,7 +243,7 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 7,312 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Facet native suite | — | 7,313 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often
