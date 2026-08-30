@@ -45,6 +45,23 @@ describe Facet::Compiler::SyntaxTree do
     node.not_nil!.ancestor(Facet::Compiler::NodeKind::Class).try(&.name).should eq("Box")
   end
 
+  it "exposes control-flow conditions as a named role" do
+    source = Facet::Compiler::Source.new(<<-CRYSTAL)
+      if ready
+        run
+      end
+      case value
+      when expected
+        run
+      end
+    CRYSTAL
+    tree = Facet::Compiler::SyntaxTree.new(Facet::Compiler::Parser.new(source).parse_file)
+
+    tree.nodes(Facet::Compiler::NodeKind::If).first.condition.try(&.symbol_name).should eq("ready")
+    tree.nodes(Facet::Compiler::NodeKind::Case).first.condition.try(&.symbol_name).should eq("value")
+    tree.nodes(Facet::Compiler::NodeKind::When).first.condition.try(&.text).should eq("expected")
+  end
+
   it "converts byte offsets to UTF-8 and UTF-16 editor positions" do
     source = Facet::Compiler::Source.new("a😀b\nnext")
     index = Facet::Compiler::LineIndex.new(source)

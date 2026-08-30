@@ -361,6 +361,16 @@ module Facet
         index >= 0 ? present_child(index) : nil
       end
 
+      def condition : SyntaxNode?
+        case kind
+        when NodeKind::If, NodeKind::Unless, NodeKind::While, NodeKind::Until,
+             NodeKind::Case, NodeKind::When
+          present_child(0)
+        else
+          nil
+        end
+      end
+
       def parameters : Array(SyntaxNode)
         index = case kind
                 when NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun then 1
