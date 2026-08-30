@@ -10,7 +10,7 @@ describe Facet::Compiler::MacroExpander do
 
     expanded.source.kind.should eq(Facet::Compiler::SourceKind::Virtual)
     expanded.source.expanded_from.should_not be_nil
-    expanded.source.text.should eq("puts hi")
+    expanded.source.text.should eq(%(puts "hi"))
     expander.diagnostics.should be_empty
   end
 
@@ -20,7 +20,32 @@ describe Facet::Compiler::MacroExpander do
     expander = Facet::Compiler::MacroExpander.new
     expanded = expander.expand(ast)
 
-    expanded.source.text.should eq("value = abc")
+    expanded.source.text.should eq(%(value = "abc"))
+    expander.diagnostics.should be_empty
+  end
+
+  it "preserves literal syntax and exposes basic AST-node predicates" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      string = {{"value"}}
+      symbol = {{:value}}
+      identifier = {{:value.id}}
+      {% if :value.is_a?(SymbolLiteral) && "value".is_a?(StringLiteral) %}
+        predicates = true
+      {% end %}
+      {% if :value.responds_to?(:id) && !1.nil? %}
+        methods = true
+      {% end %}
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand(ast)
+
+    expanded.source.text.should contain(%(string = "value"))
+    expanded.source.text.should contain("symbol = :value")
+    expanded.source.text.should contain("identifier = value")
+    expanded.source.text.should contain("predicates = true")
+    expanded.source.text.should contain("methods = true")
+    expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end
 
@@ -54,28 +79,41 @@ describe Facet::Compiler::MacroExpander do
   end
 
   it "binds macro for hash keys and values" do
-    src = Facet::Compiler::Source.new(%q({% for key, value in {"a" => 1, "b" => 2} %}{{key}}={{value}};{% end %}))
+    src = Facet::Compiler::Source.new(<<-CR)
+      {
+      {% for key, value in {"a" => 1, "b" => 2} %}
+        {{key}} => {{value}},
+      {% end %}
+      }
+    CR
     ast = Facet::Compiler::Parser.new(src).parse_file
     expander = Facet::Compiler::MacroExpander.new
     expanded = expander.expand(ast)
 
-    expanded.source.text.should eq("a=1;b=2;")
+    expanded.source.text.should contain(%("a" => 1))
+    expanded.source.text.should contain(%("b" => 2))
     expander.diagnostics.should be_empty
   end
 
   it "iterates tuple, named tuple, and range macro values" do
     src = Facet::Compiler::Source.new(<<-CR)
       {% for value in {1, 2} %}puts {{value}}
-      {% end %}{% for key, value in {one: 3, two: 4} %}{{key}} = {{value}}
-      {% end %}{% for value in 5...7 %}puts {{value}}
+      {% end %}named = {
+      {% for key, value in {one: 3, two: 4} %}{{key}} => {{value}},
+      {% end %}}
+      {% for value in 5...7 %}puts {{value}}
       {% end %}
     CR
     ast = Facet::Compiler::Parser.new(src).parse_file
     expander = Facet::Compiler::MacroExpander.new
     expanded = expander.expand(ast)
 
-    lines = expanded.source.text.lines.map(&.strip).reject(&.empty?)
-    lines.should eq(["puts 1", "puts 2", "one = 3", "two = 4", "puts 5", "puts 6"])
+    expanded.source.text.should contain("puts 1")
+    expanded.source.text.should contain("puts 2")
+    expanded.source.text.should contain(%("one" => 3))
+    expanded.source.text.should contain(%("two" => 4))
+    expanded.source.text.should contain("puts 5")
+    expanded.source.text.should contain("puts 6")
     expander.diagnostics.should be_empty
   end
 
@@ -127,15 +165,15 @@ describe Facet::Compiler::MacroExpander do
     expander = Facet::Compiler::MacroExpander.new
     expanded = expander.expand(ast)
 
-    expanded.source.text.should contain("picked = two")
-    expanded.source.text.should contain("joined = one-two")
+    expanded.source.text.should contain(%(picked = "two"))
+    expanded.source.text.should contain(%(joined = "one-two"))
     expanded.source.text.should contain("mapped = 2")
     expanded.source.text.should_not contain("bad")
     expander.diagnostics.should be_empty
   end
 
   it "expands across passes until macros are gone" do
-    src = Facet::Compiler::Source.new("{{ \"{{ 1 }}\" }}")
+    src = Facet::Compiler::Source.new(%({{ "{{ 1 }}".id }}))
     ast = Facet::Compiler::Parser.new(src).parse_file
     expander = Facet::Compiler::MacroExpander.new
     expanded = expander.expand(ast)
@@ -145,7 +183,7 @@ describe Facet::Compiler::MacroExpander do
   end
 
   it "emits diagnostic when expansion exceeds max passes" do
-    src = Facet::Compiler::Source.new("{{ \"{{ 1 }}\" }}")
+    src = Facet::Compiler::Source.new(%({{ "{{ 1 }}".id }}))
     ast = Facet::Compiler::Parser.new(src).parse_file
     expander = Facet::Compiler::MacroExpander.new(nil, 1)
     expanded = expander.expand(ast)
@@ -512,7 +550,7 @@ describe Facet::Compiler::MacroExpander do
   it "exposes macro block parameters and caches distinct block bodies separately" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro capture(&block)
-        puts {{block.args.join(",").stringify}}
+        puts {{block.args.join(",")}}
         {{yield}}
       end
 
@@ -543,13 +581,13 @@ describe Facet::Compiler::MacroExpander do
       mapped = {{words.select { |word| word.size > 3 }.map { |word| word.upcase }.join(",")}}
       any = {{words.any? { |word| word.starts_with?("t") }}}
       all = {{words.all? { |word| !word.empty? }}}
-      indexed = [{{words.map_with_index { |word, index| index }.join(",")}}]
+      indexed = [{{words.map_with_index { |word, index| index }.join(",").id}}]
     CR
     ast = Facet::Compiler::Parser.new(source).parse_file
     expander = Facet::Compiler::MacroExpander.new
     expanded = expander.expand(ast)
 
-    expanded.source.text.should contain("mapped = THREE")
+    expanded.source.text.should contain(%(mapped = "THREE"))
     expanded.source.text.should contain("any = true")
     expanded.source.text.should contain("all = true")
     expanded.source.text.should contain("indexed = [0,1,2]")

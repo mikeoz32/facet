@@ -169,6 +169,12 @@ iterations and expressions. Arguments outside the evaluable subset are kept as
 opaque source-backed AST values, so calls, generic types, and other syntax are
 substituted by `{{arg}}` instead of being discarded.
 
+Literal and computed macro strings, symbols, identifiers, and opaque syntax
+retain separate source rendering and scalar values. Direct interpolation keeps
+Crystal syntax (`"value"`, `:value`, or an unquoted `id`), while basic
+`is_a?`, `responds_to?`, and `nil?` predicates can branch on supported macro
+AST values without erasing their node role.
+
 Collection expressions support lexical `map`, `map_with_index`, `select`,
 `reject`, `any?`, `all?`, `each`, and `each_with_index` blocks over evaluated
 arrays, hashes, and strings. Block parameters stay local while assignments to
