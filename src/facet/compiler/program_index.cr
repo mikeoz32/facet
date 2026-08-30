@@ -3,8 +3,9 @@ module Facet
     struct DeclRef
       getter ast : AstFile
       getter node_id : NodeId
+      getter scope : String
 
-      def initialize(@ast : AstFile, @node_id : NodeId)
+      def initialize(@ast : AstFile, @node_id : NodeId, @scope : String = "")
       end
     end
 
@@ -19,11 +20,19 @@ module Facet
 
       def add_macro(name : String, ref : DeclRef)
         @macros[name] << ref
-        @fingerprint = @fingerprint ^ ref.node_id.to_u64 ^ ref.ast.source.text.hash.to_u64
+        @fingerprint = @fingerprint ^ ref.node_id.to_u64 ^ ref.ast.source.text.hash.to_u64 ^ ref.scope.hash.to_u64
       end
 
-      def macros_for(name : String) : Array(DeclRef)?
-        @macros[name]?
+      def macros_for(name : String, scope : String? = nil) : Array(DeclRef)?
+        refs = @macros[name]?
+        return nil unless refs
+        return refs unless scope
+
+        lexical_scopes(scope).each do |candidate|
+          matches = refs.select { |ref| ref.scope == candidate }
+          return matches unless matches.empty?
+        end
+        nil
       end
 
       def merge!(other : ProgramIndex)
@@ -33,13 +42,25 @@ module Facet
         @fingerprint ^= other.fingerprint
         self
       end
+
+      private def lexical_scopes(scope : String) : Array(String)
+        parts = scope.split("::")
+        scopes = [] of String
+        until parts.empty?
+          scopes << parts.join("::")
+          parts.pop
+        end
+        scopes << ""
+        scopes
+      end
     end
 
     module Indexer
       extend self
 
       def index_macros(ast : AstFile, index : ProgramIndex = ProgramIndex.new) : ProgramIndex
-        walk(ast.root, ast, index)
+        tree = SyntaxTree.new(ast)
+        walk(tree.root, index, "")
         index
       end
 
@@ -50,19 +71,33 @@ module Facet
         index
       end
 
-      private def walk(node_id : NodeId, ast : AstFile, index : ProgramIndex)
-        node = ast.node(node_id)
+      private def walk(node : SyntaxNode, index : ProgramIndex, scope : String)
         if node.kind == NodeKind::MacroDef
-          name_id = ast.children(node_id)[0]
-          name_node = ast.node(name_id)
-          symbol_id = name_node.payload_index
-          name = ast.arena.symbols[symbol_id]
-          index.add_macro(name, DeclRef.new(ast, node_id))
+          if name = node.name
+            index.add_macro(name, DeclRef.new(node.tree.ast, node.id, scope))
+          end
+          return
         end
 
-        ast.children(node_id).each do |child|
-          walk(child, ast, index)
+        child_scope = if type_declaration?(node.kind)
+                        qualify_scope(scope, node.name)
+                      else
+                        scope
+                      end
+        node.children.each do |child|
+          walk(child, index, child_scope)
         end
+      end
+
+      private def type_declaration?(kind : NodeKind) : Bool
+        {NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum, NodeKind::Lib}.includes?(kind)
+      end
+
+      private def qualify_scope(scope : String, name : String?) : String
+        return scope unless name
+        normalized = name.lchop("::")
+        return normalized if name.starts_with?("::") || normalized.includes?("::") || scope.empty?
+        "#{scope}::#{normalized}"
       end
     end
   end

@@ -152,7 +152,9 @@ not re-expand a cached file, while changing a macro provider invalidates every
 expansion that used that macro. `QueryDb#stats` exposes execution and cache-hit
 counters for tests and editor telemetry. `upsert` keeps stable file IDs for
 named documents, and `apply_edit` accepts the same byte spans used throughout
-the lexer, parser, and AST.
+the lexer, parser, and AST. `pending_expansion_file_ids` exposes the exact files
+whose cached expansion became stale so incremental semantic consumers can
+reindex them without rebuilding the workspace.
 
 ## Macro expansion scope
 
@@ -163,6 +165,12 @@ Crystal truthiness (only `false` and `nil` are falsey), `if`/`unless`, `for`,
 tuples, named tuples, arrays, hashes, indexing, and common collection/string
 methods. Loop variables have iteration scope while other macro assignments
 remain visible to following iterations and expressions.
+
+Both `{{ macro_call(...) }}` and ordinary receiverless Crystal macro calls are
+expanded. Ordinary calls resolve through lexical type scopes, select overloads
+by arity, and support bare zero-argument calls while respecting parameters and
+previous local assignments that shadow the macro name. Calls with an explicit
+receiver remain runtime calls.
 
 `%name` and `%name{key}` nodes produce stable hygienic identifiers within one
 expansion and distinct identifiers across keys and invocations. Expansions
@@ -189,8 +197,10 @@ expressions produce an explicit expansion diagnostic.
 ## cr-analyzer integration
 
 [cr-analyzer](https://github.com/mikeoz32/cr-analyzer) uses Facet 0.1.5 for
-syntax diagnostics. Its semantic index still uses Crystal::Parser, providing a
-safe environment for measuring Facet compatibility before a deeper migration.
+its incremental syntax database, diagnostics, cursor queries, symbols, and the
+primary editor semantic index. Crystal::Parser remains a measured fallback
+while macro-generated declarations and the remaining unsupported inference
+shapes move to Facet.
 
 ## Development
 

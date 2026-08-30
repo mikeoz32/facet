@@ -170,6 +170,151 @@ describe Facet::Compiler::MacroExpander do
     expanded.first.source.text.should eq("1\n")
   end
 
+  it "expands ordinary receiverless macro calls" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro make_getter(name)
+        def {{name.id}}
+          @{{name.id}}
+        end
+      end
+
+      class Box
+        make_getter :value
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("def value")
+    expanded.source.text.should contain("@value")
+    expanded.source.text.should_not contain("make_getter :value")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "does not treat calls with receivers as macro invocations" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro render(value)
+        {{value}}
+      end
+
+      object.render(1)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+
+    expanded.source.text.should contain("object.render(1)")
+  end
+
+  it "resolves ordinary macro calls through lexical type scopes" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro pick
+        root_value
+      end
+
+      class Outer
+        macro pick
+          scoped_value
+        end
+
+        pick()
+      end
+
+      class Other
+        pick()
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+
+    expanded.source.text.scan("scoped_value").size.should eq(2)
+    expanded.source.text.scan("root_value").size.should eq(2)
+  end
+
+  it "selects an ordinary macro overload by arity" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro choose(value)
+        one_argument
+      end
+
+      macro choose(value, other)
+        two_arguments
+      end
+
+      choose(1, 2)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+
+    expanded.source.text.scan("one_argument").size.should eq(1)
+    expanded.source.text.scan("two_arguments").size.should eq(2)
+  end
+
+  it "expands bare zero-argument macro calls" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro answer
+        42
+      end
+
+      value = answer
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+
+    expanded.source.text.should match(/value =\s+42/)
+  end
+
+  it "does not expand bare identifiers shadowed by locals or parameters" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro value
+        expanded_value
+      end
+
+      def assigned
+        value = 1
+        value
+      end
+
+      def parameter(value)
+        value
+      end
+
+      top_level = value
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+
+    expanded.source.text.should contain("value = 1\n    value")
+    expanded.source.text.should contain("def parameter(value)\n    value")
+    expanded.source.text.should match(/top_level =\s+expanded_value/)
+  end
+
+  it "does not let assignments in another lexical type shadow a bare macro" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro answer
+        42
+      end
+
+      class Other
+        answer = 1
+      end
+
+      top_level = answer
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+
+    expanded.source.text.should match(/top_level =\s+42/)
+  end
+
   it "does not expand macro definition templates before they are invoked" do
     src = Facet::Compiler::Source.new(<<-CR)
       macro echo(x)

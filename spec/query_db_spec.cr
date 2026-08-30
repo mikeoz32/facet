@@ -47,6 +47,49 @@ describe Facet::Compiler::QueryDb do
     expanded.source.text.should contain("2")
   end
 
+  it "invalidates ordinary macro calls when their provider changes" do
+    mgr = Facet::Compiler::SourceManager.new
+    macro_fid = mgr.add("macro answer\n1\nend", "macro.cr")
+    use_fid = mgr.add("answer", "use.cr")
+    db = Facet::Compiler::QueryDb.new(mgr)
+
+    db.expand(use_fid).source.text.strip.should eq("1")
+    db.update(macro_fid, "macro answer\n2\nend").should be_true
+    db.expand(use_fid).source.text.strip.should eq("2")
+  end
+
+  it "tracks expansion consumers invalidated by a macro provider edit" do
+    mgr = Facet::Compiler::SourceManager.new
+    macro_fid = mgr.add("macro answer\n1\nend", "macro.cr")
+    use_fid = mgr.add("answer", "use.cr")
+    unrelated_fid = mgr.add("value = 1", "unrelated.cr")
+    db = Facet::Compiler::QueryDb.new(mgr)
+
+    db.expand(use_fid)
+    db.expand(unrelated_fid)
+    db.pending_expansion_file_ids.should be_empty
+    db.update(macro_fid, "macro answer\n2\nend").should be_true
+
+    db.pending_expansion_file_ids.should contain(macro_fid)
+    db.pending_expansion_file_ids.should contain(use_fid)
+    db.pending_expansion_file_ids.should_not contain(unrelated_fid)
+    db.expand(use_fid).source.text.strip.should eq("2")
+    db.pending_expansion_file_ids.should_not contain(use_fid)
+  end
+
+  it "invalidates an unresolved ordinary call when a provider appears" do
+    mgr = Facet::Compiler::SourceManager.new
+    use_fid = mgr.add("answer", "use.cr")
+    db = Facet::Compiler::QueryDb.new(mgr)
+
+    db.expand(use_fid).source.text.should eq("answer")
+    macro_fid, _ = db.upsert("macro answer\n42\nend", "macro.cr")
+    db.expand(macro_fid)
+
+    db.pending_expansion_file_ids.should contain(use_fid)
+    db.expand(use_fid).source.text.strip.should eq("42")
+  end
+
   it "does not recompute queries for unchanged source bytes" do
     mgr = Facet::Compiler::SourceManager.new
     fid = mgr.add("value = 1", "same.cr")

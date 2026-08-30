@@ -58,6 +58,7 @@ module Facet
         @macro_providers = {} of String => Set(FileId)
         @provider_macros = {} of FileId => Set(String)
         @macro_generations = {} of String => UInt64
+        @pending_expansion_file_ids = Set(FileId).new
         @generation = 0_u64
         @global_index_cache = nil.as(QueryResult(ProgramIndex)?)
         @stats = QueryStats.new
@@ -101,7 +102,9 @@ module Facet
           @macro_providers[name] << file_id
         end
 
-        (old_names | new_names).each { |name| bump_macro_generation(name) }
+        changed_names = old_names | new_names
+        changed_names.each { |name| bump_macro_generation(name) }
+        invalidate_expansions_by_macro(changed_names)
         @stats.index_executions += 1
         @index_cache[file_id] = QueryResult.new(idx, revision, [revision])
         @global_index_cache = nil
@@ -153,7 +156,12 @@ module Facet
           macro_names,
           required_files
         )
+        @pending_expansion_file_ids.delete(file_id)
         expanded
+      end
+
+      def pending_expansion_file_ids : Array(FileId)
+        @pending_expansion_file_ids.to_a
       end
 
       # Mutating through QueryDb eagerly drops stale entries. Revision checks
@@ -174,11 +182,13 @@ module Facet
         existing = @manager.file_id(filename)
         file_id, changed = @manager.upsert(text, filename, kind)
         invalidate(file_id) if existing && changed
+        @pending_expansion_file_ids << file_id if changed
         @global_index_cache = nil if changed
         {file_id, changed}
       end
 
       def invalidate(file_id : FileId)
+        @pending_expansion_file_ids << file_id
         @parse_cache.delete(file_id)
         @syntax_cache.delete(file_id)
         @index_cache.delete(file_id)
@@ -245,7 +255,10 @@ module Facet
         @expand_cache.each do |file_id, entry|
           to_delete << file_id unless (entry.macro_names & names).empty?
         end
-        to_delete.each { |file_id| @expand_cache.delete(file_id) }
+        to_delete.each do |file_id|
+          @expand_cache.delete(file_id)
+          @pending_expansion_file_ids << file_id
+        end
       end
     end
   end

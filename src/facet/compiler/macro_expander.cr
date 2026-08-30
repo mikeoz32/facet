@@ -25,6 +25,7 @@ module Facet
         @cache_hits = 0
         @hygiene = Hygiene.new
         @file_cache = {} of UInt64 => AstFile
+        @syntax_trees = {} of UInt64 => SyntaxTree
         @last_footprint = nil
       end
 
@@ -61,7 +62,7 @@ module Facet
           seen_texts << text_sig
 
           macros = [] of NodeId
-          collect_macros(current_ast.root, current_ast, macros)
+          collect_macros(current_ast.root, current_ast, macros, idx, footprint: footprint)
           break if macros.empty?
 
           if passes >= @max_passes
@@ -117,7 +118,14 @@ module Facet
         builder.to_s
       end
 
-      private def collect_macros(node_id : NodeId, ast : AstFile, acc : Array(NodeId))
+      private def collect_macros(
+        node_id : NodeId,
+        ast : AstFile,
+        acc : Array(NodeId),
+        index : ProgramIndex? = nil,
+        ordinary_call_allowed : Bool = true,
+        footprint : MacroFootprint? = nil,
+      )
         node = ast.node(node_id)
         # A macro definition is a template, not an expansion site. Its body is
         # traversed explicitly by `expand_macro_def` only when the macro is used.
@@ -126,9 +134,121 @@ module Facet
           acc << node_id
           return
         end
-        ast.children(node_id).each do |child|
-          collect_macros(child, ast, acc)
+        if ordinary_call_allowed && node.kind == NodeKind::Call && index
+          if name = macro_call_name(node_id, ast)
+            footprint.try(&.macro_use(name))
+            if refs = index.macros_for(name, lexical_scope(node_id, ast))
+              unless refs.empty?
+                acc << node_id
+                return
+              end
+            end
+          end
         end
+        if ordinary_call_allowed && node.kind == NodeKind::Ident && index && bare_macro_identifier?(node_id, ast)
+          name = ast.arena.symbols[node.payload_index]
+          footprint.try(&.macro_use(name))
+          if refs = index.macros_for(name, lexical_scope(node_id, ast))
+            unless refs.empty?
+              acc << node_id
+              return
+            end
+          end
+        end
+        ast.children(node_id).each_with_index do |child, child_index|
+          child_allows_ordinary_call = !(member_access?(node, ast) && child_index == 1)
+          collect_macros(child, ast, acc, index, child_allows_ordinary_call, footprint)
+        end
+      end
+
+      private def member_access?(node : Node, ast : AstFile) : Bool
+        return false unless node.kind == NodeKind::Binary
+        operator = ast.arena.operator_kind(node.payload_index)
+        {TokenKind::Dot, TokenKind::SafeNav, TokenKind::DoubleColon}.includes?(operator)
+      end
+
+      private def bare_macro_identifier?(node_id : NodeId, ast : AstFile) : Bool
+        tree = syntax_tree(ast)
+        node = tree.node(node_id)
+        parent = node.parent
+        return false unless parent
+        return false if {
+                          NodeKind::Def,
+                          NodeKind::Fun,
+                          NodeKind::Class,
+                          NodeKind::Module,
+                          NodeKind::Struct,
+                          NodeKind::Enum,
+                          NodeKind::Lib,
+                          NodeKind::Alias,
+                          NodeKind::TypeDef,
+                          NodeKind::AnnotationDef,
+                          NodeKind::Param,
+                          NodeKind::Splat,
+                          NodeKind::DoubleSplat,
+                          NodeKind::BlockParam,
+                          NodeKind::Path,
+                          NodeKind::TypeApply,
+                        }.includes?(parent.kind)
+        return false if {NodeKind::Call, NodeKind::CallWithBlock}.includes?(parent.kind) && parent.callee.try(&.id) == node_id
+        return false if assignment_target?(node, parent)
+
+        name = node.symbol_name
+        return false unless name
+        return false if parameter_in_scope?(node, name)
+        !assigned_before?(node, name)
+      end
+
+      private def assignment_target?(node : SyntaxNode, parent : SyntaxNode) : Bool
+        ([parent] + node.ancestors).any? do |ancestor|
+          next false unless {NodeKind::Assign, NodeKind::VarDecl}.includes?(ancestor.kind)
+          target = ancestor.target
+          target && (target.id == node.id || target.descendants.any? { |descendant| descendant.id == node.id })
+        end
+      end
+
+      private def parameter_in_scope?(node : SyntaxNode, name : String) : Bool
+        node.ancestors.any? do |ancestor|
+          next false unless {NodeKind::Def, NodeKind::Fun, NodeKind::Block}.includes?(ancestor.kind)
+          ancestor.parameters.any? { |parameter| parameter.name == name }
+        end
+      end
+
+      private def assigned_before?(node : SyntaxNode, name : String) : Bool
+        boundary = node.ancestors.find do |ancestor|
+          {
+            NodeKind::Def,
+            NodeKind::Fun,
+            NodeKind::Class,
+            NodeKind::Module,
+            NodeKind::Struct,
+            NodeKind::Enum,
+            NodeKind::Lib,
+          }.includes?(ancestor.kind)
+        end
+        root = boundary.try(&.body) || node.tree.root
+        assigned_before_in?(root, name, node.span.start)
+      end
+
+      private def assigned_before_in?(node : SyntaxNode, name : String, offset : Int32) : Bool
+        return false if node.span.start >= offset
+        if {
+             NodeKind::Def,
+             NodeKind::Fun,
+             NodeKind::MacroDef,
+             NodeKind::Class,
+             NodeKind::Module,
+             NodeKind::Struct,
+             NodeKind::Enum,
+             NodeKind::Lib,
+           }.includes?(node.kind)
+          return false
+        end
+        if target = node.target
+          return true if target.symbol_name == name
+          return true if target.descendants.any? { |child| child.symbol_name == name }
+        end
+        node.children.any? { |child| assigned_before_in?(child, name, offset) }
       end
 
       private def expand_macro(node_id : NodeId, ast : AstFile, index : ProgramIndex?, footprint : MacroFootprint?) : String?
@@ -140,6 +260,10 @@ module Facet
           expand_macro_control(node_id, ast, index, footprint)
         when NodeKind::MacroVar
           expand_macro_var(node_id, ast)
+        when NodeKind::Call
+          expand_indexed_macro_call(node_id, ast, index, footprint)
+        when NodeKind::Ident
+          expand_indexed_macro_call(node_id, ast, index, footprint)
         else
           nil
         end
@@ -150,25 +274,79 @@ module Facet
         exprs = ast.children(body_id)
         return "" if exprs.empty?
         expr = exprs.first
-        if index && (name = macro_call_name(expr, ast))
-          footprint.try &.macro_use(name)
-          refs = index.macros_for(name)
-          if refs && !refs.empty?
-            call_args = macro_call_args(expr, ast)
-            key = cache_key(refs.first, call_args)
-            cacheable = macro_cacheable?(refs.first)
-            if cacheable
-              if cached = @cache[key]?
-                @cache_hits += 1
-                return cached
-              end
-            end
-            result = expand_macro_def(refs.first, call_args, index, footprint)
-            @cache[key] = result if result && cacheable
-            return result
-          end
+        if expanded = expand_indexed_macro_call(expr, ast, index, footprint)
+          return expanded
         end
         eval_to_text(expr, ast)
+      end
+
+      private def expand_indexed_macro_call(
+        node_id : NodeId,
+        ast : AstFile,
+        index : ProgramIndex?,
+        footprint : MacroFootprint?,
+      ) : String?
+        return nil unless index
+        name = macro_call_name(node_id, ast)
+        return nil unless name
+        refs = index.macros_for(name, lexical_scope(node_id, ast))
+        return nil unless refs && !refs.empty?
+
+        footprint.try &.macro_use(name)
+        call_args = macro_call_args(node_id, ast)
+        ref = select_macro_ref(refs, node_id, ast)
+        key = cache_key(ref, call_args)
+        cacheable = macro_cacheable?(ref)
+        if cacheable
+          if cached = @cache[key]?
+            @cache_hits += 1
+            return cached
+          end
+        end
+        result = expand_macro_def(ref, call_args, index, footprint)
+        @cache[key] = result if cacheable
+        result
+      end
+
+      private def select_macro_ref(refs : Array(DeclRef), call_id : NodeId, call_ast : AstFile) : DeclRef
+        call_arity = if call_ast.node(call_id).kind == NodeKind::Call
+                       args_id = call_ast.children(call_id)[1]?
+                       args_id ? call_ast.children(args_id).size : 0
+                     else
+                       0
+                     end
+        refs.find do |ref|
+          tree = syntax_tree(ref.ast)
+          parameters = tree.node(ref.node_id).parameters
+          required = parameters.count do |parameter|
+            parameter.kind == NodeKind::Param && parameter.value.nil?
+          end
+          variadic = parameters.any? { |parameter| {NodeKind::Splat, NodeKind::DoubleSplat}.includes?(parameter.kind) }
+          maximum = variadic ? nil : parameters.count { |parameter| parameter.kind != NodeKind::DoubleSplat && parameter.kind != NodeKind::BlockParam }
+          call_arity >= required && (maximum.nil? || call_arity <= maximum)
+        end || refs.first
+      end
+
+      private def lexical_scope(node_id : NodeId, ast : AstFile) : String
+        names = [] of String
+        node = syntax_tree(ast).node(node_id)
+        node.ancestors.reverse_each do |ancestor|
+          next unless {NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum, NodeKind::Lib}.includes?(ancestor.kind)
+          name = ancestor.name
+          next unless name
+          normalized = name.lchop("::")
+          names = if name.starts_with?("::") || normalized.includes?("::")
+                    [normalized]
+                  else
+                    names + [normalized]
+                  end
+        end
+        names.join("::")
+      end
+
+      private def syntax_tree(ast : AstFile) : SyntaxTree
+        key = ast.arena.object_id
+        @syntax_trees[key] ||= SyntaxTree.new(ast)
       end
 
       private def macro_call_name(node_id : NodeId, ast : AstFile) : String?
@@ -222,7 +400,7 @@ module Facet
         text = begin
           body_span = ref.ast.node(body_id).span
           macros = [] of NodeId
-          collect_macros(body_id, ref.ast, macros)
+          collect_macros(body_id, ref.ast, macros, index, footprint: footprint)
           expand_text(ref.ast, macros, index, body_span, footprint)
         ensure
           @macro_var_stack.pop
@@ -239,7 +417,7 @@ module Facet
         body_id = ref.ast.children(ref.node_id)[3]?
         body_fp = body_id ? fingerprint_text(ref.ast.source, ref.ast.node(body_id).span) : "nil"
         args_fp = fingerprint_args(args)
-        "#{name}|#{body_fp}|#{args_fp}"
+        "#{ref.scope}|#{name}|#{body_fp}|#{args_fp}"
       end
 
       private def macro_cacheable?(ref : DeclRef) : Bool
@@ -421,7 +599,7 @@ module Facet
       private def expand_template_body(body_id : NodeId, ast : AstFile, index : ProgramIndex?, footprint : MacroFootprint?) : String
         body_span = ast.node(body_id).span
         macros = [] of NodeId
-        collect_macros(body_id, ast, macros)
+        collect_macros(body_id, ast, macros, index, footprint: footprint)
         return slice_text(ast.source, body_span) if macros.empty?
         expand_text(ast, macros, index, body_span, footprint)
       end
@@ -493,6 +671,8 @@ module Facet
         when NodeKind::LiteralString
           content : String = ast.decoded_literal_string(node_id)
           MacroEvaluation.new(content)
+        when NodeKind::LiteralSymbol
+          MacroEvaluation.new(ast.decoded_literal_string(node_id))
         when NodeKind::LiteralNumber
           str = ast.node_string(node_id).delete('_')
           MacroEvaluation.new(str.to_i64? || str)
