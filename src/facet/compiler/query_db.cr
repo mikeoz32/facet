@@ -14,69 +14,125 @@ module Facet
       getter version : UInt64
       getter deps : Array(UInt64)
       getter macro_names : Set(String)
+      getter required_files : Set(FileId)
 
-      def initialize(@value : AstFile, @version : UInt64, @deps : Array(UInt64), @macro_names : Set(String))
+      def initialize(
+        @value : AstFile,
+        @version : UInt64,
+        @deps : Array(UInt64),
+        @macro_names : Set(String),
+        @required_files : Set(FileId),
+      )
       end
     end
 
+    # Observable counters make cache behaviour testable and are useful for LSP
+    # telemetry without coupling consumers to QueryDb internals.
+    class QueryStats
+      property parse_executions : Int32 = 0
+      property parse_cache_hits : Int32 = 0
+      property index_executions : Int32 = 0
+      property index_cache_hits : Int32 = 0
+      property syntax_executions : Int32 = 0
+      property syntax_cache_hits : Int32 = 0
+      property expand_executions : Int32 = 0
+      property expand_cache_hits : Int32 = 0
+      property global_index_rebuilds : Int32 = 0
+      property global_index_cache_hits : Int32 = 0
+    end
+
+    # File-grained incremental frontend database. Source revisions are the only
+    # invalidation input; callers may update SourceManager directly or use the
+    # convenience mutation methods below. Parse and index queries are recomputed
+    # only for changed files, while expansion queries depend only on the macros
+    # and required files they actually touched.
     class QueryDb
       getter manager : SourceManager
+      getter stats : QueryStats
 
       def initialize(@manager : SourceManager)
         @parse_cache = {} of FileId => QueryResult(AstFile)
+        @syntax_cache = {} of FileId => QueryResult(SyntaxTree)
         @index_cache = {} of FileId => QueryResult(ProgramIndex)
         @expand_cache = {} of FileId => ExpandCacheEntry
         @macro_providers = {} of String => Set(FileId)
         @provider_macros = {} of FileId => Set(String)
+        @macro_generations = {} of String => UInt64
+        @generation = 0_u64
+        @global_index_cache = nil.as(QueryResult(ProgramIndex)?)
+        @stats = QueryStats.new
       end
 
       def parse(file_id : FileId) : AstFile
-        src_fp = @manager.fingerprint(file_id)
+        revision = @manager.revision(file_id)
         if cached = @parse_cache[file_id]?
-          return cached.value if cached.version == src_fp
+          if cached.version == revision
+            @stats.parse_cache_hits += 1
+            return cached.value
+          end
         end
+
         source = @manager.source(file_id)
         parser = Parser.new(source)
         ast = parser.parse_file
-        @parse_cache[file_id] = QueryResult.new(ast, src_fp, [src_fp])
+        @stats.parse_executions += 1
+        @parse_cache[file_id] = QueryResult.new(ast, revision, [revision])
         ast
       end
 
       def index(file_id : FileId) : ProgramIndex
-        src_fp = @manager.fingerprint(file_id)
+        revision = @manager.revision(file_id)
         if cached = @index_cache[file_id]?
-          return cached.value if cached.deps.all? { |dep| dep == src_fp }
-        end
-        if old_names = @provider_macros[file_id]?
-          old_names.each do |name|
-            if providers = @macro_providers[name]?
-              providers.delete(file_id)
-              @macro_providers.delete(name) if providers.empty?
-            end
+          if cached.version == revision
+            @stats.index_cache_hits += 1
+            return cached.value
           end
         end
+
+        old_names = @provider_macros[file_id]?.try(&.dup) || Set(String).new
+        detach_provider(file_id, old_names)
+
         ast = parse(file_id)
         idx = Indexer.index_macros(ast)
-        names = idx.macros.keys.to_set
-        @provider_macros[file_id] = names
-        names.each do |name|
+        new_names = idx.macros.keys.to_set
+        @provider_macros[file_id] = new_names
+        new_names.each do |name|
           @macro_providers[name] ||= Set(FileId).new
           @macro_providers[name] << file_id
         end
-        deps = [src_fp]
-        @index_cache[file_id] = QueryResult.new(idx, src_fp, deps)
+
+        (old_names | new_names).each { |name| bump_macro_generation(name) }
+        @stats.index_executions += 1
+        @index_cache[file_id] = QueryResult.new(idx, revision, [revision])
+        @global_index_cache = nil
         idx
       end
 
+      def syntax(file_id : FileId) : SyntaxTree
+        revision = @manager.revision(file_id)
+        if cached = @syntax_cache[file_id]?
+          if cached.version == revision
+            @stats.syntax_cache_hits += 1
+            return cached.value
+          end
+        end
+
+        tree = SyntaxTree.new(parse(file_id))
+        @stats.syntax_executions += 1
+        @syntax_cache[file_id] = QueryResult.new(tree, revision, [revision])
+        tree
+      end
+
       def expand(file_id : FileId) : AstFile
-        src_fp = @manager.fingerprint(file_id)
         parse_ast = parse(file_id)
-        idx, idx_fp = build_global_index
-        dep_fps = [src_fp, idx_fp]
+        idx = build_global_index
+
         if cached = @expand_cache[file_id]?
-          current_macro_versions = cached.macro_names.map { |name| macro_provider_version(name) }.compact
-          current_deps = dep_fps + current_macro_versions
-          return cached.value if cached.deps == current_deps
+          current_deps = expansion_dependencies(file_id, cached.required_files, cached.macro_names)
+          if cached.deps == current_deps
+            @stats.expand_cache_hits += 1
+            return cached.value
+          end
         end
 
         footprint = MacroFootprint.new
@@ -84,55 +140,112 @@ module Facet
         expander = MacroExpander.new(idx)
         expanded = expander.expand(parse_ast, idx, footprint)
         footprint = expander.last_footprint || footprint
-        footprint.required_files.each do |fid|
-          dep_fps << @manager.fingerprint(fid)
-        end
-        macro_dep_versions = footprint.macro_names.map { |name| macro_provider_version(name) }.compact
-        dep_versions = dep_fps + macro_dep_versions
-        version = dep_versions.max? || 0_u64
-        @expand_cache[file_id] = ExpandCacheEntry.new(expanded, version, dep_versions, footprint.macro_names)
+        required_files = footprint.required_files.to_set
+        macro_names = footprint.macro_names.to_set
+        deps = expansion_dependencies(file_id, required_files, macro_names)
+        version = deps.max? || 0_u64
+
+        @stats.expand_executions += 1
+        @expand_cache[file_id] = ExpandCacheEntry.new(
+          expanded,
+          version,
+          deps,
+          macro_names,
+          required_files
+        )
         expanded
       end
 
-      private def macro_provider_version(name : String) : UInt64?
-        providers = @macro_providers[name]?
-        return nil unless providers
-        providers.map { |fid| @manager.fingerprint(fid) }.max?
+      # Mutating through QueryDb eagerly drops stale entries. Revision checks
+      # still make direct SourceManager updates safe.
+      def update(file_id : FileId, text : String) : Bool
+        changed = @manager.update(file_id, text)
+        invalidate(file_id) if changed
+        changed
       end
 
-      private def build_global_index : {ProgramIndex, UInt64}
-        idx = ProgramIndex.new
-        fp = 0_u64
-        @manager.sources.size.times do |fid|
-          file_idx = index(fid)
-          idx.merge!(file_idx)
-          fp ^= file_idx.fingerprint
-        end
-        {idx, fp}
+      def apply_edit(file_id : FileId, span : Span, replacement : String) : Bool
+        changed = @manager.apply_edit(file_id, span, replacement)
+        invalidate(file_id) if changed
+        changed
+      end
+
+      def upsert(text : String, filename : String, kind : SourceKind = SourceKind::Real) : {FileId, Bool}
+        existing = @manager.file_id(filename)
+        file_id, changed = @manager.upsert(text, filename, kind)
+        invalidate(file_id) if existing && changed
+        @global_index_cache = nil if changed
+        {file_id, changed}
       end
 
       def invalidate(file_id : FileId)
         @parse_cache.delete(file_id)
+        @syntax_cache.delete(file_id)
         @index_cache.delete(file_id)
         if names = @provider_macros.delete(file_id)
-          names.each do |name|
-            if providers = @macro_providers[name]?
-              providers.delete(file_id)
-              @macro_providers.delete(name) if providers.empty?
-            end
-          end
+          detach_provider(file_id, names)
+          names.each { |name| bump_macro_generation(name) }
           invalidate_expansions_by_macro(names)
         end
         @expand_cache.delete(file_id)
+        @global_index_cache = nil
       end
 
-      private def invalidate_expansions_by_macro(names : Set(String))
+      private def build_global_index : ProgramIndex
+        revision = @manager.workspace_revision
+        if cached = @global_index_cache
+          if cached.version == revision
+            @stats.global_index_cache_hits += 1
+            return cached.value
+          end
+        end
+
+        idx = ProgramIndex.new
+        @manager.size.times do |file_id|
+          idx.merge!(index(file_id))
+        end
+        @stats.global_index_rebuilds += 1
+        @global_index_cache = QueryResult.new(idx, revision, [revision])
+        idx
+      end
+
+      private def expansion_dependencies(
+        file_id : FileId,
+        required_files : Set(FileId),
+        macro_names : Set(String),
+      ) : Array(UInt64)
+        deps = [@manager.revision(file_id)]
+        required_files.to_a.sort.each do |required_file|
+          next if required_file == file_id
+          deps << @manager.revision(required_file)
+        end
+        macro_names.to_a.sort.each do |name|
+          deps << (@macro_generations[name]? || 0_u64)
+        end
+        deps
+      end
+
+      private def detach_provider(file_id : FileId, names : Set(String)) : Nil
+        names.each do |name|
+          if providers = @macro_providers[name]?
+            providers.delete(file_id)
+            @macro_providers.delete(name) if providers.empty?
+          end
+        end
+      end
+
+      private def bump_macro_generation(name : String) : Nil
+        @generation &+= 1_u64
+        @macro_generations[name] = @generation
+      end
+
+      private def invalidate_expansions_by_macro(names : Set(String)) : Nil
         return if names.empty?
         to_delete = [] of FileId
-        @expand_cache.each do |fid, entry|
-          to_delete << fid unless (entry.macro_names & names).empty?
+        @expand_cache.each do |file_id, entry|
+          to_delete << file_id unless (entry.macro_names & names).empty?
         end
-        to_delete.each { |fid| @expand_cache.delete(fid) }
+        to_delete.each { |file_id| @expand_cache.delete(file_id) }
       end
     end
   end

@@ -17,7 +17,11 @@ for future name resolution, type checking, and compilation stages.
 - Compact `AstArena` representation with interned symbols and source-backed text.
 - Multi-file macro indexing and partial macro expansion with origin tracking,
   lexical environments, control flow, and hygienic macro variables.
-- `SourceManager` and `QueryDb` caching for parse, index, and expansion queries.
+- `SourceManager` and `QueryDb` caching for parse, syntax, index, and expansion
+  queries with automatic revision-based invalidation.
+- `SyntaxTree` / `SyntaxNode` named declaration, call, type, body, parameter,
+  traversal, cursor lookup, documentation, and UTF-16 position queries for
+  editor and compiler consumers.
 - Compatibility checks against the actual upstream Crystal 1.21 lexer/parser
   spec inputs. Facet currently matches Crystal::Parser acceptance/rejection on
   all 4,378 unique parser inputs. Every accepted input must retain each
@@ -97,6 +101,27 @@ parser speculation cannot satisfy semantic-token ownership or affect the
 meaning of the returned tree. Immutable child nodes may be shared, so the
 reachable representation is a DAG, but cycles are rejected.
 
+## Syntax queries
+
+```crystal
+manager = Facet::Compiler::SourceManager.new
+file_id = manager.add("class Greeter; def hello(name); end; end", "greeter.cr")
+queries = Facet::Compiler::QueryDb.new(manager)
+tree = queries.syntax(file_id)
+
+method = tree.nodes(Facet::Compiler::NodeKind::Def).first
+puts method.name                         # hello
+puts method.parameters.first.name       # name
+puts tree.node_at(method.span.start)     # smallest node at the cursor
+puts tree.position_at(method.span.start) # zero-based UTF-16 editor position
+```
+
+The compact arena remains Facet's native AST. `SyntaxTree` is an indexed query
+facade over it, not a compatibility copy of Crystal's AST. It centralizes child
+roles, parent/ancestor traversal, qualified names, name spans, contiguous doc
+comments, byte-offset cursor lookup, and UTF-8/UTF-16 conversion so downstream
+tools do not depend on arena layout details.
+
 ## Incremental queries
 
 ```crystal
@@ -107,12 +132,22 @@ queries = Facet::Compiler::QueryDb.new(manager)
 parsed = queries.parse(file_id)
 expanded = queries.expand(file_id)
 
-manager.update(file_id, "macro answer; 43; end")
-queries.invalidate(file_id)
+queries.update(file_id, "macro answer; 43; end")
+updated = queries.expand(file_id)
 ```
 
-`QueryDb` caches parse, macro-index, and expansion results. Call `invalidate`
-after updating a source so dependent macro expansions are recalculated.
+`QueryDb` is the incremental frontend database. It caches parse, macro-index,
+global-index, and expansion queries by monotonic source revisions. Updates made
+through either `QueryDb` or `SourceManager` are observed automatically; manual
+invalidation is only needed when a consumer deliberately wants to discard a
+cached result without changing source bytes.
+
+Expansion dependencies are footprint-based. Changing an unrelated file does
+not re-expand a cached file, while changing a macro provider invalidates every
+expansion that used that macro. `QueryDb#stats` exposes execution and cache-hit
+counters for tests and editor telemetry. `upsert` keeps stable file IDs for
+named documents, and `apply_edit` accepts the same byte spans used throughout
+the lexer, parser, and AST.
 
 ## Macro expansion scope
 
@@ -141,9 +176,10 @@ expressions produce an explicit expansion diagnostic.
 - `Lexer` / `TokenStream`: tokenization and parser lookahead.
 - `Parser`: tolerant syntax parsing and validation diagnostics.
 - `AstArena` / `AstFile`: compact syntax storage and source spans.
+- `SyntaxTree` / `SyntaxNode` / `LineIndex`: stable consumer queries and editor positions.
 - `ProgramIndex`: currently indexes macro definitions across files.
 - `MacroExpander` / `Hygiene`: partial compile-time expansion support.
-- `QueryDb`: cached frontend queries and dependency invalidation.
+- `QueryDb`: revisioned parse/syntax/index/expansion queries and footprint invalidation.
 
 ## cr-analyzer integration
 

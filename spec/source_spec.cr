@@ -18,4 +18,17 @@ describe Facet::Compiler::Source do
     chain.size.should eq(1)
     chain.first.span.should eq(site_span)
   end
+
+  it "tracks monotonic revisions only for changed bytes" do
+    manager = Facet::Compiler::SourceManager.new
+    file_id = manager.add("one", "sample.cr")
+    first_revision = manager.revision(file_id)
+
+    manager.update(file_id, "one").should be_false
+    manager.revision(file_id).should eq(first_revision)
+
+    manager.update(file_id, "two").should be_true
+    manager.revision(file_id).should be > first_revision
+    manager.workspace_revision.should eq(manager.revision(file_id))
+  end
 end
