@@ -19,9 +19,9 @@ for future name resolution, type checking, and compilation stages.
   lexical environments, control flow, and hygienic macro variables.
 - `SourceManager` and `QueryDb` caching for parse, syntax, index, and expansion
   queries with automatic revision-based invalidation.
-- `SyntaxTree` / `SyntaxNode` named declaration, call, type, body, parameter,
-  control-flow condition, traversal, cursor lookup, documentation, and UTF-16
-  position queries for editor and compiler consumers.
+- `SyntaxTree` / `SyntaxNode` named declaration, callee/receiver/argument,
+  parameter type/default, body, control-flow condition, traversal, cursor lookup,
+  documentation, and UTF-16 position queries for editor and compiler consumers.
 - Compatibility checks against the actual upstream Crystal 1.21 lexer/parser
   spec inputs. Facet currently matches Crystal::Parser acceptance/rejection on
   all 4,378 unique parser inputs. Every accepted input must retain each
@@ -105,13 +105,14 @@ reachable representation is a DAG, but cycles are rejected.
 
 ```crystal
 manager = Facet::Compiler::SourceManager.new
-file_id = manager.add("class Greeter; def hello(name); end; end", "greeter.cr")
+file_id = manager.add("class Greeter; def hello(name : String); end; end", "greeter.cr")
 queries = Facet::Compiler::QueryDb.new(manager)
 tree = queries.syntax(file_id)
 
 method = tree.nodes(Facet::Compiler::NodeKind::Def).first
 puts method.name                         # hello
 puts method.parameters.first.name       # name
+puts method.parameters.first.declared_type.try(&.text) # String
 puts tree.node_at(method.span.start)     # smallest node at the cursor
 puts tree.position_at(method.span.start) # zero-based UTF-16 editor position
 ```
@@ -120,7 +121,9 @@ The compact arena remains Facet's native AST. `SyntaxTree` is an indexed query
 facade over it, not a compatibility copy of Crystal's AST. It centralizes child
 roles, parent/ancestor traversal, qualified names, name spans, contiguous doc
 comments, control-flow conditions, byte-offset cursor lookup, and UTF-8/UTF-16
-conversion so downstream tools do not depend on arena layout details.
+conversion so downstream tools do not depend on arena layout details. Call
+queries expose `callee`, `call_name`, `receiver`, positional and named arguments;
+parameter queries expose declared types and default values.
 
 ## Incremental queries
 
