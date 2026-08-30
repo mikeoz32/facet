@@ -34,4 +34,10 @@ describe "Parser upstream parity (hashes, named tuples, tuples)" do
   it_parses "Set {1, 2, 3}"
   it_parses "Set() {1, 2, 3}"
   it_parses "Set(Int32) {1, 2, 3}"
+
+  assert_syntax_error "[**items]"
+  assert_syntax_error "[1, **items]"
+  assert_syntax_error "{**items}"
+  assert_syntax_error "{1 => 2, **items}"
+  assert_syntax_error "{foo : 1}"
 end

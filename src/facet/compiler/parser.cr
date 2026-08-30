@@ -3518,7 +3518,11 @@ module Facet
         children = [] of NodeId
         if current.kind != TokenKind::RBracket
           loop do
-            children << parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RBracket })
+            child = parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RBracket })
+            if @arena.node(child).kind == NodeKind::DoubleSplat
+              @diagnostics << Diagnostic.new(start.span, "unterminated array literal")
+            end
+            children << child
             if current.kind == TokenKind::Comma &&
                newline_between?(node_span(children.last).finish, current.span.start)
               @diagnostics << Diagnostic.new(current.span, "expecting token ']', not ','")
@@ -3556,6 +3560,11 @@ module Facet
         named_tuple_keys = nil
         if current.kind != TokenKind::RBrace
           loop do
+            if current.kind != TokenKind::String && named_arg_name_token?(current.kind) &&
+               peek1.kind == TokenKind::Colon && !adjacent?(current, peek1)
+              value = peek2
+              @diagnostics << Diagnostic.new(value.span, "unexpected token: \"#{crystal_diagnostic_token_text(value)}\"")
+            end
             entry, entry_mode = parse_brace_entry(entries.empty?)
             entries << entry
             if mode == :unknown
@@ -3642,6 +3651,7 @@ module Facet
       private def parse_brace_entry(first_entry : Bool) : Tuple(NodeId, Symbol)
         if current.kind == TokenKind::StarStar
           star = advance
+          @diagnostics << Diagnostic.new(star.span, "unexpected token: \"**\"")
           value = parse_expression(0, -> { current.kind == TokenKind::Comma || current.kind == TokenKind::RBrace })
           span = Span.new(star.span.start, node_span(value).finish)
           return {@arena.add_node(NodeKind::DoubleSplat, span, [value]), :hash}
