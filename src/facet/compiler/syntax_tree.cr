@@ -400,7 +400,8 @@ module Facet
       def parameters : Array(SyntaxNode)
         index = case kind
                 when NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun then 1
-                when NodeKind::Block, NodeKind::CallWithBlock         then 0
+                when NodeKind::Block                                  then 0
+                when NodeKind::CallWithBlock                          then 1
                 else                                                       -1
                 end
         return [] of SyntaxNode if index < 0
@@ -417,10 +418,12 @@ module Facet
 
       def callee : SyntaxNode?
         case kind
-        when NodeKind::Call, NodeKind::CallWithBlock
+        when NodeKind::Call
           child(0)
+        when NodeKind::CallWithBlock
+          child(0).try(&.callee)
         when NodeKind::Binary
-          member_access? ? child(1).try { |right| right.kind == NodeKind::Call ? right.callee : right } : nil
+          member_access? ? child(1).try { |right| {NodeKind::Call, NodeKind::CallWithBlock}.includes?(right.kind) ? right.callee : right } : nil
         else
           nil
         end
@@ -434,9 +437,9 @@ module Facet
         if kind == NodeKind::Call
           child(1).try(&.children) || [] of SyntaxNode
         elsif kind == NodeKind::CallWithBlock
-          callee.try(&.arguments) || [] of SyntaxNode
+          child(0).try(&.arguments) || [] of SyntaxNode
         elsif kind == NodeKind::Binary && member_access?
-          child(1).try { |right| right.kind == NodeKind::Call ? right.arguments : [] of SyntaxNode } || [] of SyntaxNode
+          child(1).try { |right| {NodeKind::Call, NodeKind::CallWithBlock}.includes?(right.kind) ? right.arguments : [] of SyntaxNode } || [] of SyntaxNode
         else
           [] of SyntaxNode
         end
@@ -450,7 +453,7 @@ module Facet
         if kind == NodeKind::Binary
           return member_access? ? child(0) : nil
         end
-        call = kind == NodeKind::CallWithBlock ? callee : self
+        call = kind == NodeKind::CallWithBlock ? child(0) : self
         return nil unless call && call.kind == NodeKind::Call
         target = call.callee
         return nil unless target && target.kind == NodeKind::Binary

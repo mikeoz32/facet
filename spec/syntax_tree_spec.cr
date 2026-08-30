@@ -116,6 +116,25 @@ describe Facet::Compiler::SyntaxTree do
     named.name_span.try { |span| source.text.byte_slice(span.start, span.length) }.should eq("cached")
   end
 
+  it "delegates call roles through blocks and member access" do
+    source = Facet::Compiler::Source.new(<<-CRYSTAL)
+      items.each(limit: 1) do |item|
+        item
+      end
+    CRYSTAL
+    tree = Facet::Compiler::SyntaxTree.new(Facet::Compiler::Parser.new(source).parse_file)
+
+    block_call = tree.nodes(Facet::Compiler::NodeKind::CallWithBlock).first
+    block_call.call_name.should eq("each")
+    block_call.arguments.map(&.text).should eq(["limit: 1"])
+    block_call.parameters.map(&.name).should eq(["item"])
+
+    member_call = tree.nodes(Facet::Compiler::NodeKind::Binary).find(&.receiver).not_nil!
+    member_call.call_name.should eq("each")
+    member_call.receiver.try(&.symbol_name).should eq("items")
+    member_call.arguments.map(&.text).should eq(["limit: 1"])
+  end
+
   it "converts byte offsets to UTF-8 and UTF-16 editor positions" do
     source = Facet::Compiler::Source.new("a😀b\nnext")
     index = Facet::Compiler::LineIndex.new(source)
