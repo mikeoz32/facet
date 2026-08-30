@@ -1,50 +1,4 @@
 module UpstreamSupport
-  SEMANTIC_CONTAINER_KINDS = {
-    Facet::Compiler::NodeKind::File,
-    Facet::Compiler::NodeKind::Expressions,
-    Facet::Compiler::NodeKind::Def,
-    Facet::Compiler::NodeKind::MacroDef,
-    Facet::Compiler::NodeKind::Class,
-    Facet::Compiler::NodeKind::Module,
-    Facet::Compiler::NodeKind::Struct,
-    Facet::Compiler::NodeKind::Enum,
-    Facet::Compiler::NodeKind::Lib,
-    Facet::Compiler::NodeKind::Fun,
-    Facet::Compiler::NodeKind::Call,
-    Facet::Compiler::NodeKind::Assign,
-    Facet::Compiler::NodeKind::Binary,
-    Facet::Compiler::NodeKind::Block,
-    Facet::Compiler::NodeKind::If,
-    Facet::Compiler::NodeKind::Unless,
-    Facet::Compiler::NodeKind::While,
-    Facet::Compiler::NodeKind::Until,
-    Facet::Compiler::NodeKind::Case,
-    Facet::Compiler::NodeKind::When,
-    Facet::Compiler::NodeKind::For,
-    Facet::Compiler::NodeKind::Begin,
-    Facet::Compiler::NodeKind::Rescue,
-    Facet::Compiler::NodeKind::Ensure,
-    Facet::Compiler::NodeKind::CallWithBlock,
-  }
-
-  SIGNIFICANT_TOKEN_KINDS = {
-    Facet::Compiler::TokenKind::Identifier,
-    Facet::Compiler::TokenKind::InstanceVar,
-    Facet::Compiler::TokenKind::ClassVar,
-    Facet::Compiler::TokenKind::GlobalVar,
-    Facet::Compiler::TokenKind::Annotation,
-    Facet::Compiler::TokenKind::Symbol,
-    Facet::Compiler::TokenKind::Number,
-    Facet::Compiler::TokenKind::String,
-    Facet::Compiler::TokenKind::Regex,
-    Facet::Compiler::TokenKind::Char,
-    Facet::Compiler::TokenKind::KeywordNil,
-    Facet::Compiler::TokenKind::KeywordTrue,
-    Facet::Compiler::TokenKind::KeywordFalse,
-    Facet::Compiler::TokenKind::KeywordSelf,
-    Facet::Compiler::TokenKind::KeywordSuper,
-  }
-
   def self.validate_ast_integrity(ast : Facet::Compiler::AstFile) : Nil
     source = ast.source
     root = ast.node(ast.root)
@@ -68,12 +22,7 @@ module UpstreamSupport
       raise "lexer did not consume the complete source"
     end
 
-    missing = tokens.reject(&.eof?).select do |token|
-      SIGNIFICANT_TOKEN_KINDS.includes?(token.kind) && ast.arena.nodes.none? do |node|
-        !SEMANTIC_CONTAINER_KINDS.includes?(node.kind) &&
-          node.span.start <= token.span.start && node.span.finish >= token.span.finish
-      end
-    end
+    missing = Facet::Compiler::AstIntegrity.missing_semantic_tokens(ast, tokens)
     unless missing.empty?
       details = missing.first(8).map { |token| "#{token.kind}@#{token.span.start}" }.join(", ")
       raise "significant tokens missing from bounded semantic AST nodes: #{details}"

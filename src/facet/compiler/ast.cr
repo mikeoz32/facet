@@ -76,6 +76,21 @@ module Facet
       MacroVar
       Require
       Ternary
+      Destructure
+      MacroLiteral
+    end
+
+    # High bits are reserved for semantic distinctions that share a compact
+    # NodeKind representation. Low bits remain available for kind-specific
+    # storage details (for example range exclusivity and typed literals).
+    enum SemanticFlag : UInt16
+      Abstract   = 0x0100_u16
+      Private    = 0x0200_u16
+      Protected  = 0x0400_u16
+      Union      = 0x0800_u16
+      Select     = 0x1000_u16
+      Exhaustive = 0x2000_u16
+      Escaped    = 0x4000_u16
     end
 
     enum LiteralKind
@@ -107,8 +122,12 @@ module Facet
         @first_child : Int32,
         @child_count : Int16,
         @flags : UInt16,
-        @payload_index : Int32
+        @payload_index : Int32,
       )
+      end
+
+      def semantic_flag?(flag : SemanticFlag) : Bool
+        (@flags & flag.value) != 0
       end
     end
 
@@ -159,7 +178,7 @@ module Facet
         span : Span,
         children : Array(NodeId) = [] of NodeId,
         payload_index : Int32 = -1,
-        flags : UInt16 = 0_u16
+        flags : UInt16 = 0_u16,
       ) : NodeId
         first_child = @edges.size
         children.each { |child| @edges << child }
@@ -173,6 +192,19 @@ module Facet
         )
         @nodes << node
         (@nodes.size - 1).to_i32
+      end
+
+      def add_semantic_flag(node_id : NodeId, flag : SemanticFlag) : NodeId
+        node = @nodes[node_id]
+        @nodes[node_id] = Node.new(
+          node.kind,
+          node.span,
+          node.first_child,
+          node.child_count,
+          node.flags | flag.value,
+          node.payload_index
+        )
+        node_id
       end
 
       def children(node_id : NodeId) : Slice(NodeId)
@@ -279,7 +311,7 @@ module Facet
         @source : Source,
         @root : NodeId,
         @arena : AstArena,
-        @diagnostics : Array(Diagnostic)
+        @diagnostics : Array(Diagnostic),
       )
       end
 

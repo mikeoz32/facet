@@ -111,6 +111,7 @@ safe environment for measuring Facet compatibility before a deeper migration.
 ```bash
 crystal spec
 crystal spec spec/parser_spec.cr
+crystal spec spec/parser/ast_contract_spec.cr
 crystal run scripts/bench_lexer.cr
 crystal run scripts/check_parser_compat.cr
 ```
@@ -125,7 +126,7 @@ example `crystal run scripts/check_parser_compat.cr -- src`.
 
 The stdlib scan only proves that valid files produce no diagnostics. The
 upstream parity checks additionally compare valid and invalid parser inputs,
-validate AST spans and semantic-token retention, and verify that the lexer did
+validate AST spans and semantic-token ownership, and verify that the lexer did
 not silently skip non-trivia bytes.
 
 Capture the inputs from a disposable Crystal 1.21.0 checkout:
@@ -160,9 +161,12 @@ non-trivia gaps rather than requiring identical token-array shapes. It also
 compares whether each input raises a lexer diagnostic. Three source-only cases
 are reported separately because the upstream result depends on mutable lexer
 state (`slash_is_regex` for `/` and `/=`) or on consuming only the heredoc
-opener instead of the whole input. Parser AST node classes also differ;
-acceptance parity and token retention do not yet claim structural or semantic
-AST equivalence with the compiler.
+opener instead of the whole input. Parser AST node classes also differ and are
+not compared with Crystal's tree shape. `spec/parser/ast_contract_spec.cr`
+instead snapshots Facet's own compact contract: node kinds, child ordering,
+symbol/operator payloads, semantic flags, and raw macro segments. The contract
+corpus covers every node kind produced by accepted syntax; `Error`, the unused
+`Const` kind, and rejected global variables are intentionally outside it.
 
 Current Crystal 1.21.0 parity baseline:
 
@@ -170,7 +174,7 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native parser suite | — | 7,173 examples passing; all 4,378 upstream inputs committed locally |
+| Facet native suite | — | 7,277 examples passing; all 4,378 upstream parser inputs committed locally |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often
@@ -183,9 +187,12 @@ Native input and first-diagnostic coverage are complete for the captured
 Crystal 1.21 parser suite. For all 941 rejected inputs, Facet matches Crystal's
 exact first diagnostic message and line/column. The committed fixture gates
 acceptance/rejection, AST span integrity, absence of error nodes in accepted
-trees, semantic-token retention, diagnostic span validity, and the complete
-first-diagnostic oracle. It does not yet claim identical Crystal/Facet AST
-shapes or later recovery diagnostics after the first error.
+trees, semantic-token ownership, diagnostic span validity, and the complete
+first-diagnostic oracle. Significant identifiers and literals must be owned by
+an explicit Facet payload or literal node; container nodes and `Nop` cannot
+satisfy this check. Crystal/Facet AST shapes are intentionally unrelated, and
+later recovery diagnostics after the first error are not yet part of the
+parity oracle.
 
 ## Contributing
 

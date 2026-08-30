@@ -9,18 +9,6 @@ alias F = Facet::Compiler
 
 record Mismatch, index : Int32, expected : String, actual : String, source : String, detail : String
 
-def semantic_leaf?(kind : F::NodeKind) : Bool
-  !{
-    F::NodeKind::File, F::NodeKind::Expressions,
-    F::NodeKind::Def, F::NodeKind::MacroDef, F::NodeKind::Class, F::NodeKind::Module,
-    F::NodeKind::Struct, F::NodeKind::Enum, F::NodeKind::Lib, F::NodeKind::Fun,
-    F::NodeKind::Call, F::NodeKind::Assign, F::NodeKind::Binary, F::NodeKind::Block,
-    F::NodeKind::If, F::NodeKind::Unless, F::NodeKind::While, F::NodeKind::Until,
-    F::NodeKind::Case, F::NodeKind::When, F::NodeKind::For, F::NodeKind::Begin,
-    F::NodeKind::Rescue, F::NodeKind::Ensure, F::NodeKind::CallWithBlock,
-  }.includes?(kind)
-end
-
 trace_path = ARGV[0]? || abort "usage: crystal run scripts/check_upstream_parser_parity.cr -- PARSER_TRACE.b64"
 inputs = File.read_lines(trace_path).map { |line| Base64.decode_string(line) }.uniq
 mismatches = [] of Mismatch
@@ -68,32 +56,11 @@ inputs.each_with_index do |text, index|
     next
   end
 
-  significant = [
-    F::TokenKind::Identifier,
-    F::TokenKind::InstanceVar,
-    F::TokenKind::ClassVar,
-    F::TokenKind::GlobalVar,
-    F::TokenKind::Annotation,
-    F::TokenKind::Symbol,
-    F::TokenKind::Number,
-    F::TokenKind::String,
-    F::TokenKind::Regex,
-    F::TokenKind::Char,
-    F::TokenKind::KeywordNil,
-    F::TokenKind::KeywordTrue,
-    F::TokenKind::KeywordFalse,
-    F::TokenKind::KeywordSelf,
-    F::TokenKind::KeywordSuper,
-  ]
   tokens = F::Lexer.new(source).tokenize_all
-  missing = tokens.reject(&.eof?).select do |token|
-    significant.includes?(token.kind) && ast.arena.nodes.none? do |node|
-      semantic_leaf?(node.kind) && node.span.start <= token.span.start && node.span.finish >= token.span.finish
-    end
-  end
+  missing = F::AstIntegrity.missing_semantic_tokens(ast, tokens)
   unless missing.empty?
     uncovered_tokens += missing.size
-    detail = "semantic tokens without exact AST span: #{missing.first(8).map { |token| "#{token.kind}@#{token.span.start}" }.join(", ")}"
+    detail = "semantic tokens without an explicit AST owner: #{missing.first(8).map { |token| "#{token.kind}@#{token.span.start}" }.join(", ")}"
     mismatches << Mismatch.new(index, "covered AST", "uncovered token", text, detail)
   end
 end
