@@ -914,25 +914,27 @@ module Facet
             case value = iterable.value
             when Array(MacroValue)
               value.each_with_index do |item, item_index|
-                io << expand_macro_iteration(targets, ast, item, item_index.to_i64) do
+                io << expand_macro_iteration(targets, ast, [item, item_index.to_i64] of MacroValue) do
                   expand_template_body(body, ast, index, footprint)
                 end
               end
             when MacroTupleValue
               value.values.each_with_index do |item, item_index|
-                io << expand_macro_iteration(targets, ast, item, item_index.to_i64) do
+                io << expand_macro_iteration(targets, ast, [item, item_index.to_i64] of MacroValue) do
                   expand_template_body(body, ast, index, footprint)
                 end
               end
             when Hash(String, MacroValue)
-              value.each do |key, item|
-                io << expand_macro_iteration(targets, ast, MacroSyntaxValue.string(key), item) do
+              value.each_with_index do |(key, item), item_index|
+                values = [MacroSyntaxValue.string(key), item, item_index.to_i64] of MacroValue
+                io << expand_macro_iteration(targets, ast, values) do
                   expand_template_body(body, ast, index, footprint)
                 end
               end
             when MacroHashValue
-              value.entries.each do |entry|
-                io << expand_macro_iteration(targets, ast, entry.key, entry.value) do
+              value.entries.each_with_index do |entry, item_index|
+                values = [entry.key, entry.value, item_index.to_i64] of MacroValue
+                io << expand_macro_iteration(targets, ast, values) do
                   expand_template_body(body, ast, index, footprint)
                 end
               end
@@ -942,7 +944,7 @@ module Facet
               if first && last
                 finish = value.exclusive ? last - 1 : last
                 Range.new(first, finish).each_with_index do |item, item_index|
-                  io << expand_macro_iteration(targets, ast, item, item_index.to_i64) do
+                  io << expand_macro_iteration(targets, ast, [item, item_index.to_i64] of MacroValue) do
                     expand_template_body(body, ast, index, footprint)
                   end
                 end
@@ -980,24 +982,19 @@ module Facet
         expand_text(ast, macros, index, body_span, footprint)
       end
 
-      private def macro_iteration_env(targets : Slice(NodeId), ast : AstFile, first : MacroValue, second : MacroValue) : Hash(String, MacroValue)
+      private def macro_iteration_env(targets : Slice(NodeId), ast : AstFile, values : Array(MacroValue)) : Hash(String, MacroValue)
         env = current_macro_env.dup
-        if target = targets[0]?
+        targets.each_with_index do |target, index|
           if name = macro_target_name(target, ast)
-            env[name] = first
-          end
-        end
-        if target = targets[1]?
-          if name = macro_target_name(target, ast)
-            env[name] = second
+            env[name] = values[index]? || nil
           end
         end
         env
       end
 
-      private def expand_macro_iteration(targets : Slice(NodeId), ast : AstFile, first : MacroValue, second : MacroValue, & : -> String) : String
+      private def expand_macro_iteration(targets : Slice(NodeId), ast : AstFile, values : Array(MacroValue), & : -> String) : String
         parent = current_macro_env
-        env = macro_iteration_env(targets, ast, first, second)
+        env = macro_iteration_env(targets, ast, values)
         target_names = targets.compact_map { |target| macro_target_name(target, ast) }
         text = expand_with_env(env) { yield }
         env.each do |name, value|
@@ -1159,13 +1156,18 @@ module Facet
                 receiver = eval_value(receiver_id, ast)
                 return nil unless receiver
                 return MacroEvaluation.new(nil) if operator == TokenKind::SafeNav && receiver.value.nil?
+                name = ast.arena.symbols[member.payload_index]
                 args = [] of MacroValue
                 syntax_tree(ast).node(node_id).arguments.each do |argument|
                   evaluation = eval_value(argument.id, ast)
-                  return nil unless evaluation
-                  args << evaluation.value
+                  if evaluation
+                    args << evaluation.value
+                  elsif name == "is_a?"
+                    args << MacroSyntaxValue.code(argument.text)
+                  else
+                    return nil
+                  end
                 end
-                name = ast.arena.symbols[member.payload_index]
                 return apply_macro_method(receiver.value, name, args)
               end
             end
@@ -1199,6 +1201,13 @@ module Facet
               right = macro_scalar_text(values[1])
               return nil unless left && right
               return MacroEvaluation.new(compare_macro_versions(left, right).to_i64)
+            end
+            if {"sizeof", "alignof"}.includes?(name)
+              arguments = syntax_tree(ast).node(node_id).arguments
+              return nil unless arguments.size == 1
+              # Facet has no codegen target data layout. Preserve the compiler's
+              # macro value shape without claiming that this is the target size.
+              return MacroEvaluation.new(MacroNumberValue.new(0_i128, MacroNumberKind::I32, "0", false))
             end
           end
           nil
@@ -1421,8 +1430,13 @@ module Facet
           if args_id = call_children[1]?
             ast.children(args_id).each do |arg_id|
               evaluation = eval_value(arg_id, ast)
-              return nil unless evaluation
-              args << evaluation.value
+              if evaluation
+                args << evaluation.value
+              elsif name == "is_a?"
+                args << MacroSyntaxValue.code(ast.node_string(arg_id))
+              else
+                return nil
+              end
             end
           end
         when NodeKind::CallWithBlock
@@ -2578,6 +2592,9 @@ module Facet
 
       private def macro_value_is_a?(value : MacroValue, type_name : String) : Bool
         normalized = type_name.lchop("::")
+        if normalized.includes?('|')
+          return normalized.split('|').any? { |member| macro_value_is_a?(value, member.strip) }
+        end
         return true if normalized == "ASTNode" && !value.is_a?(String)
         case value
         when MacroSyntaxValue

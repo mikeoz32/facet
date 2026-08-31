@@ -2,11 +2,15 @@
 
 ## Unreleased
 
-- Added a generated Crystal 1.21 macro specification corpus with a complete
-  assertion/exclusion inventory and a no-regression runner. Facet now matches
-  exact output for all 371/371 self-contained upstream evaluator contracts;
-  602 contextual evaluator assertions and 133 semantic examples remain tracked
-  explicitly for the next fixture layers.
+- Added static and runtime-generated Crystal 1.21 macro specification corpora
+  with complete assertion/context inventories and no-regression runners. Facet
+  now matches exact output for 506/900 portable contracts executed by the
+  official evaluator specs (including all 371/371 statically self-contained
+  contracts); 117 program-context contracts and 133 semantic examples remain
+  tracked explicitly for the next fixture layers.
+- Added Crystal-compatible macro hash iteration indices, union type arguments
+  for `is_a?`, and target-layout-neutral number values for `sizeof`/`alignof`
+  introspection.
 - Expanded the Facet-native macro value model for typed numbers, chars, regexes,
   ranges, arrays, tuples, hashes, and named tuples. Added exact collection
   rendering and slicing/mutation, numeric kind preservation, regex/string

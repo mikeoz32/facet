@@ -33,6 +33,39 @@ record UpstreamMacroParityResult,
   def matches?(fixture_case : UpstreamMacroFixtureCase) : Bool
     diagnostics.empty? && actual == fixture_case.expected
   end
+
+  def matches?(fixture_case : UpstreamRuntimeMacroFixtureCase) : Bool
+    diagnostics.empty? && actual == fixture_case.expected
+  end
+end
+
+record UpstreamRuntimeMacroArgument,
+  name : String,
+  source : String,
+  kind : String do
+  include JSON::Serializable
+end
+
+record UpstreamRuntimeMacroFixtureHeader,
+  kind : String,
+  crystal_version : String,
+  crystal_revision : String,
+  case_count : Int32,
+  direct_case_count : Int32,
+  contextual_case_count : Int32,
+  argument_case_count : Int32 do
+  include JSON::Serializable
+end
+
+record UpstreamRuntimeMacroFixtureCase,
+  source_file : String,
+  line : Int32,
+  body : String,
+  expected : String,
+  flags : JSON::Any,
+  contextual_program : Bool,
+  arguments : Array(UpstreamRuntimeMacroArgument) do
+  include JSON::Serializable
 end
 
 module UpstreamMacroParity
@@ -42,6 +75,13 @@ module UpstreamMacroParity
     lines = File.read_lines(path)
     header = UpstreamMacroFixtureHeader.from_json(lines.shift)
     cases = lines.map { |line| UpstreamMacroFixtureCase.from_json(line) }
+    {header, cases}
+  end
+
+  def load_runtime(path : String) : {UpstreamRuntimeMacroFixtureHeader, Array(UpstreamRuntimeMacroFixtureCase)}
+    lines = File.read_lines(path)
+    header = UpstreamRuntimeMacroFixtureHeader.from_json(lines.shift)
+    cases = lines.map { |line| UpstreamRuntimeMacroFixtureCase.from_json(line) }
     {header, cases}
   end
 
@@ -55,6 +95,37 @@ module UpstreamMacroParity
     definition = definition_parser.parse_file
 
     call_source = Facet::Compiler::Source.new(macro_name, "upstream_macro_case_#{index}.cr")
+    call_parser = Facet::Compiler::Parser.new(call_source)
+    call = call_parser.parse_file
+    diagnostics = (definition_parser.diagnostics + call_parser.diagnostics).map(&.message)
+    return UpstreamMacroParityResult.new(nil, diagnostics, [] of String) unless diagnostics.empty?
+
+    program_index = Facet::Compiler::Indexer.index_macros([definition])
+    expander = Facet::Compiler::MacroExpander.new(program_index)
+    expanded = expander.expand(call, program_index)
+    diagnostics.concat(expander.diagnostics.map(&.message))
+    output_diagnostics = expanded.diagnostics.map(&.message)
+    output_diagnostics.each { |message| diagnostics.delete(message) }
+    UpstreamMacroParityResult.new(expanded.source.text.chomp(';'), diagnostics, output_diagnostics)
+  rescue ex : Exception
+    UpstreamMacroParityResult.new(nil, ["#{ex.class}: #{ex.message}"], [] of String)
+  end
+
+  def expand(fixture_case : UpstreamRuntimeMacroFixtureCase, index : Int32) : UpstreamMacroParityResult
+    macro_name = "__facet_upstream_runtime_macro_#{index}"
+    parameters = fixture_case.arguments.map(&.name).join(", ")
+    definition_source = Facet::Compiler::Source.new(
+      "macro #{macro_name}(#{parameters});#{fixture_case.body};end",
+      "#{fixture_case.source_file}:#{fixture_case.line}"
+    )
+    definition_parser = Facet::Compiler::Parser.new(definition_source)
+    definition = definition_parser.parse_file
+
+    arguments = fixture_case.arguments.map(&.source).join(", ")
+    call_source = Facet::Compiler::Source.new(
+      "#{macro_name}(#{arguments})",
+      "upstream_runtime_macro_case_#{index}.cr"
+    )
     call_parser = Facet::Compiler::Parser.new(call_source)
     call = call_parser.parse_file
     diagnostics = (definition_parser.diagnostics + call_parser.diagnostics).map(&.message)

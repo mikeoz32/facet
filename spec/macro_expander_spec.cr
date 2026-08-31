@@ -87,6 +87,8 @@ describe Facet::Compiler::MacroExpander do
       {% if :value.responds_to?(:id) && !1.nil? %}
         methods = true
       {% end %}
+      union_true = {{1.is_a?(NumberLiteral | StringLiteral)}}
+      union_false = {{:value.is_a?(NumberLiteral | StringLiteral)}}
     CR
     ast = Facet::Compiler::Parser.new(source).parse_file
     expander = Facet::Compiler::MacroExpander.new
@@ -97,6 +99,22 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.should contain("identifier = value")
     expanded.source.text.should contain("predicates = true")
     expanded.source.text.should contain("methods = true")
+    expanded.source.text.should contain("union_true = true")
+    expanded.source.text.should contain("union_false = false")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "exposes sizeof and alignof results as macro number literals" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      {{sizeof(Int32).is_a?(NumberLiteral)}}
+      {{alignof(String).is_a?(NumberLiteral)}}
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand(ast)
+
+    expanded.source.text.lines.map(&.strip).should eq(["true", "true"])
     expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end
@@ -130,11 +148,11 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
-  it "binds macro for hash keys and values" do
+  it "binds macro for hash keys, values, and indices" do
     src = Facet::Compiler::Source.new(<<-CR)
       {
-      {% for key, value in {"a" => 1, "b" => 2} %}
-        {{key}} => {{value}},
+      {% for key, value, index in {"a" => 1, "b" => 2} %}
+        {{key}} => { {{value}}, {{index}} },
       {% end %}
       }
     CR
@@ -142,8 +160,8 @@ describe Facet::Compiler::MacroExpander do
     expander = Facet::Compiler::MacroExpander.new
     expanded = expander.expand(ast)
 
-    expanded.source.text.should contain(%("a" => 1))
-    expanded.source.text.should contain(%("b" => 2))
+    expanded.source.text.should contain(%("a" => { 1, 0 }))
+    expanded.source.text.should contain(%("b" => { 2, 1 }))
     expander.diagnostics.should be_empty
   end
 

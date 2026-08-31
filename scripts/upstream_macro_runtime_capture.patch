@@ -1,0 +1,66 @@
+diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
+--- a/spec/spec_helper.cr
++++ b/spec/spec_helper.cr
+@@ -3,6 +3,7 @@
+ Crystal::Config.path = "#{__DIR__}/../src"
+ 
+ require "spec"
++require "json"
+ 
+ require "compiler/requires"
+ require "./support/syntax"
+@@ -184,17 +185,53 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+ end
+ 
+ def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
+-  assert_macro(macro_body, expected, expected_pragmas: expected_pragmas, flags: flags, file: file, line: line) { args }
++  program, a_macro, call = prepare_macro_call(macro_body, flags) { args }
++  record_macro_fixture(macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line, contextual_program: false)
++  result, result_pragmas = program.expand_macro(a_macro, call, program, program)
++  result = result.chomp(';')
++  result.should eq(expected), file: file, line: line
++  result_pragmas.should eq(expected_pragmas), file: file, line: line if expected_pragmas
+ end
+ 
+ def assert_macro(macro_body, expected, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__, &)
+   program, a_macro, call = prepare_macro_call(macro_body, flags) { |program| yield program }
++  record_macro_fixture(macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line, contextual_program: true)
+   result, result_pragmas = program.expand_macro(a_macro, call, program, program)
+   result = result.chomp(';')
+   result.should eq(expected), file: file, line: line
+   result_pragmas.should eq(expected_pragmas), file: file, line: line if expected_pragmas
+ end
+ 
++private def record_macro_fixture(macro_body, expected, argument_names, arguments, flags, file, line, *, contextual_program)
++  path = ENV["FACET_MACRO_CAPTURE"]?
++  return unless path
++
++  File.open(path, "a") do |io|
++    JSON.build(io) do |json|
++      json.object do
++        json.field "source_file", file
++        json.field "line", line
++        json.field "body", macro_body
++        json.field "expected", expected
++        json.field "flags", flags
++        json.field "contextual_program", contextual_program
++        json.field "arguments" do
++          json.array do
++            arguments.each_with_index do |node, index|
++              json.object do
++                json.field "name", argument_names[index]
++                json.field "source", node.to_s
++                json.field "kind", node.class.name
++              end
++            end
++          end
++        end
++      end
++    end
++    io << '\n'
++  end
++end
++
+ def assert_macro_error(macro_body, message = nil, args = nil, *, flags = nil, file = __FILE__, line = __LINE__)
+   assert_macro_error(macro_body, message, flags: flags, file: file, line: line) { args }
+ end

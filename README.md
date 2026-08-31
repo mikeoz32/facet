@@ -38,10 +38,11 @@ for future name resolution, type checking, and compilation stages.
   inputs so deeper parity can be tightened without another Crystal checkout.
 - A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
-- A committed Crystal 1.21 macro contract corpus. All 371 self-contained
-  evaluator assertions match exact upstream expansion text. The fixture also
-  inventories 602 contextual assertions and 133 semantic examples that still
-  need richer compiler/type fixtures; see [macro parity](MACRO_PARITY.md).
+- A committed Crystal 1.21 macro contract corpus. Facet matches exact expansion
+  text for 506/900 portable contracts captured from the executing official
+  evaluator specs; all 371 statically self-contained contracts remain exact.
+  Another 117 runtime contracts requiring mutated compiler program state and
+  133 semantic examples remain explicit; see [macro parity](MACRO_PARITY.md).
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
