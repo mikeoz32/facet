@@ -74,4 +74,38 @@ describe Facet::Compiler::Indexer do
     index.macros.has_key?("outer").should be_true
     index.macros.has_key?("generated").should be_false
   end
+
+  it "indexes type members for macro introspection" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      module Outer
+        class Parent
+        end
+
+        class Item < Parent
+          @name : String
+          VALUE = 1
+
+          def initialize(@count : Int32)
+          end
+
+          def render(value : String) : Bool
+          end
+        end
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+
+    index.type_for("Item", "Outer").not_nil!.scope.should eq("Outer::Item")
+    index.methods_for("Outer::Item").map do |ref|
+      Facet::Compiler::SyntaxTree.new(ref.ast).node(ref.node_id).name
+    end.should eq(["initialize", "render"])
+    index.instance_vars_for("Outer::Item").compact_map do |ref|
+      Facet::Compiler::SyntaxTree.new(ref.ast).node(ref.node_id).symbol_name
+    end.uniq.should eq(["@name", "@count"])
+    index.constants_for("Outer::Item").map do |ref|
+      Facet::Compiler::SyntaxTree.new(ref.ast).node(ref.node_id).symbol_name
+    end.should eq(["VALUE"])
+    index.superclass_for("Outer::Item").should eq("Parent")
+  end
 end

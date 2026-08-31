@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added Facet-native type-aware macro values backed by the cross-file program
+  index. Macros can inspect `@type`, resolve indexed and builtin type syntax,
+  enumerate methods, instance variables, and constants, inspect method/argument
+  metadata, traverse explicit superclasses/ancestors, and test explicit subtype
+  relationships. Type-aware expansion consumers now participate in conservative
+  workspace-revision invalidation so declaration edits cannot leave stale
+  generated ASTs.
+- Added macro collection `sort`, `reverse`, `uniq`, and `compact` operations and
+  end-to-end cr-analyzer coverage for declarations generated from Facet type
+  introspection.
 - Added a recursive contract validator for Facet's own arena-backed AST and
   applied it to all 3,437 accepted Crystal 1.21 fixture inputs. The gate checks
   reachable graph integrity, cycles, spans, node arity, child roles, payloads,

@@ -32,7 +32,25 @@ module Facet
 
     record MacroBlockValue, body : String, parameters : Array(String)
 
-    alias MacroValue = Int64 | String | Bool | Nil | MacroSyntaxValue | MacroBlockValue | Array(MacroValue) | Hash(String, MacroValue)
+    enum MacroTypeKind
+      Class
+      Module
+      Struct
+      Enum
+      Lib
+      Builtin
+    end
+
+    record MacroTypeValue, name : String, kind : MacroTypeKind
+    record MacroMetaVarValue, name : String, type_name : String?, default_value : String?
+    record MacroMethodValue,
+      name : String,
+      args : Array(MacroMetaVarValue),
+      return_type : String?,
+      body : String?,
+      source : String
+
+    alias MacroValue = Int64 | String | Bool | Nil | MacroSyntaxValue | MacroBlockValue | MacroTypeValue | MacroMetaVarValue | MacroMethodValue | Array(MacroValue) | Hash(String, MacroValue)
     alias MacroArguments = Tuple(Array(MacroValue), Hash(String, MacroValue), MacroBlockValue?)
 
     # Keep a successful `nil` or `false` macro value distinct from a failed
@@ -68,6 +86,8 @@ module Facet
         @file_cache = {} of UInt64 => AstFile
         @syntax_trees = {} of UInt64 => SyntaxTree
         @last_footprint = nil
+        @active_index = nil.as(ProgramIndex?)
+        @active_footprint = nil.as(MacroFootprint?)
       end
 
       def expand_all(asts : Array(AstFile), index : ProgramIndex? = nil) : Array(AstFile)
@@ -93,33 +113,42 @@ module Facet
         passes = 0
         seen_texts = Set(String).new
         footprint ||= MacroFootprint.new
+        previous_index = @active_index
+        previous_footprint = @active_footprint
+        @active_index = idx
+        @active_footprint = footprint
 
-        loop do
-          text_sig = current_ast.source.text
-          if seen_texts.includes?(text_sig)
-            @diagnostics << Diagnostic.new(Span.new(0, current_ast.source.size), "macro expansion cycle detected")
-            break
+        begin
+          loop do
+            text_sig = current_ast.source.text
+            if seen_texts.includes?(text_sig)
+              @diagnostics << Diagnostic.new(Span.new(0, current_ast.source.size), "macro expansion cycle detected")
+              break
+            end
+            seen_texts << text_sig
+
+            macros = [] of NodeId
+            collect_macros(current_ast.root, current_ast, macros, idx, footprint: footprint)
+            break if macros.empty?
+
+            if passes >= @max_passes
+              @diagnostics << Diagnostic.new(Span.new(0, current_ast.source.size), "macro expansion exceeded max passes (#{@max_passes})")
+              break
+            end
+
+            expanded_text = expand_text(current_ast, macros, idx, nil, footprint)
+            site = ExpansionSite.new(current_ast.source, Span.new(0, current_ast.source.size))
+            new_source = Source.new(expanded_text, current_ast.source.filename, SourceKind::Virtual, site)
+            parser = Parser.new(new_source)
+            next_ast = parser.parse_file
+            parser.diagnostics.each { |d| @diagnostics << d }
+
+            current_ast = next_ast
+            passes += 1
           end
-          seen_texts << text_sig
-
-          macros = [] of NodeId
-          collect_macros(current_ast.root, current_ast, macros, idx, footprint: footprint)
-          break if macros.empty?
-
-          if passes >= @max_passes
-            @diagnostics << Diagnostic.new(Span.new(0, current_ast.source.size), "macro expansion exceeded max passes (#{@max_passes})")
-            break
-          end
-
-          expanded_text = expand_text(current_ast, macros, idx, nil, footprint)
-          site = ExpansionSite.new(current_ast.source, Span.new(0, current_ast.source.size))
-          new_source = Source.new(expanded_text, current_ast.source.filename, SourceKind::Virtual, site)
-          parser = Parser.new(new_source)
-          next_ast = parser.parse_file
-          parser.diagnostics.each { |d| @diagnostics << d }
-
-          current_ast = next_ast
-          passes += 1
+        ensure
+          @active_index = previous_index
+          @active_footprint = previous_footprint
         end
 
         footprint.merge_macro_uses
@@ -334,12 +363,13 @@ module Facet
         name = macro_call_name(node_id, ast)
         return nil unless name
         footprint.try &.macro_use(name)
-        refs = index.try { |value| value.macros_for(name, lexical_scope(node_id, ast)) }
+        call_scope = lexical_scope(node_id, ast)
+        refs = index.try { |value| value.macros_for(name, call_scope) }
         return builtin_macro_expansion(node_id, ast) unless refs && !refs.empty?
 
         call_args = macro_call_args(node_id, ast)
         ref = select_macro_ref(refs, node_id, ast)
-        key = cache_key(ref, call_args)
+        key = cache_key(ref, call_args, call_scope)
         cacheable = macro_cacheable?(ref)
         if cacheable
           if cached = @cache[key]?
@@ -347,7 +377,7 @@ module Facet
             return cached
           end
         end
-        result = expand_macro_def(ref, call_args, index, footprint)
+        result = expand_macro_def(ref, call_args, index, footprint, call_scope)
         @cache[key] = result if cacheable
         result
       end
@@ -585,11 +615,22 @@ module Facet
         evaluation ? evaluation.value : MacroSyntaxValue.code(ast.node_string(node_id))
       end
 
-      private def expand_macro_def(ref : DeclRef, args : MacroArguments, index : ProgramIndex?, footprint : MacroFootprint?) : String
+      private def expand_macro_def(
+        ref : DeclRef,
+        args : MacroArguments,
+        index : ProgramIndex?,
+        footprint : MacroFootprint?,
+        call_scope : String,
+      ) : String
         params_id = ref.ast.children(ref.node_id)[1]?
         body_id = ref.ast.children(ref.node_id)[3]?
         return "" unless body_id && params_id
         env = build_param_env(params_id, ref.ast, args)
+        unless call_scope.empty?
+          if type = macro_type_value(call_scope, index, absolute: true)
+            env["@type"] = type
+          end
+        end
         @env_stack << env
         @macro_var_stack << {} of String => String
         text = begin
@@ -605,14 +646,14 @@ module Facet
         text
       end
 
-      private def cache_key(ref : DeclRef, args : MacroArguments) : String
+      private def cache_key(ref : DeclRef, args : MacroArguments, call_scope : String) : String
         def_node = ref.ast.node(ref.node_id)
         name_id = ref.ast.children(ref.node_id)[0]
         name = ref.ast.arena.symbols[ref.ast.node(name_id).payload_index]
         body_id = ref.ast.children(ref.node_id)[3]?
         body_fp = body_id ? fingerprint_text(ref.ast.source, ref.ast.node(body_id).span) : "nil"
         args_fp = fingerprint_args(args)
-        "#{ref.scope}|#{name}|#{body_fp}|#{args_fp}"
+        "#{ref.scope}|#{call_scope}|#{name}|#{body_fp}|#{args_fp}"
       end
 
       private def macro_cacheable?(ref : DeclRef) : Bool
@@ -708,6 +749,12 @@ module Facet
           "#{value.kind}:#{value.source}"
         when MacroBlockValue
           "block(#{value.parameters.join(",")}){#{value.body}}"
+        when MacroTypeValue
+          "type(#{value.kind}:#{value.name})"
+        when MacroMetaVarValue
+          "meta-var(#{value.name}:#{value.type_name}=#{value.default_value})"
+        when MacroMethodValue
+          "method(#{value.name}:#{value.source})"
         when Array(MacroValue)
           "[" + value.map { |v| fingerprint_value(v) }.join(",") + "]"
         when Hash(String, MacroValue)
@@ -889,6 +936,21 @@ module Facet
           name = ast.arena.symbols[node.payload_index]
           env = current_macro_env
           return MacroEvaluation.new(env[name]) if env.has_key?(name)
+          MacroEvaluation.new(MacroSyntaxValue.identifier(name))
+        when NodeKind::Const, NodeKind::Path, NodeKind::TypeApply
+          source = ast.node_string(node_id)
+          MacroEvaluation.new(MacroSyntaxValue.code(source))
+        when NodeKind::InstanceVar
+          name = ast.arena.symbols[node.payload_index]
+          env = current_macro_env
+          return MacroEvaluation.new(env[name]) if env.has_key?(name)
+          if name == "@type"
+            mark_type_introspection
+            scope = lexical_scope(node_id, ast)
+            if type = macro_type_value(scope, @active_index, absolute: true)
+              return MacroEvaluation.new(type)
+            end
+          end
           MacroEvaluation.new(MacroSyntaxValue.identifier(name))
         when NodeKind::MacroVar
           value = expand_macro_var(node_id, ast)
@@ -1074,6 +1136,10 @@ module Facet
         args : Array(MacroValue),
         block : MacroEvalBlock? = nil,
       ) : MacroEvaluation?
+        if evaluation = apply_type_aware_macro_method(receiver, name, args)
+          return evaluation
+        end
+
         case name
         when "map", "map_with_index"
           return nil unless block && args.empty?
@@ -1155,6 +1221,22 @@ module Facet
                     return nil
                   end
           MacroEvaluation.new(value)
+        when "sort"
+          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
+          MacroEvaluation.new(sort_macro_values(receiver))
+        when "reverse"
+          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
+          MacroEvaluation.new(receiver.reverse)
+        when "uniq"
+          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
+          unique = [] of MacroValue
+          receiver.each do |value|
+            unique << value unless unique.any? { |existing| existing == value }
+          end
+          MacroEvaluation.new(unique)
+        when "compact"
+          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
+          MacroEvaluation.new(receiver.reject(&.nil?))
         when "keys"
           return nil unless receiver.is_a?(Hash(String, MacroValue)) && args.empty?
           MacroEvaluation.new(receiver.keys.map { |key| MacroSyntaxValue.string(key).as(MacroValue) })
@@ -1263,6 +1345,229 @@ module Facet
         end
       end
 
+      private def apply_type_aware_macro_method(
+        receiver : MacroValue,
+        name : String,
+        args : Array(MacroValue),
+      ) : MacroEvaluation?
+        case receiver
+        when MacroSyntaxValue
+          return nil unless {"resolve", "resolve?"}.includes?(name) && args.empty?
+          mark_type_introspection
+          resolved = macro_type_value(receiver.value, @active_index, current_type_scope)
+          return MacroEvaluation.new(resolved) if resolved
+          return MacroEvaluation.new(nil) if name == "resolve?"
+        when MacroTypeValue
+          return nil unless args.empty?
+          mark_type_introspection
+          case name
+          when "name"
+            return MacroEvaluation.new(MacroSyntaxValue.identifier(receiver.name))
+          when "methods"
+            methods = macro_methods(receiver).map(&.as(MacroValue))
+            return MacroEvaluation.new(methods)
+          when "instance_vars"
+            variables = macro_instance_vars(receiver).map(&.as(MacroValue))
+            return MacroEvaluation.new(variables)
+          when "constants"
+            constants = macro_constants(receiver).map(&.as(MacroValue))
+            return MacroEvaluation.new(constants)
+          when "superclass"
+            return MacroEvaluation.new(macro_superclass(receiver))
+          when "ancestors"
+            ancestors = macro_ancestors(receiver).map(&.as(MacroValue))
+            return MacroEvaluation.new(ancestors)
+          when "class?"
+            return MacroEvaluation.new(receiver.kind == MacroTypeKind::Class)
+          when "module?"
+            return MacroEvaluation.new(receiver.kind == MacroTypeKind::Module)
+          when "struct?"
+            return MacroEvaluation.new(receiver.kind == MacroTypeKind::Struct)
+          when "enum?"
+            return MacroEvaluation.new(receiver.kind == MacroTypeKind::Enum)
+          when "lib?"
+            return MacroEvaluation.new(receiver.kind == MacroTypeKind::Lib)
+          end
+        when MacroMethodValue
+          return nil unless args.empty?
+          case name
+          when "name"
+            return MacroEvaluation.new(MacroSyntaxValue.identifier(receiver.name))
+          when "args"
+            return MacroEvaluation.new(receiver.args.map(&.as(MacroValue)))
+          when "return_type"
+            value = receiver.return_type.try { |source| MacroSyntaxValue.code(source).as(MacroValue) }
+            return MacroEvaluation.new(value)
+          when "body"
+            value = receiver.body.try { |source| MacroSyntaxValue.code(source).as(MacroValue) }
+            return MacroEvaluation.new(value)
+          when "source"
+            return MacroEvaluation.new(MacroSyntaxValue.code(receiver.source))
+          end
+        when MacroMetaVarValue
+          return nil unless args.empty?
+          case name
+          when "name"
+            return MacroEvaluation.new(MacroSyntaxValue.identifier(receiver.name))
+          when "type"
+            value = receiver.type_name.try { |source| MacroSyntaxValue.code(source).as(MacroValue) }
+            return MacroEvaluation.new(value)
+          when "default_value"
+            value = receiver.default_value.try { |source| MacroSyntaxValue.code(source).as(MacroValue) }
+            return MacroEvaluation.new(value)
+          when "has_default_value?"
+            return MacroEvaluation.new(!receiver.default_value.nil?)
+          end
+        end
+        nil
+      end
+
+      private def macro_type_value(
+        name : String,
+        index : ProgramIndex?,
+        scope : String? = nil,
+        absolute : Bool = false,
+      ) : MacroTypeValue?
+        normalized = normalize_macro_type_name(name)
+        return nil if normalized.empty?
+        lookup = absolute ? "::#{normalized}" : normalized
+        if ref = index.try(&.type_for(lookup, scope))
+          node = syntax_tree(ref.ast).node(ref.node_id)
+          return MacroTypeValue.new(ref.scope, macro_type_kind(node.kind))
+        end
+        return MacroTypeValue.new(normalized, MacroTypeKind::Builtin) if builtin_type_name?(normalized)
+        nil
+      end
+
+      private def macro_type_kind(kind : NodeKind) : MacroTypeKind
+        case kind
+        when NodeKind::Module then MacroTypeKind::Module
+        when NodeKind::Struct then MacroTypeKind::Struct
+        when NodeKind::Enum   then MacroTypeKind::Enum
+        when NodeKind::Lib    then MacroTypeKind::Lib
+        else                       MacroTypeKind::Class
+        end
+      end
+
+      private def macro_methods(type : MacroTypeValue) : Array(MacroMethodValue)
+        index = @active_index
+        return [] of MacroMethodValue unless index
+        index.methods_for(type.name).compact_map do |ref|
+          node = syntax_tree(ref.ast).node(ref.node_id)
+          name = node.name
+          next unless name
+          args = node.parameters.compact_map { |parameter| macro_meta_var(parameter) }
+          MacroMethodValue.new(
+            name,
+            args,
+            node.return_type.try(&.text),
+            node.body.try(&.text),
+            node.text
+          )
+        end
+      end
+
+      private def macro_instance_vars(type : MacroTypeValue) : Array(MacroMetaVarValue)
+        index = @active_index
+        return [] of MacroMetaVarValue unless index
+        seen = Set(String).new
+        index.instance_vars_for(type.name).compact_map do |ref|
+          node = syntax_tree(ref.ast).node(ref.node_id)
+          name = node.symbol_name.try(&.lstrip('@'))
+          next unless name
+          next if seen.includes?(name)
+          seen << name
+          owner = node.ancestors.find do |ancestor|
+            {NodeKind::Param, NodeKind::VarDecl}.includes?(ancestor.kind)
+          end
+          MacroMetaVarValue.new(name, owner.try(&.declared_type).try(&.text), owner.try(&.value).try(&.text))
+        end
+      end
+
+      private def macro_constants(type : MacroTypeValue) : Array(MacroSyntaxValue)
+        index = @active_index
+        return [] of MacroSyntaxValue unless index
+        seen = Set(String).new
+        index.constants_for(type.name).compact_map do |ref|
+          node = syntax_tree(ref.ast).node(ref.node_id)
+          name = node.symbol_name
+          next unless name
+          next if seen.includes?(name)
+          seen << name
+          MacroSyntaxValue.identifier(name)
+        end
+      end
+
+      private def macro_superclass(type : MacroTypeValue) : MacroTypeValue?
+        index = @active_index
+        return nil unless index
+        name = index.superclass_for(type.name)
+        return nil unless name
+        macro_type_value(name, index, type.name)
+      end
+
+      private def macro_ancestors(type : MacroTypeValue) : Array(MacroTypeValue)
+        ancestors = [] of MacroTypeValue
+        seen = Set(String).new
+        current = type
+        while parent = macro_superclass(current)
+          break if seen.includes?(parent.name)
+          seen << parent.name
+          ancestors << parent
+          current = parent
+        end
+        ancestors
+      end
+
+      private def macro_meta_var(node : SyntaxNode) : MacroMetaVarValue?
+        return nil unless {NodeKind::Param, NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(node.kind)
+        name = node.name.try(&.lstrip('@'))
+        return nil unless name
+        MacroMetaVarValue.new(name, node.declared_type.try(&.text), node.value.try(&.text))
+      end
+
+      private def current_type_scope : String?
+        value = current_macro_env["@type"]?
+        value.is_a?(MacroTypeValue) ? value.name : nil
+      end
+
+      private def mark_type_introspection : Nil
+        @active_footprint.try(&.type_introspection)
+      end
+
+      private def normalize_macro_type_name(name : String) : String
+        normalized = name.strip.lchop("::")
+        normalized = normalized.split('(', 2).first
+        normalized.rchop('?')
+      end
+
+      private def builtin_type_name?(name : String) : Bool
+        {
+          "Nil", "Bool", "Char", "String", "Symbol", "Regex", "Number",
+          "Int8", "Int16", "Int32", "Int64", "Int128",
+          "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
+          "Float32", "Float64", "Array", "Hash", "Tuple", "NamedTuple",
+          "Proc", "Pointer", "Slice", "StaticArray", "Range", "IO",
+        }.includes?(name)
+      end
+
+      private def sort_macro_values(values : Array(MacroValue)) : Array(MacroValue)
+        sorted = values.dup
+        index = 1
+        while index < sorted.size
+          cursor = index
+          while cursor > 0
+            left = macro_scalar_text(sorted[cursor - 1]) || val_to_string(sorted[cursor - 1])
+            right = macro_scalar_text(sorted[cursor]) || val_to_string(sorted[cursor])
+            break unless right < left
+            sorted.swap(cursor - 1, cursor)
+            cursor -= 1
+          end
+          index += 1
+        end
+        sorted
+      end
+
       private def macro_iteration_values(
         receiver : MacroValue,
         parameter_count : Int32,
@@ -1328,6 +1633,12 @@ module Facet
           normalized == "NilLiteral"
         when MacroBlockValue
           normalized == "Block"
+        when MacroTypeValue
+          normalized == "TypeNode"
+        when MacroMethodValue
+          normalized == "Def"
+        when MacroMetaVarValue
+          normalized == "MetaVar"
         else
           false
         end
@@ -1345,6 +1656,13 @@ module Facet
           {"size", "empty?", "keys", "values", "includes?"}.includes?(method_name)
         when MacroBlockValue
           {"body", "args", "empty?"}.includes?(method_name)
+        when MacroTypeValue
+          {"name", "methods", "instance_vars", "constants", "superclass", "ancestors",
+           "class?", "module?", "struct?", "enum?", "lib?"}.includes?(method_name)
+        when MacroMethodValue
+          {"name", "args", "return_type", "body", "source"}.includes?(method_name)
+        when MacroMetaVarValue
+          {"name", "type", "default_value", "has_default_value?"}.includes?(method_name)
         else
           false
         end
@@ -1460,6 +1778,19 @@ module Facet
       end
 
       private def eval_binary(op : TokenKind, left : MacroValue, right : MacroValue) : MacroEvaluation?
+        if op == TokenKind::Less && left.is_a?(MacroTypeValue)
+          right_type = case right
+                       when MacroTypeValue
+                         right
+                       when MacroSyntaxValue
+                         macro_type_value(right.value, @active_index, left.name)
+                       end
+          if right_type
+            mark_type_introspection
+            return MacroEvaluation.new(macro_type_subtype?(left, right_type))
+          end
+        end
+
         case op
         when TokenKind::Plus
           if left.is_a?(Int64) && right.is_a?(Int64)
@@ -1532,6 +1863,13 @@ module Facet
         end
       end
 
+      private def macro_type_subtype?(type : MacroTypeValue, target : MacroTypeValue) : Bool
+        return false if type.name == target.name
+        return true if target.name == "Reference" && type.kind == MacroTypeKind::Class
+        return true if target.name == "Value" && {MacroTypeKind::Struct, MacroTypeKind::Enum}.includes?(type.kind)
+        macro_ancestors(type).any? { |ancestor| ancestor.name == target.name }
+      end
+
       private def eval_unary(op : TokenKind, value : MacroValue) : MacroEvaluation?
         case op
         when TokenKind::Plus
@@ -1570,6 +1908,12 @@ module Facet
           value.source
         when MacroBlockValue
           value.body
+        when MacroTypeValue
+          value.name
+        when MacroMetaVarValue
+          value.name
+        when MacroMethodValue
+          value.source
         when Array(MacroValue)
           value.map { |v| val_to_string(v) }.join(",")
         when Hash(String, MacroValue)
@@ -1585,6 +1929,10 @@ module Facet
           value
         when MacroSyntaxValue
           value.value
+        when MacroTypeValue
+          value.name
+        when MacroMetaVarValue
+          value.name
         else
           nil
         end

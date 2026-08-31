@@ -156,6 +156,11 @@ the lexer, parser, and AST. `pending_expansion_file_ids` exposes the exact files
 whose cached expansion became stale so incremental semantic consumers can
 reindex them without rebuilding the workspace.
 
+Type-aware expansions additionally depend on the workspace declaration
+revision. This conservatively invalidates only materialized consumers that used
+type introspection when a declaration may have changed, while ordinary macro
+consumers retain exact macro-name/required-file invalidation.
+
 ## Macro expansion scope
 
 `MacroExpander` resolves indexed macro definitions across files and binds
@@ -193,16 +198,25 @@ query, bang, typed, and block forms) plus `record` have Facet-native lowering.
 They therefore work without loading the stdlib macro templates and expand
 across the same cached multi-pass pipeline as user macros.
 
+The first type-aware macro surface is backed by `ProgramIndex`, not Crystal's
+AST. `@type`, `resolve`/`resolve?`, `methods`, `instance_vars`, `constants`,
+`superclass`, and `ancestors` expose Facet-native macro values. Method metadata
+includes names, arguments, return types, bodies, and source; instance-variable
+metadata includes names, declared types, defaults, and default presence. Type
+kind predicates and explicit superclass comparisons with `<` are supported.
+Collection results can be mapped, filtered, sorted, reversed, deduplicated,
+compacted, and joined in the regular evaluator.
+
 `%name` and `%name{key}` nodes produce stable hygienic identifiers within one
 expansion and distinct identifiers across keys and invocations. Expansions
 that use `%name` or `gensym` bypass the text cache so cached output cannot
 reintroduce identifier collisions.
 
-This remains a partial macro interpreter, not Crystal's type-aware compiler
-macro engine. Type introspection (`resolve`, `methods`, `instance_vars`, and
-similar APIs), compile-time command execution, and the complete AST-node macro
-method surface are not implemented yet. Unsupported non-output control
-expressions produce an explicit expansion diagnostic.
+This remains a partial macro interpreter, not Crystal's complete compiler macro
+engine. Generic/union type metadata, annotations, method overload semantics,
+compile-time command execution, and the complete AST-node macro method surface
+are not implemented yet. Unsupported non-output control expressions produce an
+explicit expansion diagnostic.
 
 ## Architecture
 
@@ -211,7 +225,7 @@ expressions produce an explicit expansion diagnostic.
 - `Parser`: tolerant syntax parsing and validation diagnostics.
 - `AstArena` / `AstFile`: compact syntax storage and source spans.
 - `SyntaxTree` / `SyntaxNode` / `LineIndex`: stable consumer queries and editor positions.
-- `ProgramIndex`: currently indexes macro definitions across files.
+- `ProgramIndex`: indexes macros plus type/member metadata used by type-aware expansion.
 - `MacroExpander` / `Hygiene`: partial compile-time expansion support.
 - `QueryDb`: revisioned parse/syntax/index/expansion queries and footprint invalidation.
 

@@ -143,6 +143,27 @@ describe Facet::Compiler::QueryDb do
     macro_fid.should be >= 0
   end
 
+  it "invalidates type-aware macro consumers when indexed declarations change" do
+    mgr = Facet::Compiler::SourceManager.new
+    type_fid = mgr.add("class Item\n  def old_name; end\nend", "item.cr")
+    macro_fid = mgr.add(<<-CR, "macros.cr")
+      macro method_names(type)
+        {{type.resolve.methods.map { |method| method.name }.join(",")}}
+      end
+    CR
+    use_fid = mgr.add("names = method_names(Item)", "use.cr")
+    db = Facet::Compiler::QueryDb.new(mgr)
+
+    db.expand(use_fid).source.text.should match(/names =\s+"old_name"/)
+    db.pending_expansion_file_ids.should be_empty
+
+    db.update(type_fid, "class Item\n  def old_name; end\n  def new_name; end\nend").should be_true
+    db.pending_expansion_file_ids.should contain(use_fid)
+    db.expand(use_fid).source.text.should match(/names =\s+"old_name,new_name"/)
+    db.pending_expansion_file_ids.should_not contain(use_fid)
+    macro_fid.should be >= 0
+  end
+
   it "applies byte edits and preserves stable named file ids" do
     mgr = Facet::Compiler::SourceManager.new
     db = Facet::Compiler::QueryDb.new(mgr)

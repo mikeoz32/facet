@@ -733,4 +733,137 @@ describe Facet::Compiler::MacroExpander do
     tokens.size.should eq(3)
     tokens.uniq.size.should eq(3)
   end
+
+  it "exposes the lexical type, methods, and instance variables" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      class Widget
+        @name : String
+
+        def initialize(@count : Int32)
+        end
+
+        def render(value : String) : Bool
+          true
+        end
+
+        macro describe
+          type_name = {{@type.name.stringify}}
+          method_names = {{@type.methods.map { |method| method.name }.join(",")}}
+          ivar_names = {{@type.instance_vars.map { |ivar| ivar.name }.join(",")}}
+          first_arg = {{@type.methods.last.args.first.name.stringify}}
+          first_arg_type = {{@type.methods.last.args.first.type.resolve.name.stringify}}
+        end
+
+        describe
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(type_name = "Widget"))
+    expanded.source.text.should contain(%(method_names = "initialize,render"))
+    expanded.source.text.should contain(%(ivar_names = "name,count"))
+    expanded.source.text.should contain(%(first_arg = "value"))
+    expanded.source.text.should contain(%(first_arg_type = "String"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "resolves macro type arguments through the program index" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      struct Payload
+        def encode(io : IO) : Nil
+        end
+      end
+
+      macro describe(type)
+        resolved_name = {{type.resolve.name.stringify}}
+        resolved_kind = {{type.resolve.struct?}}
+        method_name = {{type.resolve.methods.first.name.stringify}}
+        return_type = {{type.resolve.methods.first.return_type.resolve.name.stringify}}
+      end
+
+      describe Payload
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(resolved_name = "Payload"))
+    expanded.source.text.should contain("resolved_kind = true")
+    expanded.source.text.should contain(%(method_name = "encode"))
+    expanded.source.text.should contain(%(return_type = "Nil"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "exposes constants and explicit inheritance to type-aware macros" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      class Parent
+      end
+
+      class Child < Parent
+        Zebra = 1
+        Alpha = 2
+
+        macro describe
+          constant_names = {{@type.constants.map { |constant| constant.stringify }.sort.join(",")}}
+          parent_name = {{@type.superclass.name.stringify}}
+          ancestor_name = {{@type.ancestors.first.name.stringify}}
+          subtype = {{@type < Parent}}
+        end
+
+        describe
+      end
+
+
+      enum Shade
+        Red
+        Blue
+
+        macro describe_members
+          members = {{@type.constants.map { |constant| constant.stringify }.join(",")}}
+        end
+
+        describe_members
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(constant_names = "Alpha,Zebra"))
+    expanded.source.text.should contain(%(parent_name = "Parent"))
+    expanded.source.text.should contain(%(ancestor_name = "Parent"))
+    expanded.source.text.should contain("subtype = true")
+    expanded.source.text.should contain(%(members = "Red,Blue"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "keeps lexical type-aware expansion cache entries scope-specific" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro type_name
+        {{@type.name.stringify}}
+      end
+
+      class First
+        NAME = type_name
+      end
+
+      class Second
+        NAME = type_name
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+
+    expanded.source.text.should match(/class First\s+NAME =\s+"First"/)
+    expanded.source.text.should match(/class Second\s+NAME =\s+"Second"/)
+  end
 end

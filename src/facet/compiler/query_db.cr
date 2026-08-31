@@ -15,6 +15,7 @@ module Facet
       getter deps : Array(UInt64)
       getter macro_names : Set(String)
       getter required_files : Set(FileId)
+      getter? type_introspection : Bool
 
       def initialize(
         @value : AstFile,
@@ -22,6 +23,7 @@ module Facet
         @deps : Array(UInt64),
         @macro_names : Set(String),
         @required_files : Set(FileId),
+        @type_introspection : Bool,
       )
       end
     end
@@ -131,7 +133,12 @@ module Facet
         idx = build_global_index
 
         if cached = @expand_cache[file_id]?
-          current_deps = expansion_dependencies(file_id, cached.required_files, cached.macro_names)
+          current_deps = expansion_dependencies(
+            file_id,
+            cached.required_files,
+            cached.macro_names,
+            cached.type_introspection?
+          )
           if cached.deps == current_deps
             @stats.expand_cache_hits += 1
             return cached.value
@@ -145,7 +152,8 @@ module Facet
         footprint = expander.last_footprint || footprint
         required_files = footprint.required_files.to_set
         macro_names = footprint.macro_names.to_set
-        deps = expansion_dependencies(file_id, required_files, macro_names)
+        type_introspection = footprint.type_introspection?
+        deps = expansion_dependencies(file_id, required_files, macro_names, type_introspection)
         version = deps.max? || 0_u64
 
         @stats.expand_executions += 1
@@ -154,7 +162,8 @@ module Facet
           version,
           deps,
           macro_names,
-          required_files
+          required_files,
+          type_introspection
         )
         @pending_expansion_file_ids.delete(file_id)
         expanded
@@ -188,6 +197,7 @@ module Facet
 
       def invalidate(file_id : FileId)
         @pending_expansion_file_ids << file_id
+        invalidate_type_introspection_consumers
         @parse_cache.delete(file_id)
         @syntax_cache.delete(file_id)
         @index_cache.delete(file_id)
@@ -222,8 +232,10 @@ module Facet
         file_id : FileId,
         required_files : Set(FileId),
         macro_names : Set(String),
+        type_introspection : Bool,
       ) : Array(UInt64)
         deps = [@manager.revision(file_id)]
+        deps << @manager.workspace_revision if type_introspection
         required_files.to_a.sort.each do |required_file|
           next if required_file == file_id
           deps << @manager.revision(required_file)
@@ -253,6 +265,16 @@ module Facet
         to_delete = [] of FileId
         @expand_cache.each do |file_id, entry|
           to_delete << file_id unless (entry.macro_names & names).empty?
+        end
+        to_delete.each do |file_id|
+          @expand_cache.delete(file_id)
+          @pending_expansion_file_ids << file_id
+        end
+      end
+
+      private def invalidate_type_introspection_consumers : Nil
+        to_delete = @expand_cache.compact_map do |file_id, entry|
+          file_id if entry.type_introspection?
         end
         to_delete.each do |file_id|
           @expand_cache.delete(file_id)
