@@ -38,6 +38,10 @@ for future name resolution, type checking, and compilation stages.
   inputs so deeper parity can be tightened without another Crystal checkout.
 - A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
+- A committed Crystal 1.21 macro contract corpus. All 371 self-contained
+  evaluator assertions match exact upstream expansion text. The fixture also
+  inventories 602 contextual assertions and 133 semantic examples that still
+  need richer compiler/type fixtures; see [macro parity](MACRO_PARITY.md).
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
@@ -182,8 +186,13 @@ AST values without erasing their node role.
 
 Collection expressions support lexical `map`, `map_with_index`, `select`,
 `reject`, `any?`, `all?`, `each`, and `each_with_index` blocks over evaluated
-arrays, hashes, and strings. Block parameters stay local while assignments to
-outer macro variables propagate between iterations.
+arrays, tuples, hashes, named tuples, ranges, and strings. The evaluator
+preserves the distinct Crystal macro AST roles of arrays, tuples, hashes, named
+tuples, ranges, strings, chars, symbols, regexes, and typed numeric literals.
+It supports exact rendering, indexing/slicing, mutation, collection transforms,
+numeric operations and kind preservation, common string/regex operations, and
+block reductions. Block parameters stay local while assignments to outer macro
+variables propagate between iterations.
 
 Both `{{ macro_call(...) }}` and ordinary receiverless Crystal macro calls are
 expanded. Ordinary calls resolve through lexical type scopes, select overloads
@@ -204,8 +213,10 @@ AST. `@type`, `resolve`/`resolve?`, `methods`, `instance_vars`, `constants`,
 includes names, arguments, return types, bodies, and source; instance-variable
 metadata includes names, declared types, defaults, and default presence. Type
 kind predicates and explicit superclass comparisons with `<` are supported.
-Collection results can be mapped, filtered, sorted, reversed, deduplicated,
-compacted, and joined in the regular evaluator.
+Types, methods, instance variables, and arguments expose `annotation` and
+`annotations`; annotation values support names, positional/named indexing,
+`args`, and `named_args`. Collection results can be mapped, filtered, sorted,
+reversed, deduplicated, compacted, and joined in the regular evaluator.
 
 `%name` and `%name{key}` nodes produce stable hygienic identifiers within one
 expansion and distinct identifiers across keys and invocations. Expansions
@@ -213,10 +224,11 @@ that use `%name` or `gensym` bypass the text cache so cached output cannot
 reintroduce identifier collisions.
 
 This remains a partial macro interpreter, not Crystal's complete compiler macro
-engine. Generic/union type metadata, annotations, method overload semantics,
-compile-time command execution, and the complete AST-node macro method surface
-are not implemented yet. Unsupported non-output control expressions produce an
-explicit expansion diagnostic.
+engine. The self-contained upstream evaluator slice is at 371/371, but 602
+contextual evaluator assertions and 133 semantic examples still require
+injected compiler objects, error contracts, flags/environment dependencies,
+generic/union type semantics, and broader name/type resolution. Unsupported
+non-output control expressions produce an explicit expansion diagnostic.
 
 ## Architecture
 

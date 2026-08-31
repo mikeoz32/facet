@@ -24,6 +24,58 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "preserves direct collection and range syntax and evaluates string interpolation" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      array = {{[1, 2, 3]}}
+      tuple = {{{1, 2, 3}}}
+      hash = {{{:a => 1, :b => 2}}}
+      range = {{1..3}}
+      interpolated = {{"hello\#{1 == 1}world"}}
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand(ast)
+
+    expanded.source.text.should contain("array = [1, 2, 3]")
+    expanded.source.text.should contain("tuple = {1, 2, 3}")
+    expanded.source.text.should contain("hash = {:a => 1, :b => 2}")
+    expanded.source.text.should contain("range = 1..3")
+    expanded.source.text.should contain(%(interpolated = "hellotrueworld"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "evaluates typed integer, float, comparison, and number metadata contracts" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      sum = {{1_u64 + 2_u64}}
+      float_sum = {{1.5 + 2.6}}
+      comparison = {{1 <=> -1}}
+      nan_comparison = {{0.0 / 0.0 <=> -1}}
+      positive = {{+3}}
+      inverted = {{~1}}
+      signed_kind = {{-128i8.kind}}
+      float_kind = {{1e-123_f32.kind}}
+      untyped = {{-20i128.to_number}}
+      class_name = {{:name.class_name}}
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand(ast)
+
+    expanded.source.text.should contain("sum = 3_u64")
+    expanded.source.text.should contain("float_sum = 4.1")
+    expanded.source.text.should contain("comparison = 1")
+    expanded.source.text.should contain("nan_comparison = nil")
+    expanded.source.text.should contain("positive = +3")
+    expanded.source.text.should contain("inverted = -2")
+    expanded.source.text.should contain("signed_kind = :i8")
+    expanded.source.text.should contain("float_kind = :f32")
+    expanded.source.text.should contain("untyped = -20")
+    expanded.source.text.should contain(%(class_name = "SymbolLiteral"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "preserves literal syntax and exposes basic AST-node predicates" do
     source = Facet::Compiler::Source.new(<<-CR)
       string = {{"value"}}
@@ -436,8 +488,8 @@ describe Facet::Compiler::MacroExpander do
     expanded = expander.expand_all([ast_use], index)
 
     expanded.first.source.text.should contain("A=10")
-    expanded.first.source.text.should contain("REST=20")
-    expanded.first.source.text.should contain("OPTS=bar=30")
+    expanded.first.source.text.should contain("REST=[20]")
+    expanded.first.source.text.should contain("OPTS={bar: 30}")
   end
 
   it "preserves false and nil macro arguments" do
@@ -696,9 +748,9 @@ describe Facet::Compiler::MacroExpander do
     expander = Facet::Compiler::MacroExpander.new(index)
     expanded = expander.expand_all([ast_use], index)
 
-    expanded.first.source.text.should contain("A=1,2,3")
-    expanded.first.source.text.should contain("B=1,2")
-    expanded.first.source.text.should contain("C=x=1")
+    expanded.first.source.text.should contain("A=1..3")
+    expanded.first.source.text.should contain("B=[1, 2]")
+    expanded.first.source.text.should contain(%(C={"x" => 1}))
   end
 
   it "caches macro def expansions by args and body" do
@@ -865,5 +917,54 @@ describe Facet::Compiler::MacroExpander do
 
     expanded.source.text.should match(/class First\s+NAME =\s+"First"/)
     expanded.source.text.should match(/class Second\s+NAME =\s+"Second"/)
+  end
+
+  it "exposes type, method, instance variable, and argument annotations" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      annotation Marker
+      end
+      annotation Field
+      end
+
+      @[Marker(enabled: true)]
+      class User
+        @[Field(key: "user_name", ignore: false)]
+        @name : String
+
+        @[Marker("render")]
+        def render(@[Field(key: "value")] value : String)
+        end
+
+        macro describe
+          type_enabled = {{@type.annotation(Marker)[:enabled]}}
+          annotation_name = {{@type.annotation(Marker).name.stringify}}
+          all_annotations = {{@type.annotations.size}}
+          ivar_key = {{@type.instance_vars.first.annotation(Field)[:key]}}
+          ivar_ignore = {{@type.instance_vars.first.annotation(Field)[:ignore]}}
+          method_tag = {{@type.methods.first.annotation(Marker)[0]}}
+          arg_key = {{@type.methods.first.args.first.annotation(Field)[:key]}}
+          annotation_args = {{@type.methods.first.annotation(Marker).args.size}}
+          annotation_named_args = {{@type.annotation(Marker).named_args[:enabled]}}
+        end
+
+        describe
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("type_enabled = true")
+    expanded.source.text.should contain(%(annotation_name = "Marker"))
+    expanded.source.text.should contain("all_annotations = 1")
+    expanded.source.text.should contain(%(ivar_key = "user_name"))
+    expanded.source.text.should contain("ivar_ignore = false")
+    expanded.source.text.should contain(%(method_tag = "render"))
+    expanded.source.text.should contain(%(arg_key = "value"))
+    expanded.source.text.should contain("annotation_args = 1")
+    expanded.source.text.should contain("annotation_named_args = true")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
   end
 end

@@ -29,6 +29,22 @@ describe Facet::Compiler::Parser do
     end
   end
 
+  it "binds member access outside an adjacent signed number literal" do
+    parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new("-128i8.kind; +3.stringify"))
+    ast = parser.parse_file
+    parser.diagnostics.should be_empty
+
+    expressions = ast.children(ast.children(ast.root).first)
+    expressions.each do |expression|
+      node = ast.node(expression)
+      node.kind.should eq(Facet::Compiler::NodeKind::Binary)
+      ast.arena.operator_kind(node.payload_index).should eq(Facet::Compiler::TokenKind::Dot)
+      ast.node(ast.children(expression).first).kind.should eq(Facet::Compiler::NodeKind::LiteralNumber)
+    end
+    ast.node_string(ast.children(expressions.first).first).should eq("-128i8")
+    ast.node_string(ast.children(expressions.last).first).should eq("+3")
+  end
+
   it "rejects unknown regex options like Crystal" do
     ["/a/z", "%r(a)I"].each do |code|
       parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new(code))

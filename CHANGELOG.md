@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added a generated Crystal 1.21 macro specification corpus with a complete
+  assertion/exclusion inventory and a no-regression runner. Facet now matches
+  exact output for all 371/371 self-contained upstream evaluator contracts;
+  602 contextual evaluator assertions and 133 semantic examples remain tracked
+  explicitly for the next fixture layers.
+- Expanded the Facet-native macro value model for typed numbers, chars, regexes,
+  ranges, arrays, tuples, hashes, and named tuples. Added exact collection
+  rendering and slicing/mutation, numeric kind preservation, regex/string
+  operations, block transforms/reductions, splats, and contextual output
+  fragment handling.
+- Added type/method/instance-variable/argument annotation introspection with
+  positional and named annotation values, and fixed signed-number member-access
+  precedence such as `-128i8.kind`.
+
 - Added Facet-native type-aware macro values backed by the cross-file program
   index. Macros can inspect `@type`, resolve indexed and builtin type syntax,
   enumerate methods, instance variables, and constants, inspect method/argument

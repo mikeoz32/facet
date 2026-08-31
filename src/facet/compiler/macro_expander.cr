@@ -7,6 +7,11 @@ module Facet
     enum MacroSyntaxKind
       StringLiteral
       SymbolLiteral
+      CharLiteral
+      RegexLiteral
+      GeneratedStringLiteral
+      GeneratedCharLiteral
+      GeneratedSymbolLiteral
       Identifier
       Code
     end
@@ -21,6 +26,27 @@ module Facet
         new(source, value, MacroSyntaxKind::SymbolLiteral)
       end
 
+      def self.char(value : String, source : String) : self
+        new(source, value, MacroSyntaxKind::CharLiteral)
+      end
+
+      def self.regex(value : String, source : String) : self
+        new(source, value, MacroSyntaxKind::RegexLiteral)
+      end
+
+      def self.generated_string(value : String) : self
+        new(value.inspect, value, MacroSyntaxKind::GeneratedStringLiteral)
+      end
+
+      def self.generated_char(value : String) : self
+        new(value.chars.first.inspect, value, MacroSyntaxKind::GeneratedCharLiteral)
+      end
+
+      def self.generated_symbol(value : String) : self
+        source = value.matches?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/) ? ":#{value}" : ":#{value.inspect}"
+        new(source, value, MacroSyntaxKind::GeneratedSymbolLiteral)
+      end
+
       def self.identifier(value : String) : self
         new(value, value, MacroSyntaxKind::Identifier)
       end
@@ -31,6 +57,28 @@ module Facet
     end
 
     record MacroBlockValue, body : String, parameters : Array(String)
+    record MacroRangeValue, first : Int64?, last : Int64?, exclusive : Bool
+
+    enum MacroNumberKind
+      I8
+      I16
+      I32
+      I64
+      I128
+      U8
+      U16
+      U32
+      U64
+      U128
+      F32
+      F64
+    end
+
+    record MacroNumberValue,
+      value : Int128 | UInt128 | Float64,
+      kind : MacroNumberKind,
+      source : String,
+      explicit_kind : Bool
 
     enum MacroTypeKind
       Class
@@ -42,16 +90,56 @@ module Facet
     end
 
     record MacroTypeValue, name : String, kind : MacroTypeKind
-    record MacroMetaVarValue, name : String, type_name : String?, default_value : String?
+    record MacroAnnotationValue,
+      name : String,
+      positional_sources : Array(String),
+      named_sources : Hash(String, String)
+    record MacroMetaVarValue,
+      name : String,
+      type_name : String?,
+      default_value : String?,
+      annotations : Array(MacroAnnotationValue)
     record MacroMethodValue,
       name : String,
       args : Array(MacroMetaVarValue),
       return_type : String?,
       body : String?,
-      source : String
+      source : String,
+      annotations : Array(MacroAnnotationValue)
 
-    alias MacroValue = Int64 | String | Bool | Nil | MacroSyntaxValue | MacroBlockValue | MacroTypeValue | MacroMetaVarValue | MacroMethodValue | Array(MacroValue) | Hash(String, MacroValue)
+    class MacroTupleValue
+    end
+
+    class MacroHashEntry
+    end
+
+    class MacroHashValue
+    end
+
+    alias MacroValue = Int64 | String | Bool | Nil | MacroSyntaxValue | MacroBlockValue | MacroRangeValue | MacroNumberValue | MacroTypeValue | MacroAnnotationValue | MacroMetaVarValue | MacroMethodValue | MacroTupleValue | MacroHashValue | Array(MacroValue) | Hash(String, MacroValue)
     alias MacroArguments = Tuple(Array(MacroValue), Hash(String, MacroValue), MacroBlockValue?)
+
+    class MacroTupleValue
+      getter values : Array(MacroValue)
+
+      def initialize(@values : Array(MacroValue))
+      end
+    end
+
+    class MacroHashEntry
+      getter key : MacroValue
+      property value : MacroValue
+
+      def initialize(@key : MacroValue, @value : MacroValue)
+      end
+    end
+
+    class MacroHashValue
+      getter entries : Array(MacroHashEntry)
+
+      def initialize(@entries : Array(MacroHashEntry))
+      end
+    end
 
     # Keep a successful `nil` or `false` macro value distinct from a failed
     # evaluation. A bare MacroValue? cannot make that distinction in Crystal.
@@ -749,12 +837,26 @@ module Facet
           "#{value.kind}:#{value.source}"
         when MacroBlockValue
           "block(#{value.parameters.join(",")}){#{value.body}}"
+        when MacroRangeValue
+          "range(#{value.first}:#{value.last}:#{value.exclusive})"
+        when MacroNumberValue
+          "number(#{value.kind}:#{value.source})"
         when MacroTypeValue
           "type(#{value.kind}:#{value.name})"
+        when MacroAnnotationValue
+          positional = value.positional_sources.join(",")
+          named = value.named_sources.keys.sort.map { |key| "#{key}=#{value.named_sources[key]}" }.join(",")
+          "annotation(#{value.name}:#{positional}:#{named})"
         when MacroMetaVarValue
-          "meta-var(#{value.name}:#{value.type_name}=#{value.default_value})"
+          annotations = value.annotations.map { |entry| fingerprint_value(entry) }.join(",")
+          "meta-var(#{value.name}:#{value.type_name}=#{value.default_value}:#{annotations})"
         when MacroMethodValue
-          "method(#{value.name}:#{value.source})"
+          annotations = value.annotations.map { |entry| fingerprint_value(entry) }.join(",")
+          "method(#{value.name}:#{value.source}:#{annotations})"
+        when MacroTupleValue
+          "tuple(" + value.values.map { |entry| fingerprint_value(entry) }.join(",") + ")"
+        when MacroHashValue
+          "hash(" + value.entries.map { |entry| "#{fingerprint_value(entry.key)}:#{fingerprint_value(entry.value)}" }.join(",") + ")"
         when Array(MacroValue)
           "[" + value.map { |v| fingerprint_value(v) }.join(",") + "]"
         when Hash(String, MacroValue)
@@ -816,11 +918,36 @@ module Facet
                   expand_template_body(body, ast, index, footprint)
                 end
               end
+            when MacroTupleValue
+              value.values.each_with_index do |item, item_index|
+                io << expand_macro_iteration(targets, ast, item, item_index.to_i64) do
+                  expand_template_body(body, ast, index, footprint)
+                end
+              end
             when Hash(String, MacroValue)
               value.each do |key, item|
                 io << expand_macro_iteration(targets, ast, MacroSyntaxValue.string(key), item) do
                   expand_template_body(body, ast, index, footprint)
                 end
+              end
+            when MacroHashValue
+              value.entries.each do |entry|
+                io << expand_macro_iteration(targets, ast, entry.key, entry.value) do
+                  expand_template_body(body, ast, index, footprint)
+                end
+              end
+            when MacroRangeValue
+              first = value.first
+              last = value.last
+              if first && last
+                finish = value.exclusive ? last - 1 : last
+                Range.new(first, finish).each_with_index do |item, item_index|
+                  io << expand_macro_iteration(targets, ast, item, item_index.to_i64) do
+                    expand_template_body(body, ast, index, footprint)
+                  end
+                end
+              else
+                @diagnostics << Diagnostic.new(ast.node(parts[1]).span, "macro for range must have both bounds")
               end
             else
               @diagnostics << Diagnostic.new(ast.node(parts[1]).span, "macro for iterable must be an array, tuple, range, or hash")
@@ -908,6 +1035,15 @@ module Facet
       end
 
       private def eval_to_text(node_id : NodeId, ast : AstFile) : String?
+        if {
+             NodeKind::Array,
+             NodeKind::Tuple,
+             NodeKind::NamedTuple,
+             NodeKind::Hash,
+             NodeKind::Range,
+           }.includes?(ast.node(node_id).kind)
+          return slice_text(ast.source, ast.node(node_id).span)
+        end
         if evaluation = eval_value(node_id, ast)
           return val_to_string(evaluation.value)
         end
@@ -923,11 +1059,23 @@ module Facet
         when NodeKind::LiteralSymbol
           MacroEvaluation.new(MacroSyntaxValue.symbol(ast.decoded_literal_string(node_id)))
         when NodeKind::LiteralNumber
-          str = ast.node_string(node_id).delete('_')
-          MacroEvaluation.new(str.to_i64? || MacroSyntaxValue.code(str))
-        when NodeKind::LiteralChar, NodeKind::LiteralRegex
           source = ast.node_string(node_id)
-          MacroEvaluation.new(MacroSyntaxValue.code(source))
+          MacroEvaluation.new(macro_number_literal(source) || MacroSyntaxValue.code(source))
+        when NodeKind::LiteralChar
+          source = ast.node_string(node_id)
+          MacroEvaluation.new(MacroSyntaxValue.char(ast.decoded_literal_string(node_id), source))
+        when NodeKind::LiteralRegex
+          source = ast.node_string(node_id)
+          MacroEvaluation.new(MacroSyntaxValue.regex(ast.decoded_literal_string(node_id), source))
+        when NodeKind::StringInterpolation
+          value = String.build do |io|
+            ast.children(node_id).each do |child_id|
+              evaluation = eval_value(child_id, ast)
+              return nil unless evaluation
+              io << (macro_scalar_text(evaluation.value) || val_to_string(evaluation.value))
+            end
+          end
+          MacroEvaluation.new(MacroSyntaxValue.string(value))
         when NodeKind::LiteralBool
           MacroEvaluation.new(node.flags == 1)
         when NodeKind::LiteralNil
@@ -994,15 +1142,34 @@ module Facet
           left = eval_value(left_id, ast)
           right = eval_value(right_id, ast)
           return nil unless left && right
-          left_value = left.value
-          right_value = right.value
-          return nil unless left_value.is_a?(Int64) && right_value.is_a?(Int64)
-          exclusive = node.flags == 1
-          values = Range.new(left_value, exclusive ? right_value - 1 : right_value).to_a.map { |i| i.to_i64.as(MacroValue) }
-          MacroEvaluation.new(values)
+          first = left.value.nil? ? nil : macro_integer_index(left.value)
+          last = right.value.nil? ? nil : macro_integer_index(right.value)
+          return nil if !left.value.nil? && first.nil?
+          return nil if !right.value.nil? && last.nil?
+          MacroEvaluation.new(MacroRangeValue.new(first, last, node.flags == 1))
         when NodeKind::Call
           callee_id = ast.children(node_id)[0]
           callee = ast.node(callee_id)
+          if callee.kind == NodeKind::Binary
+            operator = ast.arena.operator_kind(callee.payload_index)
+            if {TokenKind::Dot, TokenKind::SafeNav}.includes?(operator)
+              receiver_id, member_id = ast.children(callee_id)
+              member = ast.node(member_id)
+              if member.kind == NodeKind::Ident
+                receiver = eval_value(receiver_id, ast)
+                return nil unless receiver
+                return MacroEvaluation.new(nil) if operator == TokenKind::SafeNav && receiver.value.nil?
+                args = [] of MacroValue
+                syntax_tree(ast).node(node_id).arguments.each do |argument|
+                  evaluation = eval_value(argument.id, ast)
+                  return nil unless evaluation
+                  args << evaluation.value
+                end
+                name = ast.arena.symbols[member.payload_index]
+                return apply_macro_method(receiver.value, name, args)
+              end
+            end
+          end
           if callee.kind == NodeKind::Ident
             name = ast.arena.symbols[callee.payload_index]
             if name == "gensym"
@@ -1016,14 +1183,100 @@ module Facet
               sym_id = @hygiene.gensym(base, ast.arena.symbols)
               return MacroEvaluation.new(MacroSyntaxValue.identifier(ast.arena.symbols[sym_id]))
             end
+            if {"flag?", "compare_versions"}.includes?(name)
+              values = [] of MacroValue
+              syntax_tree(ast).node(node_id).arguments.each do |argument|
+                evaluation = eval_value(argument.id, ast)
+                return nil unless evaluation
+                values << evaluation.value
+              end
+              if name == "flag?"
+                return nil unless values.size == 1
+                return MacroEvaluation.new(false)
+              end
+              return nil unless values.size == 2
+              left = macro_scalar_text(values[0])
+              right = macro_scalar_text(values[1])
+              return nil unless left && right
+              return MacroEvaluation.new(compare_macro_versions(left, right).to_i64)
+            end
           end
           nil
+        when NodeKind::CallWithBlock
+          children = ast.children(node_id)
+          call_id = children.first?
+          return nil unless call_id
+          call_node = ast.node(call_id)
+          return nil unless call_node.kind == NodeKind::Call
+          callee_id = ast.children(call_id).first?
+          return nil unless callee_id
+          callee = ast.node(callee_id)
+          return nil unless callee.kind == NodeKind::Binary
+          operator = ast.arena.operator_kind(callee.payload_index)
+          return nil unless {TokenKind::Dot, TokenKind::SafeNav}.includes?(operator)
+          receiver_id, member_id = ast.children(callee_id)
+          member = ast.node(member_id)
+          return nil unless member.kind == NodeKind::Ident
+          receiver = eval_value(receiver_id, ast)
+          return nil unless receiver
+          return MacroEvaluation.new(nil) if operator == TokenKind::SafeNav && receiver.value.nil?
+          args = [] of MacroValue
+          syntax_tree(ast).node(call_id).arguments.each do |argument|
+            evaluation = eval_value(argument.id, ast)
+            return nil unless evaluation
+            args << evaluation.value
+          end
+          wrapper = syntax_tree(ast).node(node_id)
+          body = wrapper.body
+          return nil unless body
+          block = MacroEvalBlock.new(ast, body.id, wrapper.parameters.compact_map(&.name))
+          name = ast.arena.symbols[member.payload_index]
+          apply_macro_method(receiver.value, name, args, block)
+        when NodeKind::NamedArg
+          value_id = ast.children(node_id).last?
+          value_id ? eval_value(value_id, ast) : nil
+        when NodeKind::Splat
+          value_id = ast.children(node_id).first?
+          return nil unless value_id
+          evaluation = eval_value(value_id, ast)
+          return nil unless evaluation
+          values = macro_sequence_values(evaluation.value)
+          return nil unless values
+          MacroEvaluation.new(MacroSyntaxValue.code(values.map { |value| val_to_string(value) }.join(", ")))
+        when NodeKind::DoubleSplat
+          value_id = ast.children(node_id).first?
+          return nil unless value_id
+          evaluation = eval_value(value_id, ast)
+          return nil unless evaluation
+          value = evaluation.value
+          if value.is_a?(MacroHashValue)
+            MacroEvaluation.new(MacroSyntaxValue.code(macro_double_splat(value)))
+          elsif value.is_a?(Hash(String, MacroValue))
+            body = value.map do |key, entry|
+              rendered_key = key.matches?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/) ? key : key.inspect
+              "#{rendered_key}: #{val_to_string(entry)}"
+            end.join(", ")
+            MacroEvaluation.new(MacroSyntaxValue.code(body))
+          end
         when NodeKind::Index
           children = ast.children(node_id)
           return nil if children.size < 2
           receiver = eval_value(children[0], ast)
           index = eval_value(children[1], ast)
           return nil unless receiver && index
+          if children.size == 3
+            count = eval_value(children[2], ast)
+            return nil unless count
+            values = macro_sequence_values(receiver.value)
+            first = macro_integer_index(index.value)
+            length = macro_integer_index(count.value)
+            return nil unless values && first && length && length >= 0
+            size = values.size.to_i64
+            return MacroEvaluation.new(nil) if first < -size || first > size
+            first += size if first < 0
+            sliced = values[first.to_i, Math.min(length, size - first).to_i].map(&.as(MacroValue))
+            return MacroEvaluation.new(macro_collection_result(receiver.value, sliced))
+          end
           eval_macro_index(receiver.value, index.value)
         when NodeKind::Unary
           child_id = ast.children(node_id)[0]
@@ -1051,12 +1304,18 @@ module Facet
           MacroEvaluation.new(nil)
         when NodeKind::Array, NodeKind::Tuple
           values = [] of MacroValue
-          ast.children(node_id).each do |cid|
+          children = ast.children(node_id)
+          children = children[0...-1] if node.kind == NodeKind::Array && node.flags == 1 && !children.empty?
+          children.each do |cid|
             if evaluation = eval_value(cid, ast)
               values << evaluation.value
             end
           end
-          MacroEvaluation.new(values)
+          if node.kind == NodeKind::Tuple
+            MacroEvaluation.new(MacroTupleValue.new(values))
+          else
+            MacroEvaluation.new(values)
+          end
         when NodeKind::NamedTuple
           values = {} of String => MacroValue
           ast.children(node_id).each do |cid|
@@ -1070,19 +1329,73 @@ module Facet
           end
           MacroEvaluation.new(values)
         when NodeKind::Hash
-          h = {} of String => MacroValue
+          entries = [] of MacroHashEntry
           ast.children(node_id).each do |cid|
             child = ast.node(cid)
             if child.kind == NodeKind::Binary && ast.arena.operator_kind(child.payload_index) == TokenKind::HashRocket
               key_id, val_id = ast.children(cid)
-              key = eval_value(key_id, ast).try { |evaluation| macro_scalar_text(evaluation.value) }
-              evaluation = eval_value(val_id, ast)
-              h[key] = evaluation.value if key && evaluation
+              key = eval_value(key_id, ast)
+              value = eval_value(val_id, ast)
+              entries << MacroHashEntry.new(key.value, value.value) if key && value
             end
           end
-          MacroEvaluation.new(h)
+          MacroEvaluation.new(MacroHashValue.new(entries))
         else
           nil
+        end
+      end
+
+      private def macro_number_literal(source : String) : MacroValue?
+        raw = source.strip.lchop("(").rchop(")")
+        compact = raw.delete('_')
+        suffix = compact.match(/(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64)\z/).try(&.[1])
+        number = suffix ? compact.rchop(suffix) : compact
+
+        if suffix.try(&.starts_with?('f')) || (!suffix && (number.includes?('.') || number.includes?('e') || number.includes?('E')))
+          value = number.to_f64?
+          return nil unless value
+          kind = suffix == "f32" ? MacroNumberKind::F32 : MacroNumberKind::F64
+          return MacroNumberValue.new(value, kind, raw, !suffix.nil?)
+        end
+
+        if suffix.try(&.starts_with?('u'))
+          value = number.to_u128?(prefix: true)
+          return nil unless value
+          return MacroNumberValue.new(value, macro_number_kind(suffix.not_nil!), raw, true)
+        end
+
+        if suffix
+          value = number.to_i128?(prefix: true)
+          return nil unless value
+          return MacroNumberValue.new(value, macro_number_kind(suffix), raw, true)
+        end
+
+        if value = number.to_i64?(prefix: true)
+          if raw.starts_with?('+')
+            kind = value.in?(Int32::MIN.to_i64..Int32::MAX.to_i64) ? MacroNumberKind::I32 : MacroNumberKind::I64
+            MacroNumberValue.new(value.to_i128, kind, raw, false)
+          else
+            value
+          end
+        elsif value = number.to_i128?(prefix: true)
+          MacroNumberValue.new(value, MacroNumberKind::I128, raw, false)
+        end
+      end
+
+      private def macro_number_kind(suffix : String) : MacroNumberKind
+        case suffix
+        when "i8"   then MacroNumberKind::I8
+        when "i16"  then MacroNumberKind::I16
+        when "i32"  then MacroNumberKind::I32
+        when "i64"  then MacroNumberKind::I64
+        when "i128" then MacroNumberKind::I128
+        when "u8"   then MacroNumberKind::U8
+        when "u16"  then MacroNumberKind::U16
+        when "u32"  then MacroNumberKind::U32
+        when "u64"  then MacroNumberKind::U64
+        when "u128" then MacroNumberKind::U128
+        when "f32"  then MacroNumberKind::F32
+        else             MacroNumberKind::F64
         end
       end
 
@@ -1141,6 +1454,136 @@ module Facet
         end
 
         case name
+        when "class_name"
+          return nil unless args.empty?
+          MacroEvaluation.new(MacroSyntaxValue.string(macro_class_name(receiver)))
+        when "kind"
+          return nil unless args.empty?
+          number = macro_number(receiver)
+          return nil unless number
+          MacroEvaluation.new(MacroSyntaxValue.symbol(macro_number_kind_name(number.kind)))
+        when "to_number"
+          return nil unless args.empty?
+          number = macro_number(receiver)
+          return nil unless number
+          MacroEvaluation.new(MacroSyntaxValue.code(macro_number_text(number.value)))
+        when "zero?"
+          return nil unless args.empty?
+          number = macro_number(receiver)
+          return nil unless number
+          MacroEvaluation.new(number.value == 0)
+        when "ord"
+          return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue) && receiver.kind == MacroSyntaxKind::CharLiteral
+          char = receiver.value.chars.first?
+          char ? MacroEvaluation.new(char.ord.to_i64) : nil
+        when "source"
+          return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue) && receiver.kind == MacroSyntaxKind::RegexLiteral
+          MacroEvaluation.new(MacroSyntaxValue.string(receiver.value))
+        when "options"
+          return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue) && receiver.kind == MacroSyntaxKind::RegexLiteral
+          slash = receiver.source.rindex('/')
+          options = slash ? receiver.source.byte_slice(slash + 1..).chars : [] of Char
+          values = {'i', 'm', 'x'}.select { |option| options.includes?(option) }
+            .map { |option| MacroSyntaxValue.generated_symbol(option.to_s).as(MacroValue) }
+          if values.empty?
+            MacroEvaluation.new(MacroSyntaxValue.code("[] of ::Symbol"))
+          else
+            MacroEvaluation.new(values)
+          end
+        when "count"
+          return nil unless args.size == 1
+          text = macro_scalar_text(receiver)
+          search = macro_scalar_text(args[0])
+          return nil unless text && search
+          MacroEvaluation.new(text.chars.count { |char| search.includes?(char) }.to_i64)
+        when "tr"
+          return nil unless args.size == 2
+          text = macro_scalar_text(receiver)
+          from = macro_scalar_text(args[0])
+          to = macro_scalar_text(args[1])
+          return nil unless text && from && to
+          MacroEvaluation.new(MacroSyntaxValue.string(text.tr(from, to)))
+        when "gsub"
+          text = macro_scalar_text(receiver)
+          return nil unless text
+          if block
+            return nil unless args.size == 1
+            pattern = macro_regex(args[0])
+            return nil unless pattern
+            failed = false
+            value = text.gsub(pattern) do |full_text, match|
+              captures = {} of String => MacroValue
+              match.size.times do |index|
+                capture = match[index]?
+                captures[index.to_s] = capture ? MacroSyntaxValue.generated_string(capture) : nil
+              end
+              full = MacroSyntaxValue.generated_string(full_text)
+              evaluation = eval_macro_eval_block(block, [full.as(MacroValue), captures.as(MacroValue)] of MacroValue)
+              unless evaluation
+                failed = true
+                next full_text
+              end
+              macro_scalar_text(evaluation.value) || val_to_string(evaluation.value)
+            end
+            return nil if failed
+            MacroEvaluation.new(MacroSyntaxValue.string(value))
+          else
+            return nil unless args.size == 2
+            pattern = macro_regex(args[0])
+            replacement = macro_scalar_text(args[1])
+            return nil unless pattern && replacement
+            MacroEvaluation.new(MacroSyntaxValue.string(text.gsub(pattern, replacement)))
+          end
+        when "match"
+          return nil unless args.size == 1
+          text = macro_scalar_text(receiver)
+          pattern = macro_regex(args[0])
+          return nil unless text && pattern
+          match = pattern.match(text)
+          MacroEvaluation.new(match ? MacroSyntaxValue.code(macro_match_source(match, args[0])) : nil)
+        when "scan"
+          return nil unless args.size == 1
+          text = macro_scalar_text(receiver)
+          pattern = macro_regex(args[0])
+          return nil unless text && pattern
+          matches = text.scan(pattern).map { |match| macro_match_source(match, args[0]) }
+          type = "::Hash(::Int32 | ::String, ::String | ::Nil)"
+          source = "[#{matches.join(", ")}] of #{type}"
+          MacroEvaluation.new(MacroSyntaxValue.code(source))
+        when "camelcase"
+          return nil unless args.size <= 1
+          text = macro_scalar_text(receiver)
+          return nil unless text
+          value = text.split('_').map(&.capitalize).join
+          if lower = args.first?
+            return nil unless lower.is_a?(Bool)
+            value = value[0]?.try(&.downcase).to_s + value.byte_slice(1..)
+          end
+          MacroEvaluation.new(MacroSyntaxValue.string(value))
+        when "underscore"
+          return nil unless args.empty?
+          text = macro_scalar_text(receiver)
+          return nil unless text
+          value = text.gsub(/([a-z\d])([A-Z])/, "\\1_\\2").downcase
+          MacroEvaluation.new(MacroSyntaxValue.string(value))
+        when "titleize"
+          return nil unless args.empty?
+          text = macro_scalar_text(receiver)
+          return nil unless text
+          MacroEvaluation.new(MacroSyntaxValue.string(text.split.map(&.capitalize).join(' ')))
+        when "identify"
+          return nil unless args.empty?
+          text = macro_scalar_text(receiver)
+          return nil unless text
+          MacroEvaluation.new(MacroSyntaxValue.string(text.gsub("::", "__")))
+        when "to_utf16"
+          return nil unless args.empty?
+          text = macro_scalar_text(receiver)
+          return nil unless text
+          units = text.to_utf16.to_a
+          literal = (units + [0_u16]).map { |unit| "#{unit}_u16" }.join(", ")
+          source = "(::Slice(::UInt16).literal(#{literal}))[0, #{units.size}]"
+          MacroEvaluation.new(MacroSyntaxValue.code(source))
         when "map", "map_with_index"
           return nil unless block && args.empty?
           values = macro_iteration_values(receiver, block.parameters.size, name == "map_with_index")
@@ -1151,16 +1594,121 @@ module Facet
             return nil unless evaluation
             mapped << evaluation.value
           end
-          MacroEvaluation.new(mapped)
-        when "select", "reject"
-          return nil unless block && args.empty? && receiver.is_a?(Array(MacroValue))
-          selected = receiver.select do |value|
+          MacroEvaluation.new(macro_collection_result(receiver, mapped))
+        when "reduce"
+          return nil unless block && args.size <= 1
+          values = macro_sequence_values(receiver)
+          return nil unless values
+          if args.empty?
+            accumulator = values.first?
+            return MacroEvaluation.new(nil) unless accumulator
+            remaining = values.skip(1)
+          else
+            accumulator = args[0]
+            remaining = values
+          end
+          remaining.each do |value|
+            evaluation = eval_macro_eval_block(block, [accumulator, value] of MacroValue)
+            return nil unless evaluation
+            accumulator = evaluation.value
+          end
+          MacroEvaluation.new(accumulator)
+        when "find"
+          return nil unless block && args.empty?
+          values = macro_sequence_values(receiver)
+          return nil unless values
+          values.each do |value|
             evaluation = eval_macro_eval_block(block, [value] of MacroValue)
             return nil unless evaluation
-            keep = truthy?(evaluation.value)
-            name == "select" ? keep : !keep
+            return MacroEvaluation.new(value) if truthy?(evaluation.value)
           end
-          MacroEvaluation.new(selected)
+          MacroEvaluation.new(nil)
+        when "sort_by"
+          return nil unless block && args.empty?
+          sequence = macro_sequence_values(receiver)
+          return nil unless sequence
+          values = sequence.dup
+          keys = [] of String
+          values.each do |value|
+            evaluation = eval_macro_eval_block(block, [value] of MacroValue)
+            return nil unless evaluation
+            keys << (macro_scalar_text(evaluation.value) || val_to_string(evaluation.value))
+          end
+          index = 1
+          while index < values.size
+            cursor = index
+            while cursor > 0 && keys[cursor] < keys[cursor - 1]
+              keys.swap(cursor, cursor - 1)
+              values.swap(cursor, cursor - 1)
+              cursor -= 1
+            end
+            index += 1
+          end
+          MacroEvaluation.new(macro_collection_result(receiver, values))
+        when "unshift"
+          return nil unless !args.empty? && (values = macro_sequence_values(receiver))
+          args.reverse_each { |value| values.unshift(value) }
+          MacroEvaluation.new(macro_collection_result(receiver, values))
+        when "push"
+          return nil unless !args.empty? && (values = macro_sequence_values(receiver))
+          values.concat(args)
+          MacroEvaluation.new(macro_collection_result(receiver, values))
+        when "splat"
+          return nil unless args.size <= 1
+          values = macro_sequence_values(receiver)
+          return nil unless values
+          suffix = args.empty? ? "" : macro_scalar_text(args[0])
+          return nil unless suffix
+          MacroEvaluation.new(MacroSyntaxValue.code(values.map { |value| val_to_string(value) }.join(", ") + suffix))
+        when "select", "reject"
+          if receiver.is_a?(MacroHashValue)
+            selected = if block
+                         return nil unless args.empty?
+                         receiver.entries.select do |entry|
+                           evaluation = eval_macro_eval_block(block, [entry.key, entry.value] of MacroValue)
+                           return nil unless evaluation
+                           keep = truthy?(evaluation.value)
+                           name == "select" ? keep : !keep
+                         end
+                       else
+                         return nil if args.empty?
+                         receiver.entries.select do |entry|
+                           included = args.includes?(entry.key)
+                           name == "select" ? included : !included
+                         end
+                       end
+            MacroEvaluation.new(MacroHashValue.new(selected))
+          elsif receiver.is_a?(Hash(String, MacroValue))
+            selected = if block
+                         return nil unless args.empty?
+                         receiver.select do |key, value|
+                           key_value = MacroSyntaxValue.identifier(key).as(MacroValue)
+                           evaluation = eval_macro_eval_block(block, [key_value, value] of MacroValue)
+                           return nil unless evaluation
+                           keep = truthy?(evaluation.value)
+                           name == "select" ? keep : !keep
+                         end
+                       else
+                         return nil if args.empty?
+                         requested = args.compact_map { |value| macro_scalar_text(value) }
+                         receiver.select do |key, _|
+                           included = requested.includes?(key)
+                           name == "select" ? included : !included
+                         end
+                       end
+            MacroEvaluation.new(selected)
+          else
+            return nil unless block && args.empty?
+            values = macro_sequence_values(receiver)
+            return nil unless values
+            selected = values.select do |value|
+              evaluation = eval_macro_eval_block(block, [value] of MacroValue)
+              return nil unless evaluation
+              keep = truthy?(evaluation.value)
+              name == "select" ? keep : !keep
+            end
+            MacroEvaluation.new(macro_collection_result(receiver, selected))
+          end
         when "any?", "all?"
           return nil unless block && args.empty?
           values = macro_iteration_values(receiver, block.parameters.size, false)
@@ -1193,6 +1741,8 @@ module Facet
                  else
                    case receiver
                    when Array(MacroValue)        then receiver.size
+                   when MacroTupleValue          then receiver.values.size
+                   when MacroHashValue           then receiver.entries.size
                    when Hash(String, MacroValue) then receiver.size
                    else                               return nil
                    end
@@ -1205,6 +1755,8 @@ module Facet
                     case receiver
                     when MacroBlockValue          then receiver.body.empty?
                     when Array(MacroValue)        then receiver.empty?
+                    when MacroTupleValue          then receiver.values.empty?
+                    when MacroHashValue           then receiver.entries.empty?
                     when Hash(String, MacroValue) then receiver.empty?
                     else                               return nil
                     end
@@ -1215,35 +1767,93 @@ module Facet
           value = if text = macro_scalar_text(receiver)
                     char = name == "first" ? text.chars.first? : text.chars.last?
                     char ? MacroSyntaxValue.string(char.to_s).as(MacroValue) : nil
-                  elsif receiver.is_a?(Array(MacroValue))
-                    name == "first" ? receiver.first? : receiver.last?
+                  elsif values = macro_sequence_values(receiver)
+                    name == "first" ? values.first? : values.last?
                   else
                     return nil
                   end
           MacroEvaluation.new(value)
         when "sort"
-          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
-          MacroEvaluation.new(sort_macro_values(receiver))
+          return nil unless args.empty?
+          values = macro_sequence_values(receiver)
+          return nil unless values
+          MacroEvaluation.new(macro_collection_result(receiver, sort_macro_values(values)))
         when "reverse"
-          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
-          MacroEvaluation.new(receiver.reverse)
+          return nil unless args.empty?
+          values = macro_sequence_values(receiver)
+          return nil unless values
+          MacroEvaluation.new(macro_collection_result(receiver, values.reverse))
         when "uniq"
-          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
+          return nil unless args.empty?
+          values = macro_sequence_values(receiver)
+          return nil unless values
           unique = [] of MacroValue
-          receiver.each do |value|
+          values.each do |value|
             unique << value unless unique.any? { |existing| existing == value }
           end
-          MacroEvaluation.new(unique)
+          MacroEvaluation.new(macro_collection_result(receiver, unique))
         when "compact"
-          return nil unless receiver.is_a?(Array(MacroValue)) && args.empty?
-          MacroEvaluation.new(receiver.reject(&.nil?))
+          return nil unless args.empty?
+          values = macro_sequence_values(receiver)
+          return nil unless values
+          MacroEvaluation.new(macro_collection_result(receiver, values.reject(&.nil?)))
         when "keys"
-          return nil unless receiver.is_a?(Hash(String, MacroValue)) && args.empty?
-          MacroEvaluation.new(receiver.keys.map { |key| MacroSyntaxValue.string(key).as(MacroValue) })
+          return nil unless args.empty?
+          if receiver.is_a?(MacroHashValue)
+            MacroEvaluation.new(receiver.entries.map { |entry| entry.key.as(MacroValue) })
+          elsif receiver.is_a?(Hash(String, MacroValue))
+            MacroEvaluation.new(receiver.keys.map { |key| MacroSyntaxValue.identifier(key).as(MacroValue) })
+          end
         when "values"
-          return nil unless receiver.is_a?(Hash(String, MacroValue)) && args.empty?
-          values = receiver.map { |_, value| value.as(MacroValue) }
+          return nil unless args.empty?
+          if receiver.is_a?(MacroHashValue)
+            MacroEvaluation.new(receiver.entries.map { |entry| entry.value.as(MacroValue) })
+          elsif receiver.is_a?(Hash(String, MacroValue))
+            values = receiver.map { |_, value| value.as(MacroValue) }
+            MacroEvaluation.new(values)
+          end
+        when "to_a"
+          return nil unless args.empty?
+          values = if receiver.is_a?(MacroHashValue)
+                     receiver.entries.map do |entry|
+                       MacroTupleValue.new([entry.key, entry.value] of MacroValue).as(MacroValue)
+                     end
+                   elsif receiver.is_a?(Hash(String, MacroValue))
+                     receiver.map do |key, value|
+                       key_value = MacroSyntaxValue.identifier(key).as(MacroValue)
+                       MacroTupleValue.new([key_value, value] of MacroValue).as(MacroValue)
+                     end
+                   else
+                     return nil
+                   end
           MacroEvaluation.new(values)
+        when "double_splat"
+          return nil unless args.size <= 1
+          suffix = args.empty? ? "" : macro_scalar_text(args[0])
+          return nil unless suffix
+          body = if receiver.is_a?(MacroHashValue)
+                   macro_double_splat(receiver)
+                 elsif receiver.is_a?(Hash(String, MacroValue))
+                   receiver.map do |key, value|
+                     rendered_key = key.matches?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/) ? key : key.inspect
+                     "#{rendered_key}: #{val_to_string(value)}"
+                   end.join(", ")
+                 else
+                   return nil
+                 end
+          MacroEvaluation.new(MacroSyntaxValue.code(body + suffix))
+        when "of", "type", "of_key", "of_value"
+          supported = macro_sequence_values(receiver) || receiver.is_a?(MacroHashValue) || receiver.is_a?(Hash(String, MacroValue))
+          return nil unless args.empty? && supported
+          MacroEvaluation.new(MacroSyntaxValue.code(""))
+        when "has_key?"
+          return nil unless args.size == 1
+          if receiver.is_a?(MacroHashValue)
+            MacroEvaluation.new(receiver.entries.any? { |entry| entry.key == args[0] })
+          elsif receiver.is_a?(Hash(String, MacroValue))
+            key = macro_scalar_text(args[0])
+            key ? MacroEvaluation.new(receiver.has_key?(key)) : nil
+          end
         when "body"
           return nil unless receiver.is_a?(MacroBlockValue) && args.empty?
           MacroEvaluation.new(receiver.body)
@@ -1272,6 +1882,10 @@ module Facet
                      case receiver
                      when Array(MacroValue)
                        receiver.includes?(args[0])
+                     when MacroTupleValue
+                       receiver.values.includes?(args[0])
+                     when MacroHashValue
+                       receiver.entries.any? { |entry| entry.key == args[0] }
                      when Hash(String, MacroValue)
                        key = macro_scalar_text(args[0])
                        key ? receiver.has_key?(key) : false
@@ -1304,22 +1918,26 @@ module Facet
           return nil unless text
           pieces = if args.empty?
                      text.split
+                   elsif separator = macro_regex(args[0])
+                     text.split(separator)
                    elsif separator = macro_scalar_text(args[0])
                      text.split(separator)
                    else
                      return nil
                    end
-          MacroEvaluation.new(pieces.map { |piece| MacroSyntaxValue.string(piece).as(MacroValue) })
+          MacroEvaluation.new(pieces.map { |piece| MacroSyntaxValue.generated_string(piece).as(MacroValue) })
         when "lines"
           return nil unless args.empty?
           text = macro_scalar_text(receiver)
           return nil unless text
-          MacroEvaluation.new(text.lines.map { |line| MacroSyntaxValue.string(line).as(MacroValue) })
+          MacroEvaluation.new(text.lines.map { |line| MacroSyntaxValue.generated_string(line).as(MacroValue) })
         when "join"
-          return nil unless receiver.is_a?(Array(MacroValue)) && args.size <= 1
+          return nil unless args.size <= 1
+          values = macro_sequence_values(receiver)
+          return nil unless values
           separator = args.empty? ? "" : macro_scalar_text(args[0])
           return nil unless separator
-          joined = receiver.map { |value| macro_scalar_text(value) || val_to_string(value) }.join(separator)
+          joined = values.map { |value| macro_scalar_text(value) || val_to_string(value) }.join(separator)
           MacroEvaluation.new(MacroSyntaxValue.string(joined))
         when "to_i"
           return nil unless args.size <= 1
@@ -1352,12 +1970,21 @@ module Facet
       ) : MacroEvaluation?
         case receiver
         when MacroSyntaxValue
+          if name == "name" && receiver.kind == MacroSyntaxKind::Code && args.size <= 1 && receiver.value.matches?(/\A::?[A-Z]|\A[A-Z]/)
+            generic_args = args.empty? ? true : args[0]
+            return nil unless generic_args.is_a?(Bool)
+            value = generic_args ? receiver.value : receiver.value.split('(', 2).first
+            return MacroEvaluation.new(MacroSyntaxValue.code(value))
+          end
           return nil unless {"resolve", "resolve?"}.includes?(name) && args.empty?
           mark_type_introspection
           resolved = macro_type_value(receiver.value, @active_index, current_type_scope)
           return MacroEvaluation.new(resolved) if resolved
           return MacroEvaluation.new(nil) if name == "resolve?"
         when MacroTypeValue
+          if evaluation = apply_annotation_lookup(macro_type_annotations(receiver), name, args)
+            return evaluation
+          end
           return nil unless args.empty?
           mark_type_introspection
           case name
@@ -1389,6 +2016,9 @@ module Facet
             return MacroEvaluation.new(receiver.kind == MacroTypeKind::Lib)
           end
         when MacroMethodValue
+          if evaluation = apply_annotation_lookup(receiver.annotations, name, args)
+            return evaluation
+          end
           return nil unless args.empty?
           case name
           when "name"
@@ -1405,6 +2035,9 @@ module Facet
             return MacroEvaluation.new(MacroSyntaxValue.code(receiver.source))
           end
         when MacroMetaVarValue
+          if evaluation = apply_annotation_lookup(receiver.annotations, name, args)
+            return evaluation
+          end
           return nil unless args.empty?
           case name
           when "name"
@@ -1418,8 +2051,73 @@ module Facet
           when "has_default_value?"
             return MacroEvaluation.new(!receiver.default_value.nil?)
           end
+        when MacroAnnotationValue
+          return nil unless args.empty?
+          case name
+          when "name"
+            return MacroEvaluation.new(MacroSyntaxValue.identifier(receiver.name))
+          when "args"
+            values = receiver.positional_sources.map { |source| eval_annotation_source(source).as(MacroValue) }
+            return MacroEvaluation.new(values)
+          when "named_args"
+            values = receiver.named_sources.transform_values { |source| eval_annotation_source(source).as(MacroValue) }
+            return MacroEvaluation.new(values)
+          end
         end
         nil
+      end
+
+      private def apply_annotation_lookup(
+        annotations : Array(MacroAnnotationValue),
+        name : String,
+        args : Array(MacroValue),
+      ) : MacroEvaluation?
+        case name
+        when "annotation"
+          return nil unless args.size == 1
+          annotation_name = macro_annotation_lookup_name(args[0])
+          return nil unless annotation_name
+          value = annotations.reverse_each.find { |entry| entry.name == annotation_name }
+          MacroEvaluation.new(value)
+        when "annotations"
+          return MacroEvaluation.new(annotations.map(&.as(MacroValue))) if args.empty?
+          return nil unless args.size == 1
+          annotation_name = macro_annotation_lookup_name(args[0])
+          return nil unless annotation_name
+          values = annotations.select { |entry| entry.name == annotation_name }.map(&.as(MacroValue))
+          MacroEvaluation.new(values)
+        else
+          nil
+        end
+      end
+
+      private def macro_annotation_lookup_name(value : MacroValue) : String?
+        name = case value
+               when MacroTypeValue
+                 value.name
+               else
+                 macro_scalar_text(value)
+               end
+        name.try(&.lchop("::"))
+      end
+
+      private def macro_type_annotations(type : MacroTypeValue) : Array(MacroAnnotationValue)
+        index = @active_index
+        return [] of MacroAnnotationValue unless index
+        refs = index.types[type.name]? || [] of DeclRef
+        refs.flat_map do |ref|
+          macro_annotations(syntax_tree(ref.ast).node(ref.node_id))
+        end
+      end
+
+      private def eval_annotation_source(source : String) : MacroValue
+        ast = Parser.new(Source.new(source, "macro-annotation-value.cr", SourceKind::Virtual)).parse_file
+        root_children = ast.children(ast.root)
+        expressions = root_children.first?
+        expression = expressions.try { |node_id| ast.children(node_id).first? }
+        return MacroSyntaxValue.code(source) unless expression
+        evaluation = eval_value(expression, ast)
+        evaluation ? evaluation.value : MacroSyntaxValue.code(source)
       end
 
       private def macro_type_value(
@@ -1462,7 +2160,8 @@ module Facet
             args,
             node.return_type.try(&.text),
             node.body.try(&.text),
-            node.text
+            node.text,
+            macro_annotations(node)
           )
         end
       end
@@ -1480,7 +2179,12 @@ module Facet
           owner = node.ancestors.find do |ancestor|
             {NodeKind::Param, NodeKind::VarDecl}.includes?(ancestor.kind)
           end
-          MacroMetaVarValue.new(name, owner.try(&.declared_type).try(&.text), owner.try(&.value).try(&.text))
+          MacroMetaVarValue.new(
+            name,
+            owner.try(&.declared_type).try(&.text),
+            owner.try(&.value).try(&.text),
+            owner ? macro_annotations(owner) : [] of MacroAnnotationValue
+          )
         end
       end
 
@@ -1520,10 +2224,88 @@ module Facet
       end
 
       private def macro_meta_var(node : SyntaxNode) : MacroMetaVarValue?
-        return nil unless {NodeKind::Param, NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(node.kind)
-        name = node.name.try(&.lstrip('@'))
+        target = unannotated_node(node)
+        return nil unless {NodeKind::Param, NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(target.kind)
+        name = target.name.try(&.lstrip('@'))
         return nil unless name
-        MacroMetaVarValue.new(name, node.declared_type.try(&.text), node.value.try(&.text))
+        MacroMetaVarValue.new(
+          name,
+          target.declared_type.try(&.text),
+          target.value.try(&.text),
+          macro_annotations(node)
+        )
+      end
+
+      private def unannotated_node(node : SyntaxNode) : SyntaxNode
+        current = node
+        while current.kind == NodeKind::Annotation
+          target = current.child(1)
+          break unless target
+          current = target
+        end
+        current
+      end
+
+      private def macro_annotations(node : SyntaxNode) : Array(MacroAnnotationValue)
+        wrappers = [] of SyntaxNode
+        current = node
+        if current.kind == NodeKind::Annotation
+          while current.kind == NodeKind::Annotation
+            wrappers << current
+            target = current.child(1)
+            break unless target
+            current = target
+          end
+        else
+          child = current
+          while parent = child.parent
+            break unless parent.kind == NodeKind::Annotation && parent.child(1).try(&.id) == child.id
+            wrappers << parent
+            child = parent
+          end
+          wrappers.reverse!
+        end
+        wrappers.compact_map { |wrapper| macro_annotation(wrapper) }
+      end
+
+      private def macro_annotation(wrapper : SyntaxNode) : MacroAnnotationValue?
+        expression = wrapper.child(0)
+        return nil unless expression
+        name = macro_annotation_name(expression)
+        return nil unless name
+        call = if expression.kind == NodeKind::Call
+                 expression
+               else
+                 expression.descendants.find { |child| child.kind == NodeKind::Call }
+               end
+        positional = [] of String
+        named = {} of String => String
+        if call
+          call.arguments.each do |argument|
+            if argument.kind == NodeKind::NamedArg
+              argument_name = argument.name
+              argument_value = argument.value
+              named[argument_name] = argument_value.text if argument_name && argument_value
+            else
+              positional << argument.text
+            end
+          end
+        end
+        MacroAnnotationValue.new(name, positional, named)
+      end
+
+      private def macro_annotation_name(expression : SyntaxNode) : String?
+        case expression.kind
+        when NodeKind::Path
+          parts = expression.children.compact_map do |child|
+            child.kind == NodeKind::Call ? child.call_name : child.symbol_name
+          end
+          parts.empty? ? nil : parts.join("::")
+        when NodeKind::Call
+          expression.call_name
+        else
+          expression.symbol_name
+        end
       end
 
       private def current_type_scope : String?
@@ -1581,11 +2363,27 @@ module Facet
             iteration << index.to_i64 if with_index
             values << iteration
           end
+        when MacroHashValue
+          receiver.entries.each_with_index do |entry, index|
+            iteration = if parameter_count <= 1
+                          [entry.key] of MacroValue
+                        else
+                          [entry.key, entry.value] of MacroValue
+                        end
+            iteration << index.to_i64 if with_index
+            values << iteration
+          end
+        when MacroTupleValue
+          receiver.values.each_with_index do |value, index|
+            iteration = [value] of MacroValue
+            iteration << index.to_i64 if with_index
+            values << iteration
+          end
         when Hash(String, MacroValue)
           receiver.each_with_index do |(key, value), index|
-            key_value = MacroSyntaxValue.string(key).as(MacroValue)
+            key_value = MacroSyntaxValue.identifier(key).as(MacroValue)
             iteration = if parameter_count <= 1
-                          [[key_value, value] of MacroValue] of MacroValue
+                          [key_value] of MacroValue
                         else
                           [key_value, value] of MacroValue
                         end
@@ -1604,28 +2402,200 @@ module Facet
             iteration << index.to_i64 if with_index
             values << iteration
           end
+        when MacroRangeValue
+          first = receiver.first
+          last = receiver.last
+          return nil unless first && last
+          finish = receiver.exclusive ? last - 1 : last
+          Range.new(first, finish).each_with_index do |value, index|
+            iteration = [value.as(MacroValue)] of MacroValue
+            iteration << index.to_i64 if with_index
+            values << iteration
+          end
         else
           return nil
         end
         values
       end
 
+      private def macro_number(value : MacroValue) : MacroNumberValue?
+        case value
+        when Int64
+          kind = if value.in?(Int32::MIN.to_i64..Int32::MAX.to_i64)
+                   MacroNumberKind::I32
+                 else
+                   MacroNumberKind::I64
+                 end
+          MacroNumberValue.new(value.to_i128, kind, value.to_s, false)
+        when MacroNumberValue
+          value
+        end
+      end
+
+      private def macro_sequence_values(value : MacroValue) : Array(MacroValue)?
+        case value
+        when Array(MacroValue)
+          value
+        when MacroTupleValue
+          value.values
+        end
+      end
+
+      private def macro_collection_result(receiver : MacroValue, values : Array(MacroValue)) : MacroValue
+        receiver.is_a?(MacroTupleValue) ? MacroTupleValue.new(values) : values
+      end
+
+      private def macro_integer_index(value : MacroValue) : Int64?
+        case value
+        when Int64
+          value
+        when MacroNumberValue
+          case number = value.value
+          when Int128
+            number.to_i64 if number.in?(Int64::MIN.to_i128..Int64::MAX.to_i128)
+          when UInt128
+            number.to_i64 if number <= Int64::MAX.to_u128
+          end
+        end
+      end
+
+      private def macro_regex(value : MacroValue) : Regex?
+        return nil unless value.is_a?(MacroSyntaxValue) && value.kind == MacroSyntaxKind::RegexLiteral
+        Regex.new(value.value)
+      rescue Regex::Error
+        nil
+      end
+
+      private def macro_double_splat(value : MacroHashValue, suffix : String = "") : String
+        body = value.entries.map do |entry|
+          "#{val_to_string(entry.key)} => #{val_to_string(entry.value)}"
+        end.join(", ")
+        body + suffix
+      end
+
+      private def compare_macro_versions(left : String, right : String) : Int32
+        left_parts = left.split('.').map { |part| part.to_i? || 0 }
+        right_parts = right.split('.').map { |part| part.to_i? || 0 }
+        size = Math.max(left_parts.size, right_parts.size)
+        size.times do |index|
+          comparison = (left_parts[index]? || 0) <=> (right_parts[index]? || 0)
+          return comparison unless comparison == 0
+        end
+        0
+      end
+
+      private def macro_match_source(match : Regex::MatchData, regex_value : MacroValue) : String
+        pattern = regex_value.as(MacroSyntaxValue).value
+        names = macro_regex_capture_names(pattern)
+        entries = [] of String
+        match.size.times do |index|
+          key = names[index]? ? names[index].inspect : index.to_s
+          value = match[index]?.try(&.inspect) || "nil"
+          entries << "#{key} => #{value}"
+        end
+        "{#{entries.join(", ")}} of ::Int32 | ::String => ::String | ::Nil"
+      end
+
+      private def macro_regex_capture_names(pattern : String) : Hash(Int32, String)
+        names = {} of Int32 => String
+        capture_index = 0
+        index = 0
+        in_class = false
+        while index < pattern.bytesize
+          char = pattern.byte_at(index).unsafe_chr
+          if char == '\\'
+            index += 2
+            next
+          elsif char == '['
+            in_class = true
+          elsif char == ']'
+            in_class = false
+          elsif char == '(' && !in_class
+            if pattern.byte_at?(index + 1).try(&.unsafe_chr) == '?'
+              marker = pattern.byte_at?(index + 2).try(&.unsafe_chr)
+              if marker == '<'
+                discriminator = pattern.byte_at?(index + 3).try(&.unsafe_chr)
+                unless {'=', '!'}.includes?(discriminator)
+                  finish = pattern.index('>', index + 3)
+                  if finish
+                    capture_index += 1
+                    names[capture_index] = pattern.byte_slice(index + 3, finish - index - 3)
+                  end
+                end
+              end
+            else
+              capture_index += 1
+            end
+          end
+          index += 1
+        end
+        names
+      end
+
+      private def macro_number_kind_name(kind : MacroNumberKind) : String
+        kind.to_s.downcase
+      end
+
+      private def macro_number_text(value : Int128 | UInt128 | Float64) : String
+        case value
+        when Float64
+          value.to_s
+        else
+          value.to_s
+        end
+      end
+
+      private def macro_class_name(value : MacroValue) : String
+        case value
+        when Nil                     then "NilLiteral"
+        when Bool                    then "BoolLiteral"
+        when Int64, MacroNumberValue then "NumberLiteral"
+        when MacroSyntaxValue
+          case value.kind
+          when MacroSyntaxKind::StringLiteral          then "StringLiteral"
+          when MacroSyntaxKind::SymbolLiteral          then "SymbolLiteral"
+          when MacroSyntaxKind::CharLiteral            then "CharLiteral"
+          when MacroSyntaxKind::RegexLiteral           then "RegexLiteral"
+          when MacroSyntaxKind::GeneratedStringLiteral then "StringLiteral"
+          when MacroSyntaxKind::GeneratedCharLiteral   then "CharLiteral"
+          when MacroSyntaxKind::GeneratedSymbolLiteral then "SymbolLiteral"
+          when MacroSyntaxKind::Identifier             then "MacroId"
+          else                                              "ASTNode"
+          end
+        when MacroBlockValue          then "Block"
+        when MacroRangeValue          then "RangeLiteral"
+        when MacroTypeValue           then "TypeNode"
+        when MacroAnnotationValue     then "Annotation"
+        when MacroMetaVarValue        then "MetaVar"
+        when MacroMethodValue         then "Def"
+        when MacroTupleValue          then "TupleLiteral"
+        when MacroHashValue           then "HashLiteral"
+        when Array(MacroValue)        then "ArrayLiteral"
+        when Hash(String, MacroValue) then "NamedTupleLiteral"
+        else                               "ASTNode"
+        end
+      end
+
       private def macro_value_is_a?(value : MacroValue, type_name : String) : Bool
         normalized = type_name.lchop("::")
-        return true if normalized == "ASTNode" && value.is_a?(MacroSyntaxValue)
+        return true if normalized == "ASTNode" && !value.is_a?(String)
         case value
         when MacroSyntaxValue
           case normalized
           when "StringLiteral"
-            value.kind == MacroSyntaxKind::StringLiteral
+            {MacroSyntaxKind::StringLiteral, MacroSyntaxKind::GeneratedStringLiteral}.includes?(value.kind)
           when "SymbolLiteral"
-            value.kind == MacroSyntaxKind::SymbolLiteral
+            {MacroSyntaxKind::SymbolLiteral, MacroSyntaxKind::GeneratedSymbolLiteral}.includes?(value.kind)
+          when "CharLiteral"
+            {MacroSyntaxKind::CharLiteral, MacroSyntaxKind::GeneratedCharLiteral}.includes?(value.kind)
+          when "RegexLiteral"
+            value.kind == MacroSyntaxKind::RegexLiteral
           when "MacroId", "Var", "Path"
             value.kind == MacroSyntaxKind::Identifier
           else
             false
           end
-        when Int64
+        when Int64, MacroNumberValue
           normalized == "NumberLiteral"
         when Bool
           normalized == "BoolLiteral"
@@ -1633,36 +2603,61 @@ module Facet
           normalized == "NilLiteral"
         when MacroBlockValue
           normalized == "Block"
+        when MacroRangeValue
+          normalized == "RangeLiteral"
         when MacroTypeValue
           normalized == "TypeNode"
+        when MacroAnnotationValue
+          normalized == "Annotation"
         when MacroMethodValue
           normalized == "Def"
         when MacroMetaVarValue
           normalized == "MetaVar"
+        when MacroTupleValue
+          normalized == "TupleLiteral"
+        when MacroHashValue
+          normalized == "HashLiteral"
+        when Array(MacroValue)
+          normalized == "ArrayLiteral"
+        when Hash(String, MacroValue)
+          normalized == "NamedTupleLiteral"
         else
           false
         end
       end
 
       private def macro_value_responds_to?(value : MacroValue, method_name : String) : Bool
-        common = {"stringify", "nil?"}
+        common = {"class_name", "stringify", "nil?"}
         return true if common.includes?(method_name)
         case value
+        when Int64, MacroNumberValue
+          {"kind", "to_number", "zero?"}.includes?(method_name)
         when MacroSyntaxValue
-          {"id", "symbolize", "size", "empty?", "starts_with?", "ends_with?"}.includes?(method_name)
+          {"id", "symbolize", "size", "empty?", "starts_with?", "ends_with?", "ord", "count", "tr",
+           "source", "options", "match", "scan"}.includes?(method_name)
         when Array(MacroValue)
-          {"size", "empty?", "first", "last", "map", "select", "reject", "any?", "all?", "join"}.includes?(method_name)
+          {"size", "empty?", "first", "last", "map", "select", "reject", "any?", "all?", "join",
+           "reduce", "find", "splat", "sort_by", "unshift", "push"}.includes?(method_name)
+        when MacroTupleValue
+          {"size", "empty?", "first", "last", "map", "select", "reject", "any?", "all?", "join",
+           "reduce", "find", "splat", "sort_by"}.includes?(method_name)
+        when MacroHashValue
+          {"size", "empty?", "keys", "values", "includes?", "map", "to_a", "has_key?",
+           "of_key", "of_value", "double_splat", "select", "reject"}.includes?(method_name)
         when Hash(String, MacroValue)
-          {"size", "empty?", "keys", "values", "includes?"}.includes?(method_name)
+          {"size", "empty?", "keys", "values", "includes?", "map", "to_a", "has_key?",
+           "double_splat", "select", "reject", "of_key", "of_value"}.includes?(method_name)
         when MacroBlockValue
           {"body", "args", "empty?"}.includes?(method_name)
         when MacroTypeValue
           {"name", "methods", "instance_vars", "constants", "superclass", "ancestors",
-           "class?", "module?", "struct?", "enum?", "lib?"}.includes?(method_name)
+           "class?", "module?", "struct?", "enum?", "lib?", "annotation", "annotations"}.includes?(method_name)
+        when MacroAnnotationValue
+          {"name", "args", "named_args", "[]"}.includes?(method_name)
         when MacroMethodValue
-          {"name", "args", "return_type", "body", "source"}.includes?(method_name)
+          {"name", "args", "return_type", "body", "source", "annotation", "annotations"}.includes?(method_name)
         when MacroMetaVarValue
-          {"name", "type", "default_value", "has_default_value?"}.includes?(method_name)
+          {"name", "type", "default_value", "has_default_value?", "annotation", "annotations"}.includes?(method_name)
         else
           false
         end
@@ -1688,26 +2683,73 @@ module Facet
 
       private def eval_macro_index(receiver : MacroValue, index : MacroValue) : MacroEvaluation?
         case receiver
+        when MacroTupleValue
+          evaluation = eval_macro_index(receiver.values, index)
+          return nil unless evaluation
+          value = evaluation.value
+          value = MacroTupleValue.new(value) if value.is_a?(Array(MacroValue))
+          MacroEvaluation.new(value)
         when Array(MacroValue)
-          return nil unless index.is_a?(Int64)
-          normalized = index < 0 ? receiver.size.to_i64 + index : index
-          return nil unless normalized.in?(0_i64...receiver.size.to_i64)
-          MacroEvaluation.new(receiver[normalized])
+          if range = index.as?(MacroRangeValue)
+            size = receiver.size.to_i64
+            first = range.first || 0_i64
+            return MacroEvaluation.new(nil) if first < -size || first > size
+            first += size if first < 0
+            last = range.last || (range.exclusive ? size : size - 1)
+            last += size if last < 0
+            finish = range.exclusive ? last : last + 1
+            finish = finish.clamp(first, size)
+            return MacroEvaluation.new(receiver[first.to_i...finish.to_i].map(&.as(MacroValue)))
+          end
+          position = macro_integer_index(index)
+          return nil unless position
+          normalized = position < 0 ? receiver.size.to_i64 + position : position
+          value = normalized.in?(0_i64...receiver.size.to_i64) ? receiver[normalized] : nil
+          MacroEvaluation.new(value)
         when String
-          return nil unless index.is_a?(Int64)
-          char = receiver.chars[index]?
-          char ? MacroEvaluation.new(char.to_s) : nil
+          eval_macro_text_index(receiver, index, syntax: false)
         when MacroSyntaxValue
-          return nil unless index.is_a?(Int64)
-          char = receiver.value.chars[index]?
-          char ? MacroEvaluation.new(MacroSyntaxValue.string(char.to_s)) : nil
+          eval_macro_text_index(receiver.value, index, syntax: true)
+        when MacroHashValue
+          entry = receiver.entries.find { |candidate| candidate.key == index }
+          MacroEvaluation.new(entry.try(&.value))
         when Hash(String, MacroValue)
-          key = macro_scalar_text(index)
-          return nil unless key && receiver.has_key?(key)
-          MacroEvaluation.new(receiver[key])
+          key = macro_scalar_text(index) || macro_integer_index(index).try(&.to_s)
+          return nil unless key
+          MacroEvaluation.new(receiver[key]?)
+        when MacroAnnotationValue
+          position = macro_integer_index(index)
+          source = if position
+                     normalized = position < 0 ? receiver.positional_sources.size.to_i64 + position : position
+                     receiver.positional_sources[normalized]?
+                   elsif key = macro_scalar_text(index)
+                     receiver.named_sources[key]?
+                   end
+          MacroEvaluation.new(source ? eval_annotation_source(source) : nil)
         else
           nil
         end
+      end
+
+      private def eval_macro_text_index(text : String, index : MacroValue, syntax : Bool) : MacroEvaluation?
+        if range = index.as?(MacroRangeValue)
+          chars = text.chars
+          first = range.first || 0_i64
+          last = range.last || (range.exclusive ? chars.size.to_i64 : chars.size.to_i64 - 1)
+          first += chars.size if first < 0
+          last += chars.size if last < 0
+          finish = range.exclusive ? last : last + 1
+          first = first.clamp(0_i64, chars.size.to_i64)
+          finish = finish.clamp(first, chars.size.to_i64)
+          value = chars[first.to_i...finish.to_i].join
+          return MacroEvaluation.new(syntax ? MacroSyntaxValue.string(value) : value)
+        end
+
+        position = macro_integer_index(index)
+        return nil unless position
+        char = text.chars[position]?
+        return nil unless char
+        MacroEvaluation.new(syntax ? MacroSyntaxValue.string(char.to_s) : char.to_s)
       end
 
       private def assign_macro_value(target_id : NodeId, value : MacroValue, ast : AstFile) : Nil
@@ -1715,6 +2757,28 @@ module Facet
         case target.kind
         when NodeKind::Ident
           current_macro_env[ast.arena.symbols[target.payload_index]] = value
+        when NodeKind::Index
+          children = ast.children(target_id)
+          return if children.size < 2
+          receiver = eval_value(children[0], ast)
+          index = eval_value(children[1], ast)
+          return unless receiver && index
+          case collection = receiver.value
+          when Array(MacroValue)
+            position = macro_integer_index(index.value)
+            return unless position
+            position += collection.size if position < 0
+            collection[position] = value if position.in?(0_i64...collection.size.to_i64)
+          when MacroHashValue
+            if entry = collection.entries.find { |candidate| candidate.key == index.value }
+              entry.value = value
+            else
+              collection.entries << MacroHashEntry.new(index.value, value)
+            end
+          when Hash(String, MacroValue)
+            key = macro_scalar_text(index.value)
+            collection[key] = value if key
+          end
         when NodeKind::Tuple
           values = value.is_a?(Array(MacroValue)) ? value : [value] of MacroValue
           ast.children(target_id).each_with_index do |child, index|
@@ -1791,10 +2855,33 @@ module Facet
           end
         end
 
+        if op == TokenKind::Spaceship || left.is_a?(MacroNumberValue) || right.is_a?(MacroNumberValue)
+          if left_number = macro_number(left)
+            if right_number = macro_number(right)
+              if evaluation = eval_number_binary(op, left_number, right_number)
+                return evaluation
+              end
+            end
+          end
+        end
+
+        if {TokenKind::Match, TokenKind::NotMatch}.includes?(op)
+          text = macro_scalar_text(left)
+          pattern = macro_regex(right)
+          if text && pattern
+            matched = pattern.matches?(text)
+            return MacroEvaluation.new(op == TokenKind::Match ? matched : !matched)
+          end
+        end
+
         case op
         when TokenKind::Plus
           if left.is_a?(Int64) && right.is_a?(Int64)
             MacroEvaluation.new(left + right)
+          elsif left.is_a?(Array(MacroValue)) && (right_values = macro_sequence_values(right))
+            MacroEvaluation.new(left + right_values)
+          elsif left.is_a?(MacroTupleValue) && (right_values = macro_sequence_values(right))
+            MacroEvaluation.new(MacroTupleValue.new(left.values + right_values))
           elsif (left_text = macro_scalar_text(left)) && (right_text = macro_scalar_text(right))
             MacroEvaluation.new(MacroSyntaxValue.string(left_text + right_text))
           else
@@ -1803,10 +2890,31 @@ module Facet
         when TokenKind::Minus
           if left.is_a?(Int64) && right.is_a?(Int64)
             MacroEvaluation.new(left - right)
+          elsif left.is_a?(Array(MacroValue)) && (right_values = macro_sequence_values(right))
+            MacroEvaluation.new(left.reject { |value| right_values.includes?(value) })
+          elsif left.is_a?(MacroTupleValue) && (right_values = macro_sequence_values(right))
+            values = left.values.reject { |value| right_values.includes?(value) }
+            MacroEvaluation.new(MacroTupleValue.new(values))
           end
         when TokenKind::Star
           if left.is_a?(Int64) && right.is_a?(Int64)
             MacroEvaluation.new(left * right)
+          elsif left.is_a?(MacroSyntaxValue) && left.kind == MacroSyntaxKind::StringLiteral && right.is_a?(Int64) && right >= 0
+            MacroEvaluation.new(MacroSyntaxValue.string(left.value * right.to_i))
+          elsif left.is_a?(Array(MacroValue)) && right.is_a?(Int64) && right >= 0
+            values = if left.empty?
+                       [] of MacroValue
+                     else
+                       Array(MacroValue).new(left.size * right.to_i) { |index| left[index % left.size] }
+                     end
+            MacroEvaluation.new(values)
+          elsif left.is_a?(MacroTupleValue) && right.is_a?(Int64) && right >= 0
+            values = if left.values.empty?
+                       [] of MacroValue
+                     else
+                       Array(MacroValue).new(left.values.size * right.to_i) { |index| left.values[index % left.values.size] }
+                     end
+            MacroEvaluation.new(MacroTupleValue.new(values))
           end
         when TokenKind::Slash
           if left.is_a?(Int64) && right.is_a?(Int64) && right != 0
@@ -1851,7 +2959,15 @@ module Facet
         when TokenKind::Caret
           MacroEvaluation.new(left ^ right) if left.is_a?(Int64) && right.is_a?(Int64)
         when TokenKind::ShiftLeft
-          MacroEvaluation.new(left << right) if left.is_a?(Int64) && right.is_a?(Int64)
+          if left.is_a?(Int64) && right.is_a?(Int64)
+            MacroEvaluation.new(left << right)
+          elsif left.is_a?(Array(MacroValue))
+            left << right
+            MacroEvaluation.new(left)
+          elsif left.is_a?(MacroTupleValue)
+            left.values << right
+            MacroEvaluation.new(left)
+          end
         when TokenKind::ShiftRight
           MacroEvaluation.new(left >> right) if left.is_a?(Int64) && right.is_a?(Int64)
         when TokenKind::EqualEqual
@@ -1861,6 +2977,181 @@ module Facet
         else
           nil
         end
+      end
+
+      private def eval_number_binary(
+        op : TokenKind,
+        left : MacroNumberValue,
+        right : MacroNumberValue,
+      ) : MacroEvaluation?
+        if left.value.is_a?(Float64) || right.value.is_a?(Float64)
+          return eval_float_binary(op, left, right)
+        end
+        if left.value.is_a?(UInt128)
+          eval_unsigned_binary(op, left, right)
+        else
+          eval_signed_binary(op, left, right)
+        end
+      rescue OverflowError | DivisionByZeroError
+        nil
+      end
+
+      private def eval_float_binary(
+        op : TokenKind,
+        left : MacroNumberValue,
+        right : MacroNumberValue,
+      ) : MacroEvaluation?
+        left_value = left.value.to_f64
+        right_value = right.value.to_f64
+        case op
+        when TokenKind::EqualEqual
+          MacroEvaluation.new(left_value == right_value)
+        when TokenKind::BangEqual
+          MacroEvaluation.new(left_value != right_value)
+        when TokenKind::Less
+          MacroEvaluation.new(left_value < right_value)
+        when TokenKind::LessEqual
+          MacroEvaluation.new(left_value <= right_value)
+        when TokenKind::Greater
+          MacroEvaluation.new(left_value > right_value)
+        when TokenKind::GreaterEqual
+          MacroEvaluation.new(left_value >= right_value)
+        when TokenKind::Spaceship
+          raw_comparison = left_value <=> right_value
+          comparison = raw_comparison.try(&.to_i64)
+          MacroEvaluation.new(comparison)
+        else
+          value = case op
+                  when TokenKind::Plus    then left_value + right_value
+                  when TokenKind::Minus   then left_value - right_value
+                  when TokenKind::Star    then left_value * right_value
+                  when TokenKind::Slash   then left_value / right_value
+                  when TokenKind::Percent then left_value % right_value
+                  else                         return nil
+                  end
+          MacroEvaluation.new(macro_number_result(value, left))
+        end
+      end
+
+      private def eval_unsigned_binary(
+        op : TokenKind,
+        left : MacroNumberValue,
+        right : MacroNumberValue,
+      ) : MacroEvaluation?
+        left_value = left.value.as(UInt128)
+        right_value = case value = right.value
+                      when UInt128 then value
+                      when Int128
+                        return nil if value < 0
+                        value.to_u128
+                      else
+                        return nil
+                      end
+        case op
+        when TokenKind::EqualEqual
+          MacroEvaluation.new(left_value == right_value)
+        when TokenKind::BangEqual
+          MacroEvaluation.new(left_value != right_value)
+        when TokenKind::Less
+          MacroEvaluation.new(left_value < right_value)
+        when TokenKind::LessEqual
+          MacroEvaluation.new(left_value <= right_value)
+        when TokenKind::Greater
+          MacroEvaluation.new(left_value > right_value)
+        when TokenKind::GreaterEqual
+          MacroEvaluation.new(left_value >= right_value)
+        when TokenKind::Spaceship
+          MacroEvaluation.new((left_value <=> right_value).to_i64)
+        else
+          value = case op
+                  when TokenKind::Plus  then left_value + right_value
+                  when TokenKind::Minus then left_value - right_value
+                  when TokenKind::Star  then left_value * right_value
+                  when TokenKind::Slash, TokenKind::SlashSlash
+                    return nil if right_value == 0
+                    left_value // right_value
+                  when TokenKind::Percent
+                    return nil if right_value == 0
+                    left_value % right_value
+                  when TokenKind::StarStar   then left_value ** right_value.to_i
+                  when TokenKind::Pipe       then left_value | right_value
+                  when TokenKind::Ampersand  then left_value & right_value
+                  when TokenKind::Caret      then left_value ^ right_value
+                  when TokenKind::ShiftLeft  then left_value << right_value.to_i
+                  when TokenKind::ShiftRight then left_value >> right_value.to_i
+                  else                            return nil
+                  end
+          MacroEvaluation.new(macro_number_result(value, left))
+        end
+      end
+
+      private def eval_signed_binary(
+        op : TokenKind,
+        left : MacroNumberValue,
+        right : MacroNumberValue,
+      ) : MacroEvaluation?
+        left_value = left.value.as(Int128)
+        right_value = case value = right.value
+                      when Int128 then value
+                      when UInt128
+                        return nil if value > Int128::MAX.to_u128
+                        value.to_i128
+                      else
+                        return nil
+                      end
+        case op
+        when TokenKind::EqualEqual
+          MacroEvaluation.new(left_value == right_value)
+        when TokenKind::BangEqual
+          MacroEvaluation.new(left_value != right_value)
+        when TokenKind::Less
+          MacroEvaluation.new(left_value < right_value)
+        when TokenKind::LessEqual
+          MacroEvaluation.new(left_value <= right_value)
+        when TokenKind::Greater
+          MacroEvaluation.new(left_value > right_value)
+        when TokenKind::GreaterEqual
+          MacroEvaluation.new(left_value >= right_value)
+        when TokenKind::Spaceship
+          MacroEvaluation.new((left_value <=> right_value).to_i64)
+        else
+          value = case op
+                  when TokenKind::Plus  then left_value + right_value
+                  when TokenKind::Minus then left_value - right_value
+                  when TokenKind::Star  then left_value * right_value
+                  when TokenKind::Slash, TokenKind::SlashSlash
+                    return nil if right_value == 0
+                    left_value // right_value
+                  when TokenKind::Percent
+                    return nil if right_value == 0
+                    left_value % right_value
+                  when TokenKind::StarStar   then left_value ** right_value.to_i
+                  when TokenKind::Pipe       then left_value | right_value
+                  when TokenKind::Ampersand  then left_value & right_value
+                  when TokenKind::Caret      then left_value ^ right_value
+                  when TokenKind::ShiftLeft  then left_value << right_value.to_i
+                  when TokenKind::ShiftRight then left_value >> right_value.to_i
+                  else                            return nil
+                  end
+          MacroEvaluation.new(macro_number_result(value, left))
+        end
+      end
+
+      private def macro_number_result(
+        value : Int128 | UInt128 | Float64,
+        prototype : MacroNumberValue,
+      ) : MacroNumberValue
+        source = macro_number_result_source(value, prototype.kind, prototype.explicit_kind)
+        MacroNumberValue.new(value, prototype.kind, source, prototype.explicit_kind)
+      end
+
+      private def macro_number_result_source(
+        value : Int128 | UInt128 | Float64,
+        kind : MacroNumberKind,
+        explicit_kind : Bool,
+      ) : String
+        source = macro_number_text(value)
+        explicit_kind ? "#{source}_#{macro_number_kind_name(kind)}" : source
       end
 
       private def macro_type_subtype?(type : MacroTypeValue, target : MacroTypeValue) : Bool
@@ -1873,9 +3164,34 @@ module Facet
       private def eval_unary(op : TokenKind, value : MacroValue) : MacroEvaluation?
         case op
         when TokenKind::Plus
-          MacroEvaluation.new(value) if value.is_a?(Int64)
+          if number = macro_number(value)
+            result = MacroNumberValue.new(number.value, number.kind, "+#{number.source.lchop("+")}", number.explicit_kind)
+            MacroEvaluation.new(result)
+          end
         when TokenKind::Minus
-          value.is_a?(Int64) ? MacroEvaluation.new(-value) : nil
+          if number = macro_number(value)
+            negated : Int128 | Float64 = case numeric = number.value
+            when Float64 then -numeric
+            when UInt128
+              unsigned = numeric
+              return nil if unsigned > Int128::MAX.to_u128 + 1
+              unsigned == Int128::MAX.to_u128 + 1 ? Int128::MIN : -unsigned.to_i128
+            when Int128 then -numeric
+            else             return nil
+            end
+            source = macro_number_result_source(negated, number.kind, number.explicit_kind)
+            MacroEvaluation.new(MacroNumberValue.new(negated, number.kind, source, number.explicit_kind))
+          end
+        when TokenKind::Tilde
+          if number = macro_number(value)
+            inverted : Int128 | UInt128 = case numeric = number.value
+            when Int128  then ~numeric
+            when UInt128 then ~numeric
+            else              return nil
+            end
+            source = macro_number_result_source(inverted, number.kind, number.explicit_kind)
+            MacroEvaluation.new(MacroNumberValue.new(inverted, number.kind, source, number.explicit_kind))
+          end
         when TokenKind::Bang
           MacroEvaluation.new(!truthy?(value))
         else
@@ -1908,16 +3224,43 @@ module Facet
           value.source
         when MacroBlockValue
           value.body
+        when MacroRangeValue
+          operator = value.exclusive ? "..." : ".."
+          "#{value.first}#{operator}#{value.last}"
+        when MacroNumberValue
+          value.source
         when MacroTypeValue
+          value.name
+        when MacroAnnotationValue
           value.name
         when MacroMetaVarValue
           value.name
         when MacroMethodValue
           value.source
+        when MacroTupleValue
+          "{" + value.values.map { |entry| val_to_string(entry) }.join(", ") + "}"
+        when MacroHashValue
+          "{" + value.entries.map { |entry| "#{val_to_string(entry.key)} => #{val_to_string(entry.value)}" }.join(", ") + "}"
         when Array(MacroValue)
-          value.map { |v| val_to_string(v) }.join(",")
+          elements = value.map { |entry| val_to_string(entry) }.join(", ")
+          type_suffix = if value.empty?
+                          " of ::NoReturn"
+                        elsif value.all? { |entry| entry.is_a?(MacroSyntaxValue) && entry.kind == MacroSyntaxKind::GeneratedStringLiteral }
+                          " of ::String"
+                        elsif value.all? { |entry| entry.is_a?(MacroSyntaxValue) && entry.kind == MacroSyntaxKind::GeneratedCharLiteral }
+                          " of ::Char"
+                        elsif value.all? { |entry| entry.is_a?(MacroSyntaxValue) && entry.kind == MacroSyntaxKind::GeneratedSymbolLiteral }
+                          " of ::Symbol"
+                        else
+                          ""
+                        end
+          "[#{elements}]#{type_suffix}"
         when Hash(String, MacroValue)
-          value.map { |k, v| "#{k}=#{val_to_string(v)}" }.join(",")
+          entries = value.map do |key, entry|
+            rendered_key = key.matches?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/) ? key : key.inspect
+            "#{rendered_key}: #{val_to_string(entry)}"
+          end.join(", ")
+          "{#{entries}}"
         else
           value.to_s
         end
@@ -1930,6 +3273,8 @@ module Facet
         when MacroSyntaxValue
           value.value
         when MacroTypeValue
+          value.name
+        when MacroAnnotationValue
           value.name
         when MacroMetaVarValue
           value.name

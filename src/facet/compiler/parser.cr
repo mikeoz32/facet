@@ -2408,12 +2408,14 @@ module Facet
         when TokenKind::Plus, TokenKind::Minus, TokenKind::Bang, TokenKind::Tilde,
              TokenKind::AmpersandPlus, TokenKind::AmpersandMinus
           op = advance
-          expr = parse_expression(prefix_binding_power(op.kind), stop, allow_var_decl, allow_type_apply)
-          span = Span.new(op.span.start, node_span(expr).finish)
           if {TokenKind::Plus, TokenKind::Minus}.includes?(op.kind) &&
-             @arena.node(expr).kind == NodeKind::LiteralNumber && op.span.finish == node_span(expr).start
+             current.kind == TokenKind::Number && op.span.finish == current.span.start
+            number = advance
+            span = Span.new(op.span.start, number.span.finish)
             @arena.add_literal_node(LiteralKind::Number, span)
           else
+            expr = parse_expression(prefix_binding_power(op.kind), stop, allow_var_decl, allow_type_apply)
+            span = Span.new(op.span.start, node_span(expr).finish)
             @arena.add_unary(op.kind, span, expr)
           end
         else

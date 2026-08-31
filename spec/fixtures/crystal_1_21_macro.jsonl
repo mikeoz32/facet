@@ -1,0 +1,372 @@
+{"kind":"facet-upstream-macro-fixture","crystal_version":"1.21.0","crystal_revision":"57cf7da5094db6c5d3c058c6d054a757b5ced19e","suites":["spec/compiler/macro/macro_expander_spec.cr","spec/compiler/macro/macro_methods_spec.cr"],"semantic_suites":["spec/compiler/semantic/macro_spec.cr","spec/compiler/semantic/macro_overload_spec.cr"],"example_count":731,"semantic_example_count":133,"assertion_counts":{"assert_macro":973,"assert_error":52,"assert_macro_error":25,"assert_type":96,"assert_warning":3,"assert_no_errors":4},"assertion_count":973,"case_count":371,"excluded_count":602,"exclusion_counts":{"requires_context":593,"dynamic_expression":3,"ambient_environment":2,"expected_exception":4}}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":19,"body":"1 + 2","expected":"1 + 2"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":35,"body":"{{true}}","expected":"true"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":39,"body":"{{1}}","expected":"1"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":43,"body":"{{'a'}}","expected":"'a'"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":47,"body":"{{\"hello\"}}","expected":"\"hello\""}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":51,"body":"{{:foo}}","expected":":foo"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":55,"body":"{{nil}}","expected":"nil"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":59,"body":"{{[1, 2, 3]}}","expected":"[1, 2, 3]"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":63,"body":"{{{:a => 1, :b => 2}}}","expected":"{:a => 1, :b => 2}"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":67,"body":"{{{1, 2, 3}}}","expected":"{1, 2, 3}"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":79,"body":"{{1..3}}","expected":"1..3"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":83,"body":"{{ \"hello#{1 == 1}world\" }}","expected":"\"hellotrueworld\""}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":108,"body":"{%if true%}hello{%end%}","expected":"hello"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":112,"body":"{%if false%}hello{%end%}","expected":""}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":116,"body":"{%if false%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":124,"body":"{%if !true%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":138,"body":"{%for e in [1, 2]%}{{e}}{%end%}","expected":"12"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":154,"body":"{%for e in 1..3 %}{{e}}{%end%}","expected":"123"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":167,"body":"{{1 == 2 ? 3 : 4}}","expected":"4"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":171,"body":"{{unless 1 == 2; 3; else; 4; end}}","expected":"3"}
+{"suite":"macro-expander","source_file":"spec/compiler/macro/macro_expander_spec.cr","line":175,"body":"{% 1 %}","expected":""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":135,"body":"{%if 1 == 1%}hello{%else%}bye{%end%}","expected":"hello"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":139,"body":"{%if 1 == 2%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":143,"body":"{%if 1 != 2%}hello{%else%}bye{%end%}","expected":"hello"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":147,"body":"{%if 1 != 1%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":151,"body":"{{:foo == :foo}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":155,"body":"{{:foo == :bar}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":160,"body":"{{:foo.class_name}}","expected":"\"SymbolLiteral\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":186,"body":"{{ 1.nil? }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":190,"body":"{{ nil.nil? }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":268,"body":"{%if 2 > 1%}hello{%else%}bye{%end%}","expected":"hello"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":272,"body":"{%if 2 > 3%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":276,"body":"{%if 1 >= 1%}hello{%else%}bye{%end%}","expected":"hello"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":280,"body":"{%if 2 >= 3%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":284,"body":"{%if 1 < 2%}hello{%else%}bye{%end%}","expected":"hello"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":288,"body":"{%if 3 < 2%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":292,"body":"{%if 1 <= 1%}hello{%else%}bye{%end%}","expected":"hello"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":296,"body":"{%if 3 <= 2%}hello{%else%}bye{%end%}","expected":"bye"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":300,"body":"{{1 <=> -1}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":304,"body":"{{0.0/0.0 <=> -1}}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":308,"body":"{{1 + 2}}","expected":"3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":312,"body":"{{1_u64 + 2_u64}}","expected":"3_u64"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":316,"body":"{{1 - 2}}","expected":"-1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":320,"body":"{{2 * 3}}","expected":"6"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":330,"body":"{{5 // 3}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":334,"body":"{{5 % 3}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":338,"body":"{{ 3000000000u64 % 2 }}","expected":"0_u64"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":342,"body":"{{5 & 3}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":346,"body":"{{5 | 3}}","expected":"7"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":350,"body":"{{5 ^ 3}}","expected":"6"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":354,"body":"{{2 ** 3}}","expected":"8"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":358,"body":"{{1 << 2}}","expected":"4"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":362,"body":"{{4 >> 2}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":366,"body":"{{1.5 + 2.6}}","expected":"4.1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":370,"body":"{{+3}}","expected":"+3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":374,"body":"{{-(3)}}","expected":"-3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":375,"body":"{{-(3_i128)}}","expected":"-3_i128"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":379,"body":"{{~1}}","expected":"-2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":383,"body":"{{-128i8.kind}}","expected":":i8"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":384,"body":"{{1e-123_f32.kind}}","expected":":f32"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":385,"body":"{{1.0.kind}}","expected":":f64"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":386,"body":"{{0xde7ec7ab1e_u64.kind}}","expected":":u64"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":387,"body":"{{1_u128.kind}}","expected":":u128"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":388,"body":"{{-20i128.kind}}","expected":":i128"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":392,"body":"{{ 4_u8.to_number }}","expected":"4"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":393,"body":"{{ 2147483648.to_number }}","expected":"2147483648"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":394,"body":"{{ 1_f32.to_number }}","expected":"1.0"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":395,"body":"{{ 4_u128.to_number }}","expected":"4"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":396,"body":"{{ -20i128.to_number }}","expected":"-20"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":400,"body":"{{18446744073709551615_u128 + 1}}","expected":"18446744073709551616_u128"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":401,"body":"{{18446744073709551_i128 - 1_u128}}","expected":"18446744073709550_i128"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":402,"body":"{{18446744073709551615_u128 * 10}}","expected":"184467440737095516150_u128"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":403,"body":"{{18446744073709551610_u128 // 10}}","expected":"1844674407370955161_u128"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":409,"body":"{{'a'.ord}}","expected":"97"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":410,"body":"{{'龍'.ord}}","expected":"40845"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":414,"body":"{{0.zero?}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":415,"body":"{{1.zero?}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":417,"body":"{{0.0.zero?}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":418,"body":"{{0.1.zero?}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":424,"body":"{{\"foo\" == \"foo\"}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":425,"body":"{{\"foo\" == \"bar\"}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":429,"body":"{{\"foo\" != \"foo\"}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":430,"body":"{{\"foo\" != \"bar\"}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":434,"body":"{{\"odelay\" * 3}}","expected":"\"odelayodelayodelay\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":439,"body":"{{\"1 2 3\".split}}","expected":"[\"1\", \"2\", \"3\"] of ::String"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":443,"body":"{{\"1-2-3\".split(\"-\")}}","expected":"[\"1\", \"2\", \"3\"] of ::String"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":447,"body":"{{\"1-2-3\".split('-')}}","expected":"[\"1\", \"2\", \"3\"] of ::String"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":451,"body":"{{\"123-456-789\".split(/-(.)/)}}","expected":"[\"123\", \"4\", \"56\", \"7\", \"89\"] of ::String"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":456,"body":"{{\"  hello   \".strip}}","expected":"\"hello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":460,"body":"{{\"HELLO\".downcase}}","expected":"\"hello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":464,"body":"{{\"hello\".upcase}}","expected":"\"HELLO\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":468,"body":"{{\"hello\".capitalize}}","expected":"\"Hello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":480,"body":"{{\"hello\".size}}","expected":"5"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":484,"body":"{{\"aabbcc\".count('a')}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":488,"body":"{{\"hello\".empty?}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":492,"body":"{{\"hello\"[1..-2]}}","expected":"\"ell\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":496,"body":"{{\"hello\"[1...-2]}}","expected":"\"el\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":500,"body":"{{\"hello\"[[1].size..-2]}}","expected":"\"ell\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":504,"body":"{{\"hello\"[1..]}}","expected":"\"ello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":505,"body":"{{\"hello\"[1..nil]}}","expected":"\"ello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":506,"body":"{{\"hello\"[...3]}}","expected":"\"hel\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":507,"body":"{{\"hello\"[nil...3]}}","expected":"\"hel\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":508,"body":"{{\"hello\"[..]}}","expected":"\"hello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":509,"body":"{{\"hello\"[nil..nil]}}","expected":"\"hello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":513,"body":"{{\"hello\n\".chomp}}","expected":"\"hello\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":517,"body":"{{\"hello\".starts_with?('h')}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":521,"body":"{{\"hello\".starts_with?('e')}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":525,"body":"{{\"hello\".starts_with?(\"hel\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":529,"body":"{{\"hello\".starts_with?(\"hi\")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":533,"body":"{{\"hello\".ends_with?('o')}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":537,"body":"{{\"hello\".ends_with?('e')}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":541,"body":"{{\"hello\".ends_with?(\"llo\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":545,"body":"{{\"hello\".ends_with?(\"tro\")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":549,"body":"{{\"hello\" + \" world\"}}","expected":"\"hello world\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":553,"body":"{{\"hello\" + 'w'}}","expected":"\"hellow\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":557,"body":"{{\"hello\" =~ /hei/}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":561,"body":"{{\"hello\" =~ /ell/}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":565,"body":"{{\"fooa\" > \"foo\"}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":566,"body":"{{\"foo\" > \"fooa\"}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":570,"body":"{{\"fooa\" > \"foo\".id}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":571,"body":"{{\"foo\" > \"fooa\".id}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":575,"body":"{{\"fooa\" < \"foo\"}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":576,"body":"{{\"foo\" < \"fooa\"}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":580,"body":"{{\"fooa\" < \"foo\".id}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":581,"body":"{{\"foo\" < \"fooa\".id}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":585,"body":"{{\"hello\".tr(\"e\", \"o\")}}","expected":"\"hollo\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":589,"body":"{{\"hello\".gsub(/e|o/, \"a\")}}","expected":"\"halla\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":593,"body":"{{ \"foo bar baz\".gsub(/ba./) { \"biz\" } }}","expected":"\"foo biz biz\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":594,"body":"{{ \"foo bar baz\".gsub(/ba./) { |match| match.upcase } }}","expected":"\"foo BAR BAZ\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":595,"body":"{{ \"Name: Alice, Name: Bob\".gsub(/Name: (\\w+)/) { |full, matches| \"User(#{matches[1].id})\" } }}","expected":"\"User(Alice), User(Bob)\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":596,"body":"{{ \"5x10, 3x7\".gsub(/(\\d+)x(\\d+)/) { |full, matches| \"#{matches[1].to_i * matches[2].to_i}\" } }}","expected":"\"50, 21\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":597,"body":"{{ \"bar baz\".gsub /bar (foo)?/ { |_, matches| matches[1].nil? ? \"\" : \"BUG\" } }}","expected":"\"baz\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":598,"body":"{{ \"bar\".gsub /(foo)/ { \"STR\" } }}","expected":"\"bar\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":602,"body":"{{ \"hello world\".match(/x/) }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":603,"body":"{{ \"hello world\".match(/o.*o/) }}","expected":"{0 => \"o wo\"} of ::Int32 | ::String => ::String | ::Nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":604,"body":"{{ \"hello world\".match(/(?:(x)|e)(?<name>\\S+)/) }}","expected":"{0 => \"ello\", 1 => nil, \"name\" => \"llo\"} of ::Int32 | ::String => ::String | ::Nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":608,"body":"{{\"Crystal\".scan(/(Cr)(?<name1>y)(st)(?<name2>al)/)}}","expected":"[{0 => \"Crystal\", 1 => \"Cr\", \"name1\" => \"y\", 3 => \"st\", \"name2\" => \"al\"} of ::Int32 | ::String => ::String | ::Nil] of ::Hash(::Int32 | ::String, ::String | ::Nil)"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":609,"body":"{{\"Crystal\".scan(/(Cr)?(stal)/)}}","expected":"[{0 => \"stal\", 1 => nil, 2 => \"stal\"} of ::Int32 | ::String => ::String | ::Nil] of ::Hash(::Int32 | ::String, ::String | ::Nil)"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":610,"body":"{{\"Ruby\".scan(/Crystal/)}}","expected":"[] of ::Hash(::Int32 | ::String, ::String | ::Nil)"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":614,"body":"{{\"foo_bar\".camelcase}}","expected":"\"FooBar\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":618,"body":"{{\"foo_bar\".camelcase(lower: true)}}","expected":"\"fooBar\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":626,"body":"{{\"FooBar\".underscore}}","expected":"\"foo_bar\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":630,"body":"{{\"hello world\".titleize}}","expected":"\"Hello World\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":634,"body":"{{\"hello\".to_utf16}}","expected":"(::Slice(::UInt16).literal(104_u16, 101_u16, 108_u16, 108_u16, 111_u16, 0_u16))[0, 5]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":635,"body":"{{\"TEST 😐🐙 ±∀ の\".to_utf16}}","expected":"(::Slice(::UInt16).literal(84_u16, 69_u16, 83_u16, 84_u16, 32_u16, 55357_u16, 56848_u16, 55357_u16, 56345_u16, 32_u16, 177_u16, 8704_u16, 32_u16, 12398_u16, 0_u16))[0, 14]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":639,"body":"{{\"1234\".to_i}}","expected":"1234"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":643,"body":"{{\"1234\".to_i(16)}}","expected":"4660"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":647,"body":"{{\"spice\".includes?('s')}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":648,"body":"{{\"spice\".includes?('p')}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":649,"body":"{{\"spice\".includes?('i')}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":650,"body":"{{\"spice\".includes?('c')}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":651,"body":"{{\"spice\".includes?('e')}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":655,"body":"{{\"spice\".includes?('S')}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":656,"body":"{{\"spice\".includes?(' ')}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":657,"body":"{{\"spice\".includes?('!')}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":658,"body":"{{\"spice\".includes?('b')}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":662,"body":"{{\"spice\".includes?(\"s\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":663,"body":"{{\"spice\".includes?(\"e\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":664,"body":"{{\"spice\".includes?(\"sp\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":665,"body":"{{\"spice\".includes?(\"ce\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":666,"body":"{{\"spice\".includes?(\"pic\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":670,"body":"{{\"spice\".includes?(\"Spi\")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":671,"body":"{{\"spice\".includes?(\" spi\")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":672,"body":"{{\"spice\".includes?(\"ce \")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":673,"body":"{{\"spice\".includes?(\"b\")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":674,"body":"{{\"spice\".includes?(\"spice \")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":736,"body":"{{:foo == :foo}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":737,"body":"{{:foo == :bar}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":741,"body":"{{:foo != :foo}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":742,"body":"{{:foo != :bar}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":768,"body":"{{[1, 2, 3][0]}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":772,"body":"{{[1, 2, 3][1]}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":776,"body":"{{[1, 2, 3][3]}}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":780,"body":"{{[1, 2, 3].size}}","expected":"3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":784,"body":"{{[1, 2, 3].empty?}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":788,"body":"{{\"A::B\".identify}}","expected":"\"A__B\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":789,"body":"{{\"A\".identify}}","expected":"\"A\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":793,"body":"{{[1, 2, 3].join \", \"}}","expected":"\"1, 2, 3\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":797,"body":"{{[\"a\", \"b\"].join \", \"}}","expected":"\"a, b\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":801,"body":"{{[1, 2, 3].map { |e| e == 2 }}}","expected":"[false, true, false]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":805,"body":"{{[\"na\"] * 5}}","expected":"[\"na\", \"na\", \"na\", \"na\", \"na\"]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":809,"body":"{{[1, 2, 3].reduce { |acc, val| acc * val }}}","expected":"6"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":813,"body":"{{[1, 2, 3].reduce(4) { |acc, val| acc * val }}}","expected":"24"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":814,"body":"{{[1, 2, 3].reduce([] of NumberLiteral) { |acc, val| acc = [val]+acc }}}","expected":"[3, 2, 1]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":828,"body":"{{[1, 2, 3].map_with_index { |e, idx| e == 2 || idx <= 1 }}}","expected":"[true, true, false]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":834,"body":"{{[1, 2, 3].map_with_index { |e| e }}}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":840,"body":"{{[1, 2, 3].map_with_index { |_, idx| idx }}}","expected":"[0, 1, 2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":846,"body":"{{[1, 2, 3].map_with_index { 7 }}}","expected":"[7, 7, 7]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":852,"body":"{% begin %}{% values = [] of Nil %}{% [1, 2, 3].each { |v| values << v } %}{{values}}{% end %}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":861,"body":"{% begin %}{% values = [] of Nil %}{% [1, 2, 3].each_with_index { |v, idx| values << (v + idx) } %}{{values}}{% end %}","expected":"[1, 3, 5]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":870,"body":"{% begin %}{% values = [] of Nil %}{% [1, 2, 3].each_with_index { |v| values << v } %}{{values}}{% end %}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":879,"body":"{% begin %}{% values = [] of Nil %}{% [1, 2, 3].each_with_index { |_, idx| values << idx } %}{{values}}{% end %}","expected":"[0, 1, 2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":888,"body":"{% begin %}{% values = [] of Nil %}{% [1, 2, 3].each_with_index { values << 7 } %}{{values}}{% end %}","expected":"[7, 7, 7]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":897,"body":"{{[1, 2, 3].select { |e| e == 1 }}}","expected":"[1]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":901,"body":"{{[1, 2, 3].reject { |e| e == 1 }}}","expected":"[2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":905,"body":"{{[1, 2, 3].find { |e| e == 2 }}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":909,"body":"{{[1, 2, 3].find { |e| e == 4 }}}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":913,"body":"{{[1, 2, 3].any? { |e| e == 1 }}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":917,"body":"{{[1, 2, 3].any? { |e| e == 4 }}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":921,"body":"{{[1, 1, 1].all? { |e| e == 1 }}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":925,"body":"{{[1, 2, 1].all? { |e| e == 1 }}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":929,"body":"{{[1, 2, 3].first}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":933,"body":"{{[1, 2, 3].last}}","expected":"3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":937,"body":"{{[1, 2, 3].splat}}","expected":"1, 2, 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":941,"body":"{{[:foo, \"hello\", 3].splat}}","expected":":foo, \"hello\", 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":945,"body":"{{*[1, 2, 3]}}","expected":"1, 2, 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":949,"body":"{{[1, 2, 3].is_a?(ArrayLiteral)}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":950,"body":"{{[1, 2, 3].is_a?(ASTNode)}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":951,"body":"{{[1, 2, 3].is_a?(NumberLiteral)}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":959,"body":"{{[3, 2, 1].sort}}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":963,"body":"{{[\"c\", \"b\", \"a\"].sort}}","expected":"[\"a\", \"b\", \"c\"]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":967,"body":"{{[\"c\".id, \"b\".id, \"a\".id].sort}}","expected":"[a, b, c]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":971,"body":"{{[\"c\".id, \"b\", \"a\".id].sort}}","expected":"[a, \"b\", c]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":975,"body":"{{[\"abc\", \"a\", \"ab\"].sort_by { |x| x.size }}}","expected":"[\"a\", \"ab\", \"abc\"]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":985,"body":"{{[1, 1, 1, 2, 3, 1, 2, 3, 4].uniq}}","expected":"[1, 2, 3, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":989,"body":"{% x = [1]; x.unshift(2); %}{{x}}","expected":"[2, 1]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":993,"body":"{% x = [1]; x.push(2); x << 3 %}{{x}}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":997,"body":"{{ [1, 2, 3].includes?(1) }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":998,"body":"{{ [1, 2, 3].includes?(4) }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1004,"body":"{{ [1, 2] + {3, 4, 5} }}","expected":"[1, 2, 3, 4, 5]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1010,"body":"{{ [1, 2] + [3, 4, 5] }}","expected":"[1, 2, 3, 4, 5]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1018,"body":"{{ [1, 2, 3, 4] - {1, 3, 5} }}","expected":"[2, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1024,"body":"{{ [1, 2, 3, 4] - [1, 3, 5] }}","expected":"[2, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1030,"body":"{{ [1, 2, 3, 4][1...-1] }}","expected":"[2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1034,"body":"{{ [1, 2, 3, 4][[1].size...-1] }}","expected":"[2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1038,"body":"{{ [1, 2, 3, 4][1..] }}","expected":"[2, 3, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1039,"body":"{{ [1, 2, 3, 4][1..nil] }}","expected":"[2, 3, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1040,"body":"{{ [1, 2, 3, 4][...2] }}","expected":"[1, 2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1041,"body":"{{ [1, 2, 3, 4][nil...2] }}","expected":"[1, 2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1042,"body":"{{ [1, 2, 3, 4][..] }}","expected":"[1, 2, 3, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1043,"body":"{{ [1, 2, 3, 4][nil..nil] }}","expected":"[1, 2, 3, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1047,"body":"{{ [1, 2, 3, 4][5..] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1048,"body":"{{ [1, 2, 3, 4][-5..] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1052,"body":"{{ [1, 2, 3, 4, 5][1, 3] }}","expected":"[2, 3, 4]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1056,"body":"{{ [1, 2, 3, 4][5, 1] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1057,"body":"{{ [1, 2, 3, 4][-5, 4] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1061,"body":"{% a = [0]; a[0] = 2 %}{{a[0]}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1069,"body":"{{ [1, 2, 3].of }}","expected":""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1077,"body":"{{ [1, 2, 3].type }}","expected":""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1083,"body":"{{{:a => 1, :b => 3}.size}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1087,"body":"{{{:a => 1}.empty?}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1091,"body":"{{{:a => 1}[:a]}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1095,"body":"{{{:a => 1}[:b]}}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1099,"body":"{{{:a => 1, :b => 2}.keys}}","expected":"[:a, :b]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1103,"body":"{{{:a => 1, :b => 2}.values}}","expected":"[1, 2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1107,"body":"{{{:a => 1, :b => 2}.map {|k, v| k == :a && v == 1}}}","expected":"[true, false]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1111,"body":"{{{:a => 1}.is_a?(HashLiteral)}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1112,"body":"{{{:a => 1}.is_a?(ASTNode)}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1113,"body":"{{{:a => 1}.is_a?(RangeLiteral)}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1117,"body":"{% a = {} of Nil => Nil; a[1] = 2 %}{{a[1]}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1125,"body":"{{{:a => 1, :b => 3}.to_a}}","expected":"[{:a, 1}, {:b, 3}]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1134,"body":"{{ {'z' => 6, 'a' => 9}.of_key }}","expected":""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1143,"body":"{{ {'z' => 6, 'a' => 9}.of_value }}","expected":""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1147,"body":"{{ {'z' => 6, 'a' => 9}.has_key?('z') }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1148,"body":"{{ {'z' => 6, 'a' => 9}.has_key?('x') }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1149,"body":"{{ {'z' => nil, 'a' => 9}.has_key?('z') }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1157,"body":"{{ {'z' => 6, 'a' => 9}.type }}","expected":""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1161,"body":"{{**{1 => 2, 3 => 4}}}","expected":"1 => 2, 3 => 4"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1165,"body":"{{{1 => 2, 3 => 4}.double_splat}}","expected":"1 => 2, 3 => 4"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1169,"body":"{{{1 => 2, 3 => 4}.double_splat(\", \")}}","expected":"1 => 2, 3 => 4, "}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1175,"body":"{% begin %}{% values = [] of Nil %}{% {\"k1\" => \"v1\", \"k2\" => \"v2\"}.each { |k, v| values << {k, v} } %}{{values}}{% end %}","expected":"[{\"k1\", \"v1\"}, {\"k2\", \"v2\"}]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1184,"body":"{% begin %}{% values = [] of Nil %}{% {\"k1\" => \"v1\", \"k2\" => \"v2\"}.each { |k| values << k } %}{{values}}{% end %}","expected":"[\"k1\", \"k2\"]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1193,"body":"{% begin %}{% values = [] of Nil %}{% {\"k1\" => \"v1\", \"k2\" => \"v2\"}.each { |_, v| values << v } %}{{values}}{% end %}","expected":"[\"v1\", \"v2\"]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1202,"body":"{% begin %}{% values = [] of Nil %}{% {\"k1\" => \"v1\", \"k2\" => \"v2\"}.each { values << {\"k3\", \"v3\"} } %}{{values}}{% end %}","expected":"[{\"k3\", \"v3\"}, {\"k3\", \"v3\"}]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1211,"body":"{{{:a => 1, :b => 2, :c => 3}.select { |k, v| v > 1 }}}","expected":"{:b => 2, :c => 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1215,"body":"{{{:a => 1, :b => 2, \"c\" => 3}.select(:a, \"c\")}}","expected":"{:a => 1, \"c\" => 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1219,"body":"{{{:a => 1, :b => 2, :c => 3}.reject { |k, v| v > 1 }}}","expected":"{:a => 1}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1223,"body":"{{{:a => 1, :b => 2, :c => 3}.reject(:b)}}","expected":"{:a => 1, :c => 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1229,"body":"{{{a: 1, b: 3}.size}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1233,"body":"{{{a: 1}.empty?}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1237,"body":"{{{a: 1}[:a]}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1238,"body":"{{{a: 1}[\"a\"]}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1242,"body":"{{{a: 1}[:b]}}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1243,"body":"{{{a: 1}[\"b\"]}}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1251,"body":"{{{a: 1, b: 2}.keys}}","expected":"[a, b]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1255,"body":"{{{a: 1, b: 2}.values}}","expected":"[1, 2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1259,"body":"{{{a: 1, b: 2}.map {|k, v| k.stringify == \"a\" && v == 1}}}","expected":"[true, false]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1263,"body":"{{{a: 1}.is_a?(NamedTupleLiteral)}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1264,"body":"{{{a: 1}.is_a?(ASTNode)}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1265,"body":"{{{a: 1}.is_a?(RangeLiteral)}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1269,"body":"{% a = {a: 1}; a[:a] = 2 %}{{a[:a]}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1270,"body":"{% a = {a: 1}; a[\"a\"] = 2 %}{{a[\"a\"]}}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1274,"body":"{{{a: 1}.has_key?(\"a\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1275,"body":"{{{a: 1}.has_key?(:a)}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1276,"body":"{{{a: nil}.has_key?(\"a\")}}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1277,"body":"{{{a: nil}.has_key?(\"b\")}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1286,"body":"{{{a: 1, b: 3}.to_a}}","expected":"[{a, 1}, {b, 3}]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1290,"body":"{{**{a: 1, \"foo bar\": 2, \"+\": 3}}}","expected":"a: 1, \"foo bar\": 2, \"+\": 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1294,"body":"{{{a: 1, \"foo bar\": 2, \"+\": 3}.double_splat}}","expected":"a: 1, \"foo bar\": 2, \"+\": 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1298,"body":"{{{a: 1, \"foo bar\": 2, \"+\": 3}.double_splat(\", \")}}","expected":"a: 1, \"foo bar\": 2, \"+\": 3, "}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1304,"body":"{% begin %}{% values = [] of Nil %}{% {k1: \"v1\", k2: \"v2\"}.each { |k, v| values << {k, v} } %}{{values}}{% end %}","expected":"[{k1, \"v1\"}, {k2, \"v2\"}]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1313,"body":"{% begin %}{% values = [] of Nil %}{% {k1: \"v1\", k2: \"v2\"}.each { |k| values << k } %}{{values}}{% end %}","expected":"[k1, k2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1322,"body":"{% begin %}{% values = [] of Nil %}{% {k1: \"v1\", k2: \"v2\"}.each { |_, v| values << v } %}{{values}}{% end %}","expected":"[\"v1\", \"v2\"]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1331,"body":"{% begin %}{% values = [] of Nil %}{% {k1: \"v1\", k2: \"v2\"}.each { values << {\"k3\", \"v3\"} } %}{{values}}{% end %}","expected":"[{\"k3\", \"v3\"}, {\"k3\", \"v3\"}]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1340,"body":"{{ {a: 1, b: 2, c: 3}.select { |k, v| v > 1 } }}","expected":"{b: 2, c: 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1344,"body":"{{ {a: 1, b: 2, c: 3}.select(\"a\", \"c\") }}","expected":"{a: 1, c: 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1348,"body":"{{ {a: 1, b: 2, c: 3}.reject { |k, v| v > 1 } }}","expected":"{a: 1}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1352,"body":"{{ {a: 1, b: 2, c: 3}.reject(:b) }}","expected":"{a: 1, c: 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1358,"body":"{{ {1, 2, 3}[0] }}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1362,"body":"{{ {1, 2, 3}[1] }}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1366,"body":"{{ {1, 2, 3}[3] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1370,"body":"{{ {1, 2, 3, 4}[1...-1] }}","expected":"{2, 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1374,"body":"{{ {1, 2, 3, 4}[[1].size...-1] }}","expected":"{2, 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1378,"body":"{{ {1, 2, 3, 4}[1..] }}","expected":"{2, 3, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1379,"body":"{{ {1, 2, 3, 4}[1..nil] }}","expected":"{2, 3, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1380,"body":"{{ {1, 2, 3, 4}[...2] }}","expected":"{1, 2}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1381,"body":"{{ {1, 2, 3, 4}[nil...2] }}","expected":"{1, 2}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1382,"body":"{{ {1, 2, 3, 4}[..] }}","expected":"{1, 2, 3, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1383,"body":"{{ {1, 2, 3, 4}[nil..nil] }}","expected":"{1, 2, 3, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1387,"body":"{{ {1, 2, 3, 4}[5..] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1388,"body":"{{ {1, 2, 3, 4}[-5..] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1392,"body":"{{ {1, 2, 3, 4, 5}[1, 3] }}","expected":"{2, 3, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1396,"body":"{{ {1, 2, 3, 4}[5, 1] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1397,"body":"{{ {1, 2, 3, 4}[-5, 4] }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1401,"body":"{{ {1, 2, 3}.size }}","expected":"3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1405,"body":"{{ {1, 2, 3}.empty? }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1409,"body":"{{ {1, 2, 3}.join \", \" }}","expected":"\"1, 2, 3\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1413,"body":"{{ {\"a\", \"b\"}.join \", \" }}","expected":"\"a, b\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1417,"body":"{{ {1, 2, 3}.map { |e| e == 2 } }}","expected":"{false, true, false}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1431,"body":"{{{1, 2, 3}.map_with_index { |e, idx| e == 2 || idx <= 1 }}}","expected":"{true, true, false}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1437,"body":"{{{1, 2, 3}.map_with_index { |e| e }}}","expected":"{1, 2, 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1443,"body":"{{{1, 2, 3}.map_with_index { |_, idx| idx }}}","expected":"{0, 1, 2}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1449,"body":"{{{1, 2, 3}.map_with_index { 7 }}}","expected":"{7, 7, 7}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1455,"body":"{% begin %}{% values = [] of Nil %}{% {1, 2, 3}.each { |v| values << v } %}{{values}}{% end %}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1464,"body":"{% begin %}{% values = [] of Nil %}{% {1, 2, 3}.each_with_index { |v, idx| values << (v + idx) } %}{{values}}{% end %}","expected":"[1, 3, 5]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1473,"body":"{% begin %}{% values = [] of Nil %}{% {1, 2, 3}.each_with_index { |v| values << v } %}{{values}}{% end %}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1482,"body":"{% begin %}{% values = [] of Nil %}{% {1, 2, 3}.each_with_index { |_, idx| values << idx } %}{{values}}{% end %}","expected":"[0, 1, 2]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1491,"body":"{% begin %}{% values = [] of Nil %}{% {1, 2, 3}.each_with_index { values << 7 } %}{{values}}{% end %}","expected":"[7, 7, 7]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1500,"body":"{{ {1, 2, 3}.select { |e| e == 1 } }}","expected":"{1}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1504,"body":"{{ {1, 2, 3}.reject { |e| e == 1 } }}","expected":"{2, 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1508,"body":"{{ {1, 2, 3}.find { |e| e == 2 } }}","expected":"2"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1512,"body":"{{ {1, 2, 3}.find { |e| e == 4 } }}","expected":"nil"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1516,"body":"{{ {1, 2, 3}.any? { |e| e == 1 } }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1520,"body":"{{ {1, 2, 3}.any? { |e| e == 4 } }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1524,"body":"{{ {1, 1, 1}.all? { |e| e == 1 } }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1528,"body":"{{ {1, 2, 1}.all? { |e| e == 1 } }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1532,"body":"{{ {1, 2, 3}.first }}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1536,"body":"{{ {1, 2, 3}.last }}","expected":"3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1540,"body":"{{ {1, 2, 3}.splat }}","expected":"1, 2, 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1544,"body":"{{ {1, 2, 3}.splat(\", \") }}","expected":"1, 2, 3, "}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1548,"body":"{{ {:foo, \"hello\", 3}.splat }}","expected":":foo, \"hello\", 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1552,"body":"{{ *{1, 2, 3} }}","expected":"1, 2, 3"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1556,"body":"{{ {1, 2, 3}.is_a?(TupleLiteral) }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1557,"body":"{{ {1, 2, 3}.is_a?(ASTNode) }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1558,"body":"{{ {1, 2, 3}.is_a?(ArrayLiteral) }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1566,"body":"{{ {3, 2, 1}.sort }}","expected":"{1, 2, 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1570,"body":"{{ {\"c\", \"b\", \"a\"}.sort }}","expected":"{\"a\", \"b\", \"c\"}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1574,"body":"{{ {\"c\".id, \"b\".id, \"a\".id}.sort }}","expected":"{a, b, c}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1578,"body":"{{ {\"c\".id, \"b\", \"a\".id}.sort }}","expected":"{a, \"b\", c}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1582,"body":"{{ {1, 1, 1, 2, 3, 1, 2, 3, 4}.uniq }}","expected":"{1, 2, 3, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1586,"body":"{% x = {1}; x.unshift(2); %}{{x}}","expected":"{2, 1}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1590,"body":"{% x = {1}; x.push(2); x << 3 %}{{x}}","expected":"{1, 2, 3}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1594,"body":"{{ {1, 2, 3}.includes?(1) }}","expected":"true"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1595,"body":"{{ {1, 2, 3}.includes?(4) }}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1601,"body":"{{ {1, 2} + {3, 4, 5} }}","expected":"{1, 2, 3, 4, 5}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1607,"body":"{{ {1, 2} + [3, 4, 5] }}","expected":"{1, 2, 3, 4, 5}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1615,"body":"{{ {1, 2, 3, 4} - {1, 3, 5} }}","expected":"{2, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1621,"body":"{{ {1, 2, 3, 4} - [1, 3, 5] }}","expected":"{2, 4}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1627,"body":"{{ {\"na\"} * 5}}","expected":"{\"na\", \"na\", \"na\", \"na\", \"na\"}"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1633,"body":"{{ /rëgéx/i.source }}","expected":"\"rëgéx\""}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1637,"body":"{{ //.options }}","expected":"[] of ::Symbol"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1638,"body":"{{ /a/i.options }}","expected":"[:i] of ::Symbol"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1639,"body":"{{ /re/mix.options }}","expected":"[:i, :m, :x] of ::Symbol"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1683,"body":"{{a = 1}}{{a}}","expected":"11"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1687,"body":"{% a = 1 %}{{a}}","expected":"1"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1781,"body":"{{Array(Int32).name}}","expected":"Array(Int32)"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1843,"body":"{{Array(Int32).name(generic_args: true)}}","expected":"Array(Int32)"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":1855,"body":"{{Array(Int32).name(generic_args: false)}}","expected":"Array"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":3481,"body":"{% begin %}{% values = [] of Nil %}{% (1..3).each { |v| values << v } %}{{values}}{% end %}","expected":"[1, 2, 3]"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":3908,"body":"{{flag?(:foo)}}","expected":"false"}
+{"suite":"macro-methods","source_file":"spec/compiler/macro/macro_methods_spec.cr","line":3953,"body":"{{compare_versions(\"1.10.3\", \"1.2.3\")}}","expected":"1"}
