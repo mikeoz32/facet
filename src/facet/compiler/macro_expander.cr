@@ -156,16 +156,29 @@ module Facet
     class MacroTupleValue
     end
 
+    class MacroArrayValue
+    end
+
     class MacroHashEntry
     end
 
     class MacroHashValue
     end
 
-    alias MacroValue = Int64 | String | Bool | Nil | MacroSyntaxValue | MacroBlockValue | MacroRangeValue | MacroNumberValue | MacroTypeValue | MacroAnnotationValue | MacroMetaVarValue | MacroMethodValue | MacroTupleValue | MacroHashValue | Array(MacroValue) | Hash(String, MacroValue)
+    alias MacroValue = Int64 | String | Bool | Nil | MacroSyntaxValue | MacroBlockValue | MacroRangeValue | MacroNumberValue | MacroTypeValue | MacroAnnotationValue | MacroMetaVarValue | MacroMethodValue | MacroTupleValue | MacroArrayValue | MacroHashValue | Array(MacroValue) | Hash(String, MacroValue)
     alias MacroArguments = Tuple(Array(MacroValue), Hash(String, MacroValue), MacroBlockValue?)
 
     class MacroTupleValue
+      getter values : Array(MacroValue)
+
+      def initialize(@values : Array(MacroValue))
+      end
+    end
+
+    # AST collection methods such as `Def#args` return Crystal's untyped
+    # ArrayLiteral rendering (`[]`) when empty. Evaluator-created arrays retain
+    # the existing `[] of ::NoReturn` representation.
+    class MacroArrayValue
       getter values : Array(MacroValue)
 
       def initialize(@values : Array(MacroValue))
@@ -793,6 +806,9 @@ module Facet
             return macro_structured_inline_rescue_argument_value(node)
           end
           return macro_structured_inline_ensure_argument_value(node) if node.kind == NodeKind::Ensure && node.children.size == 2
+          if {NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun}.includes?(node.kind)
+            return macro_structured_declaration_argument_value(node)
+          end
           return nil
         end
 
@@ -965,6 +981,206 @@ module Facet
           return macro_union_type_nodes(left, ast) + macro_union_type_nodes(right, ast)
         end
         [node]
+      end
+
+      private def macro_structured_declaration_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        case node.kind
+        when NodeKind::Def
+          macro_structured_def_argument_value(node)
+        when NodeKind::MacroDef
+          macro_structured_macro_def_argument_value(node)
+        when NodeKind::Fun
+          macro_structured_fun_argument_value(node)
+        else
+          raise "unsupported structured declaration: #{node.kind}"
+        end
+      end
+
+      private def macro_structured_def_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        parameters = macro_captured_declaration_parameters(node)
+        fields = {
+          "body"         => macro_captured_syntax_node(node.child(3)),
+          "double_splat" => parameters[:double_splat] || macro_captured_syntax_node(nil),
+          "block_arg"    => parameters[:block_arg] || macro_captured_syntax_node(nil),
+          "return_type"  => macro_captured_syntax_node(node.return_type),
+          "receiver"     => macro_captured_syntax_node(macro_declaration_receiver(node)),
+          "visibility"   => macro_captured_visibility(node),
+        }
+        nil_fields = [] of String
+        if splat_index = parameters[:splat_index]
+          fields["splat_index"] = MacroCapturedNode.new(splat_index.to_s, "Crystal::NumberLiteral")
+        else
+          nil_fields << "splat_index"
+        end
+        free_vars = node.child(4).try(&.children) || [] of SyntaxNode
+        collections = {
+          "args"      => parameters[:args],
+          "free_vars" => free_vars.map { |variable| MacroCapturedNode.new(variable.text, "Crystal::MacroId") },
+        }
+        booleans = {
+          "accepts_block?" => parameters[:accepts_block],
+          "abstract?"      => node.semantic_flag?(SemanticFlag::Abstract),
+        }
+        macro_captured_declaration_value(node, "Crystal::Def", fields, collections, booleans, nil_fields)
+      end
+
+      private def macro_structured_macro_def_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        parameters = macro_captured_declaration_parameters(node)
+        fields = {
+          "body"         => macro_captured_macro_body(node.child(3)),
+          "double_splat" => parameters[:double_splat] || macro_captured_syntax_node(nil),
+          "block_arg"    => parameters[:block_arg] || macro_captured_syntax_node(nil),
+          "visibility"   => macro_captured_visibility(node),
+        }
+        nil_fields = [] of String
+        if splat_index = parameters[:splat_index]
+          fields["splat_index"] = MacroCapturedNode.new(splat_index.to_s, "Crystal::NumberLiteral")
+        else
+          nil_fields << "splat_index"
+        end
+        collections = {"args" => parameters[:args]}
+        macro_captured_declaration_value(
+          node,
+          "Crystal::Macro",
+          fields,
+          collections,
+          {} of String => Bool,
+          nil_fields
+        )
+      end
+
+      private def macro_captured_macro_body(body : SyntaxNode?) : MacroCapturedNode
+        return macro_captured_syntax_node(nil) unless body
+        source = body.text.strip
+        return macro_captured_syntax_node(nil) if source.empty?
+        MacroCapturedNode.new(source, macro_crystal_syntax_kind(body.kind))
+      end
+
+      private def macro_structured_fun_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        parameters = macro_captured_declaration_parameters(node)
+        name = macro_declaration_name(node)
+        external_name = node.child(3)
+        real_name = if external_name && external_name.kind != NodeKind::Nop && external_name.symbol_name != name
+                      MacroCapturedNode.new(external_name.text, "Crystal::StringLiteral")
+                    else
+                      macro_captured_syntax_node(nil)
+                    end
+        body = node.child(4)
+        fields = {
+          "real_name"   => real_name,
+          "return_type" => macro_captured_syntax_node(node.return_type),
+          "body"        => macro_captured_syntax_node(body),
+        }
+        collections = {"args" => parameters[:args]}
+        booleans = {
+          "variadic?" => parameters[:variadic],
+          "has_body?" => !!body && body.kind != NodeKind::Nop,
+        }
+        macro_captured_declaration_value(node, "Crystal::FunDef", fields, collections, booleans)
+      end
+
+      private def macro_captured_declaration_value(
+        node : SyntaxNode,
+        kind : String,
+        fields : Hash(String, MacroCapturedNode),
+        collections : Hash(String, Array(MacroCapturedNode)),
+        booleans : Hash(String, Bool),
+        nil_fields = [] of String,
+      ) : MacroSyntaxValue
+        structure = MacroCapturedNode.new(node.text, kind, fields, collections, booleans, nil_fields)
+        metadata_fields = {
+          "name" => MacroCapturedField.new(macro_declaration_name(node), "identifier"),
+        }
+        metadata = MacroNodeMetadata.new(fields: metadata_fields, structure: structure)
+        MacroSyntaxValue.captured(node.text, kind, metadata)
+      end
+
+      private def macro_captured_declaration_parameters(node : SyntaxNode)
+        args = [] of MacroCapturedNode
+        double_splat = nil.as(MacroCapturedNode?)
+        block_arg = nil.as(MacroCapturedNode?)
+        splat_index = nil.as(Int32?)
+        accepts_block = false
+        variadic = false
+
+        node.parameters.each do |parameter|
+          case parameter.kind
+          when NodeKind::Splat
+            splat_index = args.size
+            args << macro_captured_arg(parameter) if parameter.name
+          when NodeKind::DoubleSplat
+            double_splat = macro_captured_arg(parameter)
+          when NodeKind::BlockParam
+            accepts_block = true
+            block_arg = macro_captured_arg(parameter) if parameter.name
+          when NodeKind::Param
+            if parameter.children.empty? && parameter.raw.payload_index < 0
+              variadic = true
+            else
+              args << macro_captured_arg(parameter)
+            end
+          end
+        end
+
+        {
+          args:          args,
+          double_splat:  double_splat,
+          block_arg:     block_arg,
+          splat_index:   splat_index,
+          accepts_block: accepts_block,
+          variadic:      variadic,
+        }
+      end
+
+      private def macro_captured_arg(node : SyntaxNode) : MacroCapturedNode
+        internal_name = node.name || macro_payload_symbol(node) || ""
+        external_name = node.external_name || internal_name
+        restriction = node.declared_type
+        default_value = node.value
+        source = String.build do |io|
+          io << external_name << ' ' if external_name != internal_name
+          io << internal_name
+          io << " : " << restriction.text if restriction
+          io << " = " << default_value.text if default_value
+        end
+        fields = {
+          "name"          => MacroCapturedNode.new(external_name, "identifier"),
+          "internal_name" => MacroCapturedNode.new(internal_name, "identifier"),
+          "default_value" => macro_captured_syntax_node(default_value),
+          "restriction"   => macro_captured_syntax_node(restriction),
+        }
+        MacroCapturedNode.new(source, "Crystal::Arg", fields)
+      end
+
+      private def macro_payload_symbol(node : SyntaxNode) : String?
+        index = node.raw.payload_index
+        index.in?(0...node.tree.ast.arena.symbols.entries.size) ? node.tree.ast.arena.symbols[index] : nil
+      end
+
+      private def macro_declaration_name(node : SyntaxNode) : String
+        name_node = node.name_node
+        return "" unless name_node
+        if name_node.kind == NodeKind::Path
+          return name_node.children.last?.try(&.symbol_name) || name_node.symbol_name || ""
+        end
+        name_node.symbol_name || name_node.text
+      end
+
+      private def macro_declaration_receiver(node : SyntaxNode) : SyntaxNode?
+        name_node = node.name_node
+        return nil unless name_node && name_node.kind == NodeKind::Path
+        name_node.child(0)
+      end
+
+      private def macro_captured_visibility(node : SyntaxNode) : MacroCapturedNode
+        value = if node.semantic_flag?(SemanticFlag::Private)
+                  "private"
+                elsif node.semantic_flag?(SemanticFlag::Protected)
+                  "protected"
+                else
+                  "public"
+                end
+        MacroCapturedNode.new(":#{value}", "Crystal::SymbolLiteral")
       end
 
       private def macro_structured_call_node?(node : SyntaxNode, ast : AstFile) : Bool
@@ -1192,6 +1408,8 @@ module Facet
           "method(#{value.name}:#{value.source}:#{annotations})"
         when MacroTupleValue
           "tuple(" + value.values.map { |entry| fingerprint_value(entry) }.join(",") + ")"
+        when MacroArrayValue
+          "ast-array(" + value.values.map { |entry| fingerprint_value(entry) }.join(",") + ")"
         when MacroHashValue
           "hash(" + value.entries.map { |entry| "#{fingerprint_value(entry.key)}:#{fingerprint_value(entry.value)}" }.join(",") + ")"
         when Array(MacroValue)
@@ -1251,6 +1469,12 @@ module Facet
             case value = iterable.value
             when Array(MacroValue)
               value.each_with_index do |item, item_index|
+                io << expand_macro_iteration(targets, ast, [item, item_index.to_i64] of MacroValue) do
+                  expand_template_body(body, ast, index, footprint)
+                end
+              end
+            when MacroArrayValue
+              value.values.each_with_index do |item, item_index|
                 io << expand_macro_iteration(targets, ast, [item, item_index.to_i64] of MacroValue) do
                   expand_template_body(body, ast, index, footprint)
                 end
@@ -2129,6 +2353,7 @@ module Facet
                  else
                    case receiver
                    when Array(MacroValue)        then receiver.size
+                   when MacroArrayValue          then receiver.values.size
                    when MacroTupleValue          then receiver.values.size
                    when MacroHashValue           then receiver.entries.size
                    when Hash(String, MacroValue) then receiver.size
@@ -2143,6 +2368,7 @@ module Facet
                     case receiver
                     when MacroBlockValue          then receiver.body.empty?
                     when Array(MacroValue)        then receiver.empty?
+                    when MacroArrayValue          then receiver.values.empty?
                     when MacroTupleValue          then receiver.values.empty?
                     when MacroHashValue           then receiver.entries.empty?
                     when Hash(String, MacroValue) then receiver.empty?
@@ -2270,6 +2496,8 @@ module Facet
                      case receiver
                      when Array(MacroValue)
                        receiver.includes?(args[0])
+                     when MacroArrayValue
+                       receiver.values.includes?(args[0])
                      when MacroTupleValue
                        receiver.values.includes?(args[0])
                      when MacroHashValue
@@ -2751,6 +2979,12 @@ module Facet
             iteration << index.to_i64 if with_index
             values << iteration
           end
+        when MacroArrayValue
+          receiver.values.each_with_index do |value, index|
+            iteration = [value] of MacroValue
+            iteration << index.to_i64 if with_index
+            values << iteration
+          end
         when MacroHashValue
           receiver.entries.each_with_index do |entry, index|
             iteration = if parameter_count <= 1
@@ -2824,13 +3058,19 @@ module Facet
         case value
         when Array(MacroValue)
           value
+        when MacroArrayValue
+          value.values
         when MacroTupleValue
           value.values
         end
       end
 
       private def macro_collection_result(receiver : MacroValue, values : Array(MacroValue)) : MacroValue
-        receiver.is_a?(MacroTupleValue) ? MacroTupleValue.new(values) : values
+        case receiver
+        when MacroTupleValue then MacroTupleValue.new(values)
+        when MacroArrayValue then MacroArrayValue.new(values)
+        else                      values
+        end
       end
 
       private def macro_integer_index(value : MacroValue) : Int64?
@@ -2960,6 +3200,7 @@ module Facet
         when MacroMetaVarValue        then "MetaVar"
         when MacroMethodValue         then "Def"
         when MacroTupleValue          then "TupleLiteral"
+        when MacroArrayValue          then "ArrayLiteral"
         when MacroHashValue           then "HashLiteral"
         when Array(MacroValue)        then "ArrayLiteral"
         when Hash(String, MacroValue) then "NamedTupleLiteral"
@@ -2988,7 +3229,8 @@ module Facet
         end
         if collection = structure.collections[name]?
           values = collection.map { |node| macro_captured_node_value(node).as(MacroValue) }
-          return MacroEvaluation.new(values)
+          value = name == "free_vars" ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
+          return MacroEvaluation.new(value)
         end
         if structure.booleans.has_key?(name)
           return MacroEvaluation.new(structure.booleans[name])
@@ -3051,6 +3293,8 @@ module Facet
           normalized == "MetaVar"
         when MacroTupleValue
           normalized == "TupleLiteral"
+        when MacroArrayValue
+          normalized == "ArrayLiteral"
         when MacroHashValue
           normalized == "HashLiteral"
         when Array(MacroValue)
@@ -3085,7 +3329,7 @@ module Facet
         when MacroSyntaxValue
           {"id", "symbolize", "size", "empty?", "starts_with?", "ends_with?", "ord", "count", "tr",
            "source", "options", "match", "scan"}.includes?(method_name)
-        when Array(MacroValue)
+        when Array(MacroValue), MacroArrayValue
           {"size", "empty?", "first", "last", "map", "select", "reject", "any?", "all?", "join",
            "reduce", "find", "splat", "sort_by", "unshift", "push"}.includes?(method_name)
         when MacroTupleValue
@@ -3138,6 +3382,12 @@ module Facet
           return nil unless evaluation
           value = evaluation.value
           value = MacroTupleValue.new(value) if value.is_a?(Array(MacroValue))
+          MacroEvaluation.new(value)
+        when MacroArrayValue
+          evaluation = eval_macro_index(receiver.values, index)
+          return nil unless evaluation
+          value = evaluation.value
+          value = MacroArrayValue.new(value) if value.is_a?(Array(MacroValue))
           MacroEvaluation.new(value)
         when Array(MacroValue)
           if range = index.as?(MacroRangeValue)
@@ -3219,6 +3469,11 @@ module Facet
             return unless position
             position += collection.size if position < 0
             collection[position] = value if position.in?(0_i64...collection.size.to_i64)
+          when MacroArrayValue
+            position = macro_integer_index(index.value)
+            return unless position
+            position += collection.values.size if position < 0
+            collection.values[position] = value if position.in?(0_i64...collection.values.size.to_i64)
           when MacroHashValue
             if entry = collection.entries.find { |candidate| candidate.key == index.value }
               entry.value = value
@@ -3230,7 +3485,7 @@ module Facet
             collection[key] = value if key
           end
         when NodeKind::Tuple
-          values = value.is_a?(Array(MacroValue)) ? value : [value] of MacroValue
+          values = macro_sequence_values(value) || [value] of MacroValue
           ast.children(target_id).each_with_index do |child, index|
             assign_macro_value(child, values[index]? || nil, ast)
           end
@@ -3330,6 +3585,8 @@ module Facet
             MacroEvaluation.new(left + right)
           elsif left.is_a?(Array(MacroValue)) && (right_values = macro_sequence_values(right))
             MacroEvaluation.new(left + right_values)
+          elsif left.is_a?(MacroArrayValue) && (right_values = macro_sequence_values(right))
+            MacroEvaluation.new(MacroArrayValue.new(left.values + right_values))
           elsif left.is_a?(MacroTupleValue) && (right_values = macro_sequence_values(right))
             MacroEvaluation.new(MacroTupleValue.new(left.values + right_values))
           elsif (left_text = macro_scalar_text(left)) && (right_text = macro_scalar_text(right))
@@ -3342,6 +3599,9 @@ module Facet
             MacroEvaluation.new(left - right)
           elsif left.is_a?(Array(MacroValue)) && (right_values = macro_sequence_values(right))
             MacroEvaluation.new(left.reject { |value| right_values.includes?(value) })
+          elsif left.is_a?(MacroArrayValue) && (right_values = macro_sequence_values(right))
+            values = left.values.reject { |value| right_values.includes?(value) }
+            MacroEvaluation.new(MacroArrayValue.new(values))
           elsif left.is_a?(MacroTupleValue) && (right_values = macro_sequence_values(right))
             values = left.values.reject { |value| right_values.includes?(value) }
             MacroEvaluation.new(MacroTupleValue.new(values))
@@ -3358,6 +3618,13 @@ module Facet
                        Array(MacroValue).new(left.size * right.to_i) { |index| left[index % left.size] }
                      end
             MacroEvaluation.new(values)
+          elsif left.is_a?(MacroArrayValue) && right.is_a?(Int64) && right >= 0
+            values = if left.values.empty?
+                       [] of MacroValue
+                     else
+                       Array(MacroValue).new(left.values.size * right.to_i) { |index| left.values[index % left.values.size] }
+                     end
+            MacroEvaluation.new(MacroArrayValue.new(values))
           elsif left.is_a?(MacroTupleValue) && right.is_a?(Int64) && right >= 0
             values = if left.values.empty?
                        [] of MacroValue
@@ -3413,6 +3680,9 @@ module Facet
             MacroEvaluation.new(left << right)
           elsif left.is_a?(Array(MacroValue))
             left << right
+            MacroEvaluation.new(left)
+          elsif left.is_a?(MacroArrayValue)
+            left.values << right
             MacroEvaluation.new(left)
           elsif left.is_a?(MacroTupleValue)
             left.values << right
@@ -3689,6 +3959,8 @@ module Facet
           value.source
         when MacroTupleValue
           "{" + value.values.map { |entry| val_to_string(entry) }.join(", ") + "}"
+        when MacroArrayValue
+          "[" + value.values.map { |entry| val_to_string(entry) }.join(", ") + "]"
         when MacroHashValue
           "{" + value.entries.map { |entry| "#{val_to_string(entry.key)} => #{val_to_string(entry.value)}" }.join(", ") + "}"
         when Array(MacroValue)

@@ -66,7 +66,8 @@ record RuntimeMacroFixtureHeader,
   metadata_argument_count : Int32,
   structured_name_argument_count : Int32,
   structured_call_argument_count : Int32,
-  structured_control_flow_argument_count : Int32 do
+  structured_control_flow_argument_count : Int32,
+  structured_declaration_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -107,6 +108,13 @@ header = RuntimeMacroFixtureHeader.new(
     fixture_case.arguments.count do |argument|
       argument.structure.try do |node|
         {"Crystal::Case", "Crystal::Select", "Crystal::ExceptionHandler", "Crystal::Rescue"}.includes?(node.kind)
+      end || false
+    end
+  end,
+  structured_declaration_argument_count: cases.sum do |fixture_case|
+    fixture_case.arguments.count do |argument|
+      argument.structure.try do |node|
+        {"Crystal::Def", "Crystal::Macro", "Crystal::FunDef", "Crystal::Arg"}.includes?(node.kind)
       end || false
     end
   end,

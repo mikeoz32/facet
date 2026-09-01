@@ -365,6 +365,119 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "derives structured def and argument fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_def(x)
+        def_kind = {{x.class_name}}
+        def_name = {{x.name.stringify}}
+        def_body = {{x.body.stringify}}
+        def_args = {{x.args.stringify}}
+        first_arg_name = {{x.args[0].name.stringify}}
+        first_arg_internal_name = {{x.args[0].internal_name.stringify}}
+        first_arg_default = {{x.args[0].default_value.stringify}}
+        first_arg_restriction = {{x.args[0].restriction.stringify}}
+        def_splat_index = {{x.splat_index.stringify}}
+        def_double_splat = {{x.double_splat.stringify}}
+        def_block_arg = {{x.block_arg.stringify}}
+        def_accepts_block = {{x.accepts_block?.stringify}}
+        def_return_type = {{x.return_type.stringify}}
+        def_free_vars = {{x.free_vars.stringify}}
+        def_receiver = {{x.receiver.stringify}}
+        def_abstract = {{x.abstract?.stringify}}
+        def_visibility = {{x.visibility.stringify}}
+      end
+
+      describe_def((private def self.some_def(external internal : Int32 = 1, *rest, **options, &block) : String forall T, U
+        2
+      end))
+
+      describe_def((abstract def missing(value)))
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(def_kind = "Def"))
+    expanded.source.text.should contain(%(def_name = "some_def"))
+    expanded.source.text.should contain(%(def_body = "2"))
+    expanded.source.text.should contain(%(def_args = "[external internal : Int32 = 1, rest]"))
+    expanded.source.text.should contain(%(first_arg_name = "external"))
+    expanded.source.text.should contain(%(first_arg_internal_name = "internal"))
+    expanded.source.text.should contain(%(first_arg_default = "1"))
+    expanded.source.text.should contain(%(first_arg_restriction = "Int32"))
+    expanded.source.text.should contain(%(def_splat_index = "1"))
+    expanded.source.text.should contain(%(def_double_splat = "options"))
+    expanded.source.text.should contain(%(def_block_arg = "block"))
+    expanded.source.text.should contain(%(def_accepts_block = "true"))
+    expanded.source.text.should contain(%(def_return_type = "String"))
+    expanded.source.text.should contain(%(def_free_vars = "[T, U]"))
+    expanded.source.text.should contain(%(def_receiver = "self"))
+    expanded.source.text.should contain(%(def_abstract = "false"))
+    expanded.source.text.should contain(%(def_visibility = ":private"))
+    expanded.source.text.should contain(%(def_name = "missing"))
+    expanded.source.text.should contain(%(def_abstract = "true"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "derives structured macro and fun fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_macro(x)
+        macro_kind = {{x.class_name}}
+        macro_name = {{x.name.stringify}}
+        macro_body = {{x.body.stringify}}
+        macro_args = {{x.args.stringify}}
+        macro_splat_index = {{x.splat_index.stringify}}
+        macro_double_splat = {{x.double_splat.stringify}}
+        macro_block_arg = {{x.block_arg.stringify}}
+        macro_visibility = {{x.visibility.stringify}}
+      end
+
+      macro describe_fun(x)
+        fun_kind = {{x.class_name}}
+        fun_name = {{x.name.stringify}}
+        fun_real_name = {{x.real_name.stringify}}
+        fun_args = {{x.args.stringify}}
+        fun_variadic = {{x.variadic?.stringify}}
+        fun_return_type = {{x.return_type.stringify}}
+        fun_body = {{x.body.stringify}}
+        fun_has_body = {{x.has_body?.stringify}}
+      end
+
+      describe_macro((private macro generated(value, *rest, **options, &block)
+        {{value}}
+      end))
+
+      describe_fun((fun foreign = "c.name"(x : Int32, y : Char, ...) : Void
+        1
+      end))
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(macro_kind = "Macro"))
+    expanded.source.text.should contain(%(macro_name = "generated"))
+    expanded.source.text.should contain(%(macro_body = "{{value}}"))
+    expanded.source.text.should contain(%(macro_args = "[value, rest]"))
+    expanded.source.text.should contain(%(macro_splat_index = "1"))
+    expanded.source.text.should contain(%(macro_double_splat = "options"))
+    expanded.source.text.should contain(%(macro_block_arg = "block"))
+    expanded.source.text.should contain(%(macro_visibility = ":private"))
+    expanded.source.text.should contain(%(fun_kind = "FunDef"))
+    expanded.source.text.should contain(%(fun_name = "foreign"))
+    expanded.source.text.should contain(%(fun_real_name = "\\"c.name\\""))
+    expanded.source.text.should contain(%(fun_args = "[x : Int32, y : Char]"))
+    expanded.source.text.should contain(%(fun_variadic = "true"))
+    expanded.source.text.should contain(%(fun_return_type = "Void"))
+    expanded.source.text.should contain(%(fun_body = "1"))
+    expanded.source.text.should contain(%(fun_has_body = "true"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "exposes sizeof and alignof results as macro number literals" do
     source = Facet::Compiler::Source.new(<<-CR)
       {{sizeof(Int32).is_a?(NumberLiteral)}}

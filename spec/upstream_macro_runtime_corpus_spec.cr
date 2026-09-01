@@ -20,10 +20,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_name_argument_count.should eq(198)
     runtime_macro_header.structured_call_argument_count.should eq(21)
     runtime_macro_header.structured_control_flow_argument_count.should eq(28)
+    runtime_macro_header.structured_declaration_argument_count.should eq(54)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(609)
+    supported_runtime_macro_indices.size.should eq(658)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -94,6 +95,39 @@ describe "Crystal 1.21 runtime macro corpus" do
       fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3323
     end.not_nil!
     rescue_contract.arguments.first.structure.not_nil!.nil_fields.should contain("types")
+  end
+
+  it "retains authoritative function declaration and argument structure" do
+    def_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2798
+    end.not_nil!
+    def_structure = def_contract.arguments.first.structure.not_nil!
+    def_structure.kind.should eq("Crystal::Def")
+    def_structure.fields["splat_index"].source.should eq("1")
+    def_structure.collections["args"].map(&.source).should eq(["x", "y"])
+    def_structure.booleans["accepts_block?"].should be_false
+
+    free_vars_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2824
+    end.not_nil!
+    free_vars_contract.arguments.first.structure.not_nil!.collections["free_vars"].map(&.source).should eq(["T"])
+
+    arg_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3123
+    end.not_nil!
+    arg_structure = arg_contract.arguments.first.structure.not_nil!
+    arg_structure.fields["name"].source.should eq("into")
+    arg_structure.fields["internal_name"].source.should eq("array")
+
+    fun_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3756
+    end.not_nil!
+    fun_structure = fun_contract.arguments.first.structure.not_nil!
+    fun_structure.kind.should eq("Crystal::FunDef")
+    fun_structure.fields["real_name"].source.should eq(%("y.z"))
+    fun_structure.collections["args"].last.source.should eq(" : Char")
+    fun_structure.booleans["variadic?"].should be_true
+    fun_structure.booleans["has_body?"].should be_true
   end
 
   it "retains upstream AST location and documentation metadata" do
