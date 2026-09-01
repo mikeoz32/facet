@@ -22,10 +22,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_control_flow_argument_count.should eq(28)
     runtime_macro_header.structured_declaration_argument_count.should eq(54)
     runtime_macro_header.structured_type_declaration_argument_count.should eq(63)
+    runtime_macro_header.structured_asm_argument_count.should eq(20)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(698)
+    supported_runtime_macro_indices.size.should eq(718)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -175,6 +176,46 @@ describe "Crystal 1.21 runtime macro corpus" do
     c_struct_structure.fields["kind"].source.should eq("struct")
     c_struct_structure.fields["body"].source.should eq("x : Int")
     c_struct_structure.booleans["union?"].should be_false
+  end
+
+  it "retains authoritative asm and operand structure" do
+    empty_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3833
+    end.not_nil!
+    empty_structure = empty_contract.arguments.first.structure.not_nil!
+    empty_structure.kind.should eq("Crystal::Asm")
+    empty_structure.fields["text"].source.should eq(%("nop"))
+    empty_structure.collections["outputs"].should be_empty
+    empty_structure.collections["inputs"].should be_empty
+    empty_structure.collections["clobbers"].should be_empty
+    empty_structure.booleans["volatile?"].should be_false
+    empty_structure.booleans["alignstack?"].should be_false
+    empty_structure.booleans["intel?"].should be_false
+    empty_structure.booleans["can_throw?"].should be_false
+
+    full_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3839
+    end.not_nil!
+    full_structure = full_contract.arguments.first.structure.not_nil!
+    full_structure.collections["outputs"].size.should eq(2)
+    first_output = full_structure.collections["outputs"].first
+    first_output.kind.should eq("Crystal::AsmOperand")
+    first_output.fields["constraint"].source.should eq(%("=r"))
+    first_output.fields["exp"].source.should eq("x")
+    full_structure.collections["inputs"].map(&.fields["constraint"].source).should eq([%("i"), %("r")])
+    full_structure.collections["clobbers"].map(&.source).should eq([%("rax"), %("memory")])
+    full_structure.booleans["volatile?"].should be_true
+    full_structure.booleans["alignstack?"].should be_true
+    full_structure.booleans["intel?"].should be_true
+    full_structure.booleans["can_throw?"].should be_true
+
+    operand_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3884
+    end.not_nil!
+    operand_structure = operand_contract.arguments.first.structure.not_nil!
+    operand_structure.kind.should eq("Crystal::AsmOperand")
+    operand_structure.fields["constraint"].source.should eq(%("i"))
+    operand_structure.fields["exp"].source.should eq("1")
   end
 
   it "retains upstream AST location and documentation metadata" do

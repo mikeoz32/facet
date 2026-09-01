@@ -497,6 +497,66 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "derives structured asm and asm operand fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_asm(x)
+        asm_class_name = {{x.class_name}}
+        asm_text = {{x.text}}
+        asm_outputs = {{x.outputs.stringify}}
+        asm_inputs = {{x.inputs.stringify}}
+        asm_clobbers = {{x.clobbers.stringify}}
+        asm_volatile = {{x.volatile?.stringify}}
+        asm_alignstack = {{x.alignstack?.stringify}}
+        asm_intel = {{x.intel?.stringify}}
+        asm_can_throw = {{x.can_throw?.stringify}}
+        first_output_class_name = {{x.outputs[0].class_name}}
+        first_output_constraint = {{x.outputs[0].constraint}}
+        first_output_exp = {{x.outputs[0].exp.stringify}}
+      end
+
+      macro describe_empty_asm(x)
+        empty_outputs = {{x.outputs.stringify}}
+        empty_inputs = {{x.inputs.stringify}}
+        empty_clobbers = {{x.clobbers.stringify}}
+        empty_volatile = {{x.volatile?.stringify}}
+        empty_alignstack = {{x.alignstack?.stringify}}
+        empty_intel = {{x.intel?.stringify}}
+        empty_can_throw = {{x.can_throw?.stringify}}
+      end
+
+      describe_asm((asm("foo" : "=r"(x), "=r"(y) : "i"(1), "r"(2) : "rax", "memory" : "volatile", "alignstack", "intel", "unwind")))
+      describe_empty_asm((asm("nop" ::::)))
+    CR
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+    parser.diagnostics.should be_empty
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(asm_class_name = "Asm"))
+    expanded.source.text.should contain(%(asm_text = "foo"))
+    expanded.source.text.should contain(%(asm_outputs = "[\\"=r\\"(x), \\"=r\\"(y)]"))
+    expanded.source.text.should contain(%(asm_inputs = "[\\"i\\"(1), \\"r\\"(2)]"))
+    expanded.source.text.should contain(%(asm_clobbers = "[\\"rax\\", \\"memory\\"]"))
+    expanded.source.text.should contain(%(asm_volatile = "true"))
+    expanded.source.text.should contain(%(asm_alignstack = "true"))
+    expanded.source.text.should contain(%(asm_intel = "true"))
+    expanded.source.text.should contain(%(asm_can_throw = "true"))
+    expanded.source.text.should contain(%(first_output_class_name = "AsmOperand"))
+    expanded.source.text.should contain(%(first_output_constraint = "=r"))
+    expanded.source.text.should contain(%(first_output_exp = "x"))
+    expanded.source.text.should contain(%(empty_outputs = "[] of ::NoReturn"))
+    expanded.source.text.should contain(%(empty_inputs = "[] of ::NoReturn"))
+    expanded.source.text.should contain(%(empty_clobbers = "[] of ::NoReturn"))
+    expanded.source.text.should contain(%(empty_volatile = "false"))
+    expanded.source.text.should contain(%(empty_alignstack = "false"))
+    expanded.source.text.should contain(%(empty_intel = "false"))
+    expanded.source.text.should contain(%(empty_can_throw = "false"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "derives structured def and argument fields from Facet macro arguments" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro describe_def(x)

@@ -91,7 +91,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   structured_call_argument_count : Int32,
   structured_control_flow_argument_count : Int32,
   structured_declaration_argument_count : Int32,
-  structured_type_declaration_argument_count : Int32 do
+  structured_type_declaration_argument_count : Int32,
+  structured_asm_argument_count : Int32 do
   include JSON::Serializable
 end
 

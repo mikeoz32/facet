@@ -4,7 +4,7 @@
 
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet
-  now matches exact output for 698/900 portable contracts executed by the
+  now matches exact output for 718/900 portable contracts executed by the
   official evaluator specs (including all 371/371 statically self-contained
   contracts); 117 program-context contracts and 133 semantic examples remain
   tracked explicitly for the next fixture layers.
@@ -35,6 +35,10 @@
   including declaration kind, body, superclass/base type, type variables,
   splat index, and abstract/struct/union flags. This adds 39 exact official
   declaration contracts; structured AST `is_a?` handling adds one more.
+- Added captured and Facet-native macro AST views for `Asm` and `AsmOperand`,
+  covering assembly text, input/output constraints and expressions, clobbers,
+  and volatile/alignstack/intel/unwind flags. This adds all 20 official inline
+  assembly contracts to the exact runtime gate.
 - Added Crystal-compatible macro hash iteration indices, union type arguments
   for `is_a?`, and target-layout-neutral number values for `sizeof`/`alignof`
   introspection.

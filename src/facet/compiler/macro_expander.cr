@@ -813,6 +813,8 @@ module Facet
               NodeKind::Lib, NodeKind::AnnotationDef}.includes?(node.kind)
             return macro_structured_type_declaration_argument_value(node)
           end
+          return macro_structured_asm_argument_value(node) if node.kind == NodeKind::Asm
+          return macro_structured_asm_operand_argument_value(node) if node.kind == NodeKind::AsmOperand
           return nil
         end
 
@@ -987,6 +989,43 @@ module Facet
         [node]
       end
 
+      private def macro_structured_asm_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        fields = {
+          "text" => macro_captured_syntax_node(node.child(0)),
+        }
+        collections = {
+          "outputs"  => macro_captured_asm_operands(node.child(1)),
+          "inputs"   => macro_captured_asm_operands(node.child(2)),
+          "clobbers" => (node.child(3).try(&.children) || [] of SyntaxNode).map { |clobber| macro_captured_syntax_node(clobber) },
+        }
+        flags = node.raw.flags
+        booleans = {
+          "volatile?"   => (flags & 0x0001_u16) != 0,
+          "alignstack?" => (flags & 0x0002_u16) != 0,
+          "intel?"      => (flags & 0x0004_u16) != 0,
+          "can_throw?"  => (flags & 0x0008_u16) != 0,
+        }
+        structure = MacroCapturedNode.new(node.text, "Crystal::Asm", fields, collections, booleans)
+        MacroSyntaxValue.captured(node.text, "Crystal::Asm", MacroNodeMetadata.new(structure: structure))
+      end
+
+      private def macro_captured_asm_operands(arguments : SyntaxNode?) : Array(MacroCapturedNode)
+        (arguments.try(&.children) || [] of SyntaxNode).map { |operand| macro_captured_asm_operand(operand) }
+      end
+
+      private def macro_captured_asm_operand(node : SyntaxNode) : MacroCapturedNode
+        fields = {
+          "constraint" => macro_captured_syntax_node(node.child(0)),
+          "exp"        => macro_captured_syntax_node(node.child(1)),
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::AsmOperand", fields)
+      end
+
+      private def macro_structured_asm_operand_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        structure = macro_captured_asm_operand(node)
+        MacroSyntaxValue.captured(node.text, "Crystal::AsmOperand", MacroNodeMetadata.new(structure: structure))
+      end
+
       private def macro_structured_type_declaration_argument_value(node : SyntaxNode) : MacroSyntaxValue
         kind = macro_type_declaration_crystal_kind(node)
         fields = {
@@ -1045,6 +1084,8 @@ module Facet
         when NodeKind::Enum          then "Crystal::EnumDef"
         when NodeKind::Lib           then "Crystal::LibDef"
         when NodeKind::AnnotationDef then "Crystal::AnnotationDef"
+        when NodeKind::Asm           then "Crystal::Asm"
+        when NodeKind::AsmOperand    then "Crystal::AsmOperand"
         else                              "Crystal::ASTNode"
         end
       end
@@ -3350,7 +3391,7 @@ module Facet
         end
         if collection = structure.collections[name]?
           values = collection.map { |node| macro_captured_node_value(node).as(MacroValue) }
-          value = {"free_vars", "type_vars"}.includes?(name) ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
+          value = {"free_vars", "type_vars", "outputs", "inputs", "clobbers"}.includes?(name) ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
           return MacroEvaluation.new(value)
         end
         if structure.booleans.has_key?(name)
