@@ -809,6 +809,10 @@ module Facet
           if {NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun}.includes?(node.kind)
             return macro_structured_declaration_argument_value(node)
           end
+          if {NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum,
+              NodeKind::Lib, NodeKind::AnnotationDef}.includes?(node.kind)
+            return macro_structured_type_declaration_argument_value(node)
+          end
           return nil
         end
 
@@ -981,6 +985,114 @@ module Facet
           return macro_union_type_nodes(left, ast) + macro_union_type_nodes(right, ast)
         end
         [node]
+      end
+
+      private def macro_structured_type_declaration_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        kind = macro_type_declaration_crystal_kind(node)
+        fields = {
+          "kind" => MacroCapturedNode.new(macro_type_declaration_kind_name(node), "Crystal::MacroId"),
+          "body" => macro_captured_syntax_node(node.body),
+        }
+        collections = {} of String => Array(MacroCapturedNode)
+        booleans = {} of String => Bool
+        nil_fields = [] of String
+
+        case kind
+        when "Crystal::ClassDef"
+          parameters = macro_captured_type_parameters(node)
+          fields["superclass"] = macro_captured_syntax_node(node.superclass)
+          collections["type_vars"] = parameters[:values]
+          if splat_index = parameters[:splat_index]
+            fields["splat_index"] = MacroCapturedNode.new(splat_index.to_s, "Crystal::NumberLiteral")
+          else
+            nil_fields << "splat_index"
+          end
+          booleans["abstract?"] = node.semantic_flag?(SemanticFlag::Abstract)
+          booleans["struct?"] = node.kind == NodeKind::Struct
+        when "Crystal::ModuleDef"
+          parameters = macro_captured_type_parameters(node)
+          collections["type_vars"] = parameters[:values]
+          if splat_index = parameters[:splat_index]
+            fields["splat_index"] = MacroCapturedNode.new(splat_index.to_s, "Crystal::NumberLiteral")
+          else
+            nil_fields << "splat_index"
+          end
+        when "Crystal::EnumDef"
+          fields["base_type"] = macro_captured_syntax_node(node.superclass)
+        when "Crystal::CStructOrUnionDef"
+          booleans["union?"] = node.semantic_flag?(SemanticFlag::Union)
+        end
+
+        structure = MacroCapturedNode.new(node.text, kind, fields, collections, booleans, nil_fields)
+        metadata_fields = {
+          "name"                      => MacroCapturedField.new(macro_type_declaration_name(node, generic_args: true), "identifier"),
+          "name_without_generic_args" => MacroCapturedField.new(macro_type_declaration_name(node, generic_args: false), "identifier"),
+        }
+        metadata = MacroNodeMetadata.new(fields: metadata_fields, structure: structure)
+        MacroSyntaxValue.captured(node.text, kind, metadata)
+      end
+
+      private def macro_type_declaration_crystal_kind(node : SyntaxNode) : String
+        case node.kind
+        when NodeKind::Class  then "Crystal::ClassDef"
+        when NodeKind::Module then "Crystal::ModuleDef"
+        when NodeKind::Struct
+          if node.semantic_flag?(SemanticFlag::Union) || node.ancestors.any? { |ancestor| ancestor.kind == NodeKind::Lib }
+            "Crystal::CStructOrUnionDef"
+          else
+            "Crystal::ClassDef"
+          end
+        when NodeKind::Enum          then "Crystal::EnumDef"
+        when NodeKind::Lib           then "Crystal::LibDef"
+        when NodeKind::AnnotationDef then "Crystal::AnnotationDef"
+        else                              "Crystal::ASTNode"
+        end
+      end
+
+      private def macro_type_declaration_kind_name(node : SyntaxNode) : String
+        return "union" if node.kind == NodeKind::Struct && node.semantic_flag?(SemanticFlag::Union)
+        case node.kind
+        when NodeKind::Class         then "class"
+        when NodeKind::Module        then "module"
+        when NodeKind::Struct        then "struct"
+        when NodeKind::Enum          then "enum"
+        when NodeKind::Lib           then "lib"
+        when NodeKind::AnnotationDef then "annotation"
+        else                              ""
+        end
+      end
+
+      private def macro_captured_type_parameters(node : SyntaxNode)
+        values = [] of MacroCapturedNode
+        splat_index = nil.as(Int32?)
+        name_node = node.name_node
+        if name_node && name_node.kind == NodeKind::TypeApply
+          if arguments = name_node.child(1)
+            arguments.children.each_with_index do |parameter, index|
+              target = parameter.kind == NodeKind::Splat ? parameter.child(0) : parameter
+              name = target.try(&.symbol_name) || target.try(&.text) || parameter.text.lchop('*')
+              splat_index = index if parameter.kind == NodeKind::Splat
+              values << MacroCapturedNode.new(name, "Crystal::MacroId")
+            end
+          end
+        end
+        {values: values, splat_index: splat_index}
+      end
+
+      private def macro_type_declaration_name(node : SyntaxNode, generic_args : Bool) : String
+        name_node = node.name_node
+        return "" unless name_node
+        base = if name_node.kind == NodeKind::TypeApply
+                 name_node.child(0).try(&.text) || name_node.text
+               else
+                 name_node.text
+               end
+        return base unless generic_args && name_node.kind == NodeKind::TypeApply
+        parameters = macro_captured_type_parameters(node)
+        rendered = parameters[:values].map_with_index do |parameter, index|
+          index == parameters[:splat_index] ? "*#{parameter.source}" : parameter.source
+        end
+        "#{base}(#{rendered.join(", ")})"
       end
 
       private def macro_structured_declaration_argument_value(node : SyntaxNode) : MacroSyntaxValue
@@ -1232,7 +1344,7 @@ module Facet
           return MacroCapturedNode.new("", "Crystal::Nop") if expressions.empty?
           return macro_captured_syntax_node(expressions.first) if expressions.size == 1
         end
-        MacroCapturedNode.new(node.text, macro_crystal_syntax_kind(node.kind))
+        MacroCapturedNode.new(node.text.strip, macro_crystal_syntax_kind(node.kind))
       end
 
       private def macro_crystal_syntax_kind(kind : NodeKind) : String
@@ -1247,6 +1359,15 @@ module Facet
         when NodeKind::NamedArg      then "Crystal::NamedArgument"
         when NodeKind::Call          then "Crystal::Call"
         when NodeKind::CallWithBlock then "Crystal::Call"
+        when NodeKind::Def           then "Crystal::Def"
+        when NodeKind::MacroDef      then "Crystal::Macro"
+        when NodeKind::Fun           then "Crystal::FunDef"
+        when NodeKind::Class         then "Crystal::ClassDef"
+        when NodeKind::Module        then "Crystal::ModuleDef"
+        when NodeKind::Struct        then "Crystal::ClassDef"
+        when NodeKind::Enum          then "Crystal::EnumDef"
+        when NodeKind::Lib           then "Crystal::LibDef"
+        when NodeKind::AnnotationDef then "Crystal::AnnotationDef"
         when NodeKind::Const         then "Crystal::Path"
         when NodeKind::Path          then "Crystal::Path"
         when NodeKind::Ident         then "Crystal::Var"
@@ -3229,7 +3350,7 @@ module Facet
         end
         if collection = structure.collections[name]?
           values = collection.map { |node| macro_captured_node_value(node).as(MacroValue) }
-          value = name == "free_vars" ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
+          value = {"free_vars", "type_vars"}.includes?(name) ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
           return MacroEvaluation.new(value)
         end
         if structure.booleans.has_key?(name)

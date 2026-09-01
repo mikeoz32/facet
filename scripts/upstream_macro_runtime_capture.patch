@@ -1,5 +1,5 @@
 diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
-index b2378cd..984861b 100644
+index b2378cd..76a57bb 100644
 --- a/spec/spec_helper.cr
 +++ b/spec/spec_helper.cr
 @@ -3,6 +3,7 @@
@@ -10,7 +10,7 @@ index b2378cd..984861b 100644
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,310 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,394 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -149,6 +149,18 @@ index b2378cd..984861b 100644
 +    FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
 +  when Crystal::Rescue
 +    facet_macro_capture_rescue(node)
++  when Crystal::ClassDef
++    facet_macro_capture_class_def(node)
++  when Crystal::ModuleDef
++    facet_macro_capture_module_def(node)
++  when Crystal::EnumDef
++    facet_macro_capture_enum_def(node)
++  when Crystal::AnnotationDef
++    facet_macro_capture_annotation_def(node)
++  when Crystal::LibDef
++    facet_macro_capture_lib_def(node)
++  when Crystal::CStructOrUnionDef
++    facet_macro_capture_c_struct_or_union_def(node)
 +  when Crystal::FunDef
 +    facet_macro_capture_fun_def(node)
 +  when Crystal::Macro
@@ -158,6 +170,78 @@ index b2378cd..984861b 100644
 +  when Crystal::Arg
 +    facet_macro_capture_arg(node)
 +  end
++end
++
++private def facet_macro_capture_class_def(node : Crystal::ClassDef) : FacetMacroCapturedNode
++  fields = {
++    "kind"       => FacetMacroCapturedNode.new(node.struct? ? "struct" : "class", "Crystal::MacroId"),
++    "superclass" => facet_macro_capture_node(node.superclass),
++    "body"       => facet_macro_capture_node(node.body),
++  }
++  nil_fields = [] of String
++  if splat_index = node.splat_index
++    fields["splat_index"] = FacetMacroCapturedNode.new(splat_index.to_s, "Crystal::NumberLiteral")
++  else
++    nil_fields << "splat_index"
++  end
++  collections = {
++    "type_vars" => (node.type_vars || [] of String).map { |name| FacetMacroCapturedNode.new(name, "Crystal::MacroId") },
++  }
++  booleans = {
++    "abstract?" => node.abstract?,
++    "struct?"   => node.struct?,
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections, booleans, nil_fields)
++end
++
++private def facet_macro_capture_module_def(node : Crystal::ModuleDef) : FacetMacroCapturedNode
++  fields = {
++    "kind" => FacetMacroCapturedNode.new("module", "Crystal::MacroId"),
++    "body" => facet_macro_capture_node(node.body),
++  }
++  nil_fields = [] of String
++  if splat_index = node.splat_index
++    fields["splat_index"] = FacetMacroCapturedNode.new(splat_index.to_s, "Crystal::NumberLiteral")
++  else
++    nil_fields << "splat_index"
++  end
++  collections = {
++    "type_vars" => (node.type_vars || [] of String).map { |name| FacetMacroCapturedNode.new(name, "Crystal::MacroId") },
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections, nil_fields: nil_fields)
++end
++
++private def facet_macro_capture_enum_def(node : Crystal::EnumDef) : FacetMacroCapturedNode
++  fields = {
++    "kind"      => FacetMacroCapturedNode.new("enum", "Crystal::MacroId"),
++    "base_type" => facet_macro_capture_node(node.base_type),
++    "body"      => facet_macro_capture_node(Crystal::Expressions.from(node.members)),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_annotation_def(node : Crystal::AnnotationDef) : FacetMacroCapturedNode
++  fields = {
++    "kind" => FacetMacroCapturedNode.new("annotation", "Crystal::MacroId"),
++    "body" => facet_macro_capture_node(nil),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_lib_def(node : Crystal::LibDef) : FacetMacroCapturedNode
++  fields = {
++    "kind" => FacetMacroCapturedNode.new("lib", "Crystal::MacroId"),
++    "body" => facet_macro_capture_node(node.body),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_c_struct_or_union_def(node : Crystal::CStructOrUnionDef) : FacetMacroCapturedNode
++  fields = {
++    "kind" => FacetMacroCapturedNode.new(node.union? ? "union" : "struct", "Crystal::MacroId"),
++    "body" => facet_macro_capture_node(node.body),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, booleans: {"union?" => node.union?})
 +end
 +
 +private def facet_macro_capture_when(node : Crystal::When) : FacetMacroCapturedNode

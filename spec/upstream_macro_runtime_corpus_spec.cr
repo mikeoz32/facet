@@ -21,10 +21,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_call_argument_count.should eq(21)
     runtime_macro_header.structured_control_flow_argument_count.should eq(28)
     runtime_macro_header.structured_declaration_argument_count.should eq(54)
+    runtime_macro_header.structured_type_declaration_argument_count.should eq(63)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(658)
+    supported_runtime_macro_indices.size.should eq(698)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -128,6 +129,52 @@ describe "Crystal 1.21 runtime macro corpus" do
     fun_structure.collections["args"].last.source.should eq(" : Char")
     fun_structure.booleans["variadic?"].should be_true
     fun_structure.booleans["has_body?"].should be_true
+  end
+
+  it "retains authoritative type declaration structure" do
+    class_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3587
+    end.not_nil!
+    class_structure = class_contract.arguments.first.structure.not_nil!
+    class_structure.kind.should eq("Crystal::ClassDef")
+    class_structure.fields["kind"].source.should eq("class")
+    class_structure.fields["superclass"].source.should eq("Parent(*T)")
+    class_structure.collections["type_vars"].should be_empty
+    class_structure.nil_fields.should contain("splat_index")
+    class_structure.booleans["abstract?"].should be_false
+    class_structure.booleans["struct?"].should be_false
+
+    module_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3641
+    end.not_nil!
+    module_structure = module_contract.arguments.first.structure.not_nil!
+    module_structure.kind.should eq("Crystal::ModuleDef")
+    module_structure.collections["type_vars"].map(&.source).should eq(["A", "B", "C", "D"])
+    module_structure.fields["splat_index"].source.should eq("2")
+
+    enum_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3670
+    end.not_nil!
+    enum_structure = enum_contract.arguments.first.structure.not_nil!
+    enum_structure.kind.should eq("Crystal::EnumDef")
+    enum_structure.fields["base_type"].source.should eq("::Int32")
+    enum_structure.fields["body"].source.should eq("X")
+
+    lib_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3702
+    end.not_nil!
+    lib_structure = lib_contract.arguments.first.structure.not_nil!
+    lib_structure.kind.should eq("Crystal::LibDef")
+    lib_structure.fields["body"].kind.should eq("Crystal::FunDef")
+
+    c_struct_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3739
+    end.not_nil!
+    c_struct_structure = c_struct_contract.arguments.first.structure.not_nil!
+    c_struct_structure.kind.should eq("Crystal::CStructOrUnionDef")
+    c_struct_structure.fields["kind"].source.should eq("struct")
+    c_struct_structure.fields["body"].source.should eq("x : Int")
+    c_struct_structure.booleans["union?"].should be_false
   end
 
   it "retains upstream AST location and documentation metadata" do

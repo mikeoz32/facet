@@ -365,6 +365,138 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "derives structured type declaration fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_class(x)
+        class_name = {{x.class_name}}
+        class_kind = {{x.kind.stringify}}
+        class_type_name = {{x.name.stringify}}
+        class_base_name = {{x.name(generic_args: false).stringify}}
+        class_superclass = {{x.superclass.stringify}}
+        class_type_vars = {{x.type_vars.stringify}}
+        class_splat_index = {{x.splat_index.stringify}}
+        class_body = {{x.body.stringify}}
+        class_abstract = {{x.abstract?.stringify}}
+        class_struct = {{x.struct?.stringify}}
+      end
+
+      macro describe_module(x)
+        module_class_name = {{x.class_name}}
+        module_kind = {{x.kind.stringify}}
+        module_type_name = {{x.name.stringify}}
+        module_type_vars = {{x.type_vars.stringify}}
+        module_splat_index = {{x.splat_index.stringify}}
+        module_body = {{x.body.stringify}}
+      end
+
+      macro describe_enum(x)
+        enum_class_name = {{x.class_name}}
+        enum_kind = {{x.kind.stringify}}
+        enum_name = {{x.name.stringify}}
+        enum_base_type = {{x.base_type.stringify}}
+        enum_body = {{x.body.stringify}}
+      end
+
+      macro describe_annotation(x)
+        annotation_class_name = {{x.class_name}}
+        annotation_kind = {{x.kind.stringify}}
+        annotation_name = {{x.name.stringify}}
+        annotation_body = {{x.body.stringify}}
+      end
+
+      macro describe_lib(x)
+        lib_class_name = {{x.class_name}}
+        lib_kind = {{x.kind.stringify}}
+        lib_name = {{x.name.stringify}}
+        lib_body = {{x.body.stringify}}
+      end
+
+      macro describe_c_type(x)
+        c_class_name = {{x.class_name}}
+        c_kind = {{x.kind.stringify}}
+        c_name = {{x.name.stringify}}
+        c_body = {{x.body.stringify}}
+        c_union = {{x.union?.stringify}}
+      end
+
+      describe_class((abstract class ::Foo::Bar(A, B, *C, D) < Parent
+        'a'
+      end))
+      describe_class((struct Empty
+      end))
+      describe_module((module ::Foo::Mix(A, *B)
+        'm'
+      end))
+      describe_enum((enum ::Foo::Choice : Int32
+        One
+      end))
+      describe_annotation((annotation ::Foo::Marker
+      end))
+      describe_lib((lib ::Foo::Native
+        fun tick
+      end))
+
+      lib Wrapper
+        describe_c_type((struct Record
+          value : Int32
+        end))
+        describe_c_type((union Value
+          int : Int32
+        end))
+      end
+    CR
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+    parser.diagnostics.should be_empty
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(class_name = "ClassDef"))
+    expanded.source.text.should contain(%(class_kind = "class"))
+    expanded.source.text.should contain(%(class_type_name = "::Foo::Bar(A, B, *C, D)"))
+    expanded.source.text.should contain(%(class_base_name = "::Foo::Bar"))
+    expanded.source.text.should contain(%(class_superclass = "Parent"))
+    expanded.source.text.should contain(%(class_type_vars = "[A, B, C, D]"))
+    expanded.source.text.should contain(%(class_splat_index = "2"))
+    expanded.source.text.should contain(%(class_body = "'a'"))
+    expanded.source.text.should contain(%(class_abstract = "true"))
+    expanded.source.text.should contain(%(class_struct = "false"))
+    expanded.source.text.should contain(%(class_kind = "struct"))
+    expanded.source.text.should contain(%(class_type_vars = "[] of ::NoReturn"))
+    expanded.source.text.should contain(%(class_splat_index = "nil"))
+    expanded.source.text.should contain(%(class_struct = "true"))
+    expanded.source.text.should contain(%(module_class_name = "ModuleDef"))
+    expanded.source.text.should contain(%(module_kind = "module"))
+    expanded.source.text.should contain(%(module_type_name = "::Foo::Mix(A, *B)"))
+    expanded.source.text.should contain(%(module_type_vars = "[A, B]"))
+    expanded.source.text.should contain(%(module_splat_index = "1"))
+    expanded.source.text.should contain(%(module_body = "'m'"))
+    expanded.source.text.should contain(%(enum_class_name = "EnumDef"))
+    expanded.source.text.should contain(%(enum_kind = "enum"))
+    expanded.source.text.should contain(%(enum_name = "::Foo::Choice"))
+    expanded.source.text.should contain(%(enum_base_type = "Int32"))
+    expanded.source.text.should contain(%(enum_body = "One"))
+    expanded.source.text.should contain(%(annotation_class_name = "AnnotationDef"))
+    expanded.source.text.should contain(%(annotation_kind = "annotation"))
+    expanded.source.text.should contain(%(annotation_name = "::Foo::Marker"))
+    expanded.source.text.should contain(%(annotation_body = ""))
+    expanded.source.text.should contain(%(lib_class_name = "LibDef"))
+    expanded.source.text.should contain(%(lib_kind = "lib"))
+    expanded.source.text.should contain(%(lib_name = "::Foo::Native"))
+    expanded.source.text.should contain(%(lib_body = "fun tick"))
+    expanded.source.text.should contain(%(c_class_name = "CStructOrUnionDef"))
+    expanded.source.text.should contain(%(c_kind = "struct"))
+    expanded.source.text.should contain(%(c_name = "Record"))
+    expanded.source.text.should contain(%(c_body = "value : Int32"))
+    expanded.source.text.should contain(%(c_union = "false"))
+    expanded.source.text.should contain(%(c_kind = "union"))
+    expanded.source.text.should contain(%(c_name = "Value"))
+    expanded.source.text.should contain(%(c_union = "true"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "derives structured def and argument fields from Facet macro arguments" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro describe_def(x)

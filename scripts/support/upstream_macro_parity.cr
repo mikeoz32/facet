@@ -90,7 +90,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   structured_name_argument_count : Int32,
   structured_call_argument_count : Int32,
   structured_control_flow_argument_count : Int32,
-  structured_declaration_argument_count : Int32 do
+  structured_declaration_argument_count : Int32,
+  structured_type_declaration_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -217,6 +218,7 @@ module UpstreamMacroParity
     return true if argument.filename || argument.end_filename || argument.doc
     return true if argument.name_source && root_member_requested?(body, argument.name, "name")
     if structure = argument.structure
+      return true if root_member_requested?(body, argument.name, "is_a?")
       members = structure.fields.keys + structure.collections.keys + structure.booleans.keys + structure.nil_fields
       return true if members.any? { |member| root_member_requested?(body, argument.name, member) }
     end
