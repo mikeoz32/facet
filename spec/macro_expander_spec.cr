@@ -163,6 +163,58 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "derives structured call fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_call(x)
+        call_name = {{x.name.stringify}}
+        call_args = {{x.args.stringify}}
+        call_receiver = {{x.receiver.stringify}}
+        call_block_arg = {{x.block_arg.stringify}}
+        named_name = {{x.named_args[0].name.stringify}}
+        named_value = {{x.named_args[0].value.stringify}}
+        call_global = {{x.global?.stringify}}
+      end
+
+      describe_call(1.some_call(2, 3, a: 4, b: 5, &bl))
+      describe_call(::some_call)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(call_name = "some_call"))
+    expanded.source.text.should contain(%(call_args = "[2, 3]"))
+    expanded.source.text.should contain(%(call_receiver = "1"))
+    expanded.source.text.should contain(%(call_block_arg = "bl"))
+    expanded.source.text.should contain(%(named_name = "a"))
+    expanded.source.text.should contain(%(named_value = "4"))
+    expanded.source.text.should contain(%(call_global = "false"))
+    expanded.source.text.should contain(%(call_global = "true"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "retains a Facet-native call block as a nested AST value" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_block(x)
+        call_block = {{x.block.stringify}}
+      end
+
+      describe_block((1.some_call do
+        7
+      end))
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(call_block = "do\\n    7\\n  end"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "exposes sizeof and alignof results as macro number literals" do
     source = Facet::Compiler::Source.new(<<-CR)
       {{sizeof(Int32).is_a?(NumberLiteral)}}

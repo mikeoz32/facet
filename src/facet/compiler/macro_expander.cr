@@ -20,11 +20,29 @@ module Facet
 
     record MacroCapturedField, source : String, kind : String
 
+    class MacroCapturedNode
+      getter source : String
+      getter kind : String
+      getter fields : Hash(String, MacroCapturedNode)
+      getter collections : Hash(String, Array(MacroCapturedNode))
+      getter booleans : Hash(String, Bool)
+
+      def initialize(
+        @source : String,
+        @kind : String,
+        @fields = {} of String => MacroCapturedNode,
+        @collections = {} of String => Array(MacroCapturedNode),
+        @booleans = {} of String => Bool,
+      )
+      end
+    end
+
     record MacroNodeMetadata,
       location : MacroSourceLocation? = nil,
       end_location : MacroSourceLocation? = nil,
       doc : String? = nil,
-      fields : Hash(String, MacroCapturedField) = {} of String => MacroCapturedField
+      fields : Hash(String, MacroCapturedField) = {} of String => MacroCapturedField,
+      structure : MacroCapturedNode? = nil
 
     record MacroSyntaxValue,
       source : String,
@@ -757,8 +775,114 @@ module Facet
       # expression must still survive as source-backed syntax for `{{arg}}`
       # substitution instead of being silently discarded.
       private def macro_argument_value(node_id : NodeId, ast : AstFile) : MacroValue
+        if value = macro_structured_argument_value(node_id, ast)
+          return value
+        end
         evaluation = eval_value(node_id, ast)
         evaluation ? evaluation.value : MacroSyntaxValue.code(ast.node_string(node_id))
+      end
+
+      private def macro_structured_argument_value(node_id : NodeId, ast : AstFile) : MacroSyntaxValue?
+        node = syntax_tree(ast).node(node_id)
+        return nil unless macro_structured_call_node?(node, ast)
+
+        fields = {} of String => MacroCapturedNode
+        fields["receiver"] = macro_captured_syntax_node(node.receiver)
+        fields["block_arg"] = if block_arg = node.arguments.find { |argument| macro_call_block_argument?(argument) }
+                                name = block_arg.name || block_arg.text.lstrip.lchop('&')
+                                MacroCapturedNode.new(name, "Crystal::Arg")
+                              else
+                                macro_captured_syntax_node(nil)
+                              end
+        fields["block"] = macro_captured_call_block(node, ast)
+
+        positional = node.arguments.reject do |argument|
+          argument.kind == NodeKind::NamedArg || macro_call_block_argument?(argument)
+        end
+        collections = {
+          "args"       => positional.map { |argument| macro_captured_syntax_node(argument) },
+          "named_args" => node.named_arguments.map { |argument| macro_captured_named_argument(argument) },
+        }
+        source = node.text
+        structure = MacroCapturedNode.new(
+          source,
+          "Crystal::Call",
+          fields,
+          collections,
+          {"global?" => node.receiver.nil? && source.lstrip.starts_with?("::")}
+        )
+        name_fields = {} of String => MacroCapturedField
+        if name = node.call_name || macro_global_call_name(node)
+          name_fields["name"] = MacroCapturedField.new(name, "identifier")
+        end
+        metadata = MacroNodeMetadata.new(fields: name_fields, structure: structure)
+        MacroSyntaxValue.captured(source, "Crystal::Call", metadata)
+      end
+
+      private def macro_structured_call_node?(node : SyntaxNode, ast : AstFile) : Bool
+        return true if {NodeKind::Call, NodeKind::CallWithBlock}.includes?(node.kind)
+        return true unless macro_global_call_name(node).nil?
+        return false unless node.kind == NodeKind::Binary
+        operator_index = node.raw.payload_index
+        return false unless operator_index.in?(0...ast.arena.operators.size)
+        {TokenKind::Dot, TokenKind::SafeNav, TokenKind::DoubleColon}.includes?(ast.arena.operator_kind(operator_index))
+      end
+
+      private def macro_global_call_name(node : SyntaxNode) : String?
+        source = node.text.strip
+        return nil unless source.starts_with?("::")
+        name = source.lchop("::")
+        name.matches?(/\A[a-z_][a-zA-Z0-9_]*[?!]?\z/) ? name : nil
+      end
+
+      private def macro_call_block_argument?(node : SyntaxNode) : Bool
+        node.kind == NodeKind::BlockParam || node.text.lstrip.starts_with?('&')
+      end
+
+      private def macro_captured_call_block(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        block_call = if node.kind == NodeKind::CallWithBlock
+                       node
+                     elsif node.kind == NodeKind::Binary
+                       node.child(1).try { |right| right.kind == NodeKind::CallWithBlock ? right : nil }
+                     end
+        return macro_captured_syntax_node(nil) unless block_call
+        call = block_call.child(0)
+        return macro_captured_syntax_node(nil) unless call
+        start = call.span.finish
+        finish = block_call.span.finish
+        source = start < finish ? ast.source.text.byte_slice(start, finish - start).strip : ""
+        MacroCapturedNode.new(source, "Crystal::Block")
+      end
+
+      private def macro_captured_named_argument(node : SyntaxNode) : MacroCapturedNode
+        fields = {} of String => MacroCapturedNode
+        fields["name"] = MacroCapturedNode.new(node.name || "", "identifier")
+        fields["value"] = macro_captured_syntax_node(node.value)
+        MacroCapturedNode.new(node.text, "Crystal::NamedArgument", fields)
+      end
+
+      private def macro_captured_syntax_node(node : SyntaxNode?) : MacroCapturedNode
+        return MacroCapturedNode.new("", "Crystal::Nop") unless node
+        MacroCapturedNode.new(node.text, macro_crystal_syntax_kind(node.kind))
+      end
+
+      private def macro_crystal_syntax_kind(kind : NodeKind) : String
+        case kind
+        when NodeKind::LiteralNumber then "Crystal::NumberLiteral"
+        when NodeKind::LiteralString then "Crystal::StringLiteral"
+        when NodeKind::LiteralSymbol then "Crystal::SymbolLiteral"
+        when NodeKind::LiteralChar   then "Crystal::CharLiteral"
+        when NodeKind::LiteralRegex  then "Crystal::RegexLiteral"
+        when NodeKind::LiteralBool   then "Crystal::BoolLiteral"
+        when NodeKind::LiteralNil    then "Crystal::NilLiteral"
+        when NodeKind::NamedArg      then "Crystal::NamedArgument"
+        when NodeKind::Call          then "Crystal::Call"
+        when NodeKind::CallWithBlock then "Crystal::Call"
+        when NodeKind::Const         then "Crystal::Path"
+        when NodeKind::Path          then "Crystal::Path"
+        when NodeKind::Ident         then "Crystal::Var"
+        else                              "Crystal::ASTNode"
+        end
       end
 
       private def expand_macro_def(
@@ -1523,6 +1647,12 @@ module Facet
       ) : MacroEvaluation?
         if evaluation = apply_type_aware_macro_method(receiver, name, args)
           return evaluation
+        end
+
+        if receiver.is_a?(MacroSyntaxValue) && args.empty? && name != "name"
+          if evaluation = apply_captured_macro_member(receiver, name)
+            return evaluation
+          end
         end
 
         case name
@@ -2687,8 +2817,37 @@ module Facet
         when "identifier"
           MacroSyntaxValue.identifier(field.source)
         else
-          MacroSyntaxValue.code(field.source)
+          if field.kind.starts_with?("Crystal::")
+            MacroSyntaxValue.captured(field.source, field.kind, MacroNodeMetadata.new)
+          else
+            MacroSyntaxValue.code(field.source)
+          end
         end
+      end
+
+      private def apply_captured_macro_member(receiver : MacroSyntaxValue, name : String) : MacroEvaluation?
+        structure = receiver.metadata.try(&.structure)
+        return nil unless structure
+        if field = structure.fields[name]?
+          return MacroEvaluation.new(macro_captured_node_value(field))
+        end
+        if collection = structure.collections[name]?
+          values = collection.map { |node| macro_captured_node_value(node).as(MacroValue) }
+          return MacroEvaluation.new(values)
+        end
+        if structure.booleans.has_key?(name)
+          return MacroEvaluation.new(structure.booleans[name])
+        end
+        nil
+      end
+
+      private def macro_captured_node_value(node : MacroCapturedNode) : MacroValue
+        fields = node.fields.transform_values do |field|
+          MacroCapturedField.new(field.source, field.kind)
+        end
+        structure = MacroCapturedNode.new(node.source, node.kind, node.fields, node.collections, node.booleans)
+        metadata = MacroNodeMetadata.new(fields: fields, structure: structure)
+        MacroSyntaxValue.captured(node.source, node.kind, metadata)
       end
 
       private def macro_value_is_a?(value : MacroValue, type_name : String) : Bool
@@ -2755,6 +2914,13 @@ module Facet
         return true if common.includes?(method_name)
         if value.is_a?(MacroSyntaxValue) && method_name == "name"
           return value.metadata.try(&.fields.has_key?("name")) || false
+        end
+        if value.is_a?(MacroSyntaxValue)
+          if structure = value.metadata.try(&.structure)
+            return true if structure.fields.has_key?(method_name) ||
+                           structure.collections.has_key?(method_name) ||
+                           structure.booleans.has_key?(method_name)
+          end
         end
         case value
         when Int64, MacroNumberValue

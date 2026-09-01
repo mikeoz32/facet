@@ -39,6 +39,25 @@ record UpstreamMacroParityResult,
   end
 end
 
+class UpstreamRuntimeMacroNode
+  include JSON::Serializable
+
+  getter source : String
+  getter kind : String
+  getter fields : Hash(String, UpstreamRuntimeMacroNode)
+  getter collections : Hash(String, Array(UpstreamRuntimeMacroNode))
+  getter booleans : Hash(String, Bool)
+
+  def initialize(
+    @source : String,
+    @kind : String,
+    @fields = {} of String => UpstreamRuntimeMacroNode,
+    @collections = {} of String => Array(UpstreamRuntimeMacroNode),
+    @booleans = {} of String => Bool,
+  )
+  end
+end
+
 record UpstreamRuntimeMacroArgument,
   name : String,
   source : String,
@@ -52,7 +71,8 @@ record UpstreamRuntimeMacroArgument,
   doc : String?,
   name_source : String?,
   name_kind : String?,
-  name_without_generic_args_source : String? do
+  name_without_generic_args_source : String?,
+  structure : UpstreamRuntimeMacroNode? do
   include JSON::Serializable
 end
 
@@ -65,7 +85,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   contextual_case_count : Int32,
   argument_case_count : Int32,
   metadata_argument_count : Int32,
-  structured_name_argument_count : Int32 do
+  structured_name_argument_count : Int32,
+  structured_call_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -183,18 +204,23 @@ module UpstreamMacroParity
     if source = argument.name_without_generic_args_source
       fields["name_without_generic_args"] = Facet::Compiler::MacroCapturedField.new(source, argument.name_kind || "identifier")
     end
-    return nil unless location || end_location || argument.doc || !fields.empty?
-    Facet::Compiler::MacroNodeMetadata.new(location, end_location, argument.doc, fields)
+    structure = argument.structure.try { |node| captured_structure(node) }
+    return nil unless location || end_location || argument.doc || !fields.empty? || structure
+    Facet::Compiler::MacroNodeMetadata.new(location, end_location, argument.doc, fields, structure)
   end
 
   private def captured_argument_required?(body : String, argument : UpstreamRuntimeMacroArgument) : Bool
     return true if argument.filename || argument.end_filename || argument.doc
-    return false unless argument.name_source
-    root_name_requested?(body, argument.name)
+    return true if argument.name_source && root_member_requested?(body, argument.name, "name")
+    if structure = argument.structure
+      members = structure.fields.keys + structure.collections.keys + structure.booleans.keys
+      return true if members.any? { |member| root_member_requested?(body, argument.name, member) }
+    end
+    false
   end
 
-  private def root_name_requested?(body : String, argument_name : String) : Bool
-    needle = "#{argument_name}.name"
+  private def root_member_requested?(body : String, argument_name : String, member : String) : Bool
+    needle = "#{argument_name}.#{member}"
     offset = 0
     while index = body.index(needle, offset)
       next_byte = body.byte_at?(index + needle.bytesize)
@@ -204,6 +230,14 @@ module UpstreamMacroParity
       offset = index + needle.bytesize
     end
     false
+  end
+
+  private def captured_structure(node : UpstreamRuntimeMacroNode) : Facet::Compiler::MacroCapturedNode
+    fields = node.fields.transform_values { |field| captured_structure(field) }
+    collections = node.collections.transform_values do |items|
+      items.map { |item| captured_structure(item) }
+    end
+    Facet::Compiler::MacroCapturedNode.new(node.source, node.kind, fields, collections, node.booleans)
   end
 
   private def captured_location(filename : String?, line : Int32?, column : Int32?) : Facet::Compiler::MacroSourceLocation?

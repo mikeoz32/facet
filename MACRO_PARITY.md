@@ -16,7 +16,7 @@ so an unsupported contract cannot disappear from the denominator.
 
 ## Current result
 
-Facet matches Crystal's exact expansion text for **568/900 (63.11%)** portable
+Facet matches Crystal's exact expansion text for **581/900 (64.56%)** portable
 runtime contracts. This is the primary no-regression gate. It includes every
 one of the original 371 self-contained contracts plus argument-bearing and
 compile-time-generated cases captured from the executing Crystal 1.21 specs.
@@ -25,7 +25,7 @@ The runtime corpus contains 1,017 contracts in total:
 
 | Runtime slice | Count | Current status |
 | --- | ---: | --- |
-| Direct, source-replayable calls | 900 | 568 exact; 332 explicit mismatches |
+| Direct, source-replayable calls | 900 | 581 exact; 319 explicit mismatches |
 | Program-context calls | 117 | Captured, but not replayed until the fixture models compiler program mutations |
 | Calls carrying AST arguments | 578 | Included in the totals above; their exact AST kind and source rendering are retained |
 
@@ -44,7 +44,7 @@ Another 602 `assert_macro` calls remain outside this first executable slice:
 The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, and actual AST
 arguments, then classifies the resulting 1,017 executions directly. Neither
-568/900 nor 371/371 is a claim of complete Crystal macro compatibility. The 332
+581/900 nor 371/371 is a claim of complete Crystal macro compatibility. The 319
 direct mismatches, 117 program-context contracts, diagnostic/error assertions,
 and 133 semantic examples remain explicit backlog.
 
@@ -108,8 +108,8 @@ CRYSTAL_CACHE_DIR=/tmp/facet-spec-cache \
 ## Next coverage layers
 
 1. Extend the captured AST value model from the completed location,
-   documentation, and root-name slices to nested names, bodies, arguments, and
-   types.
+   documentation, root-name, and call-structure slices to control-flow nesting,
+   declaration bodies/arguments, and types.
 2. Add expected diagnostic and exception parity for `assert_macro_error` and
    nested `expect_raises` contracts.
 3. Model compiler inputs such as flags, environment reads, and program/type

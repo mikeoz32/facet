@@ -5,6 +5,25 @@ require "json"
 # argument-bearing contracts because the official specs construct Crystal AST
 # nodes in ordinary Crystal code before calling `assert_macro`.
 
+class CapturedMacroNode
+  include JSON::Serializable
+
+  getter source : String
+  getter kind : String
+  getter fields : Hash(String, CapturedMacroNode)
+  getter collections : Hash(String, Array(CapturedMacroNode))
+  getter booleans : Hash(String, Bool)
+
+  def initialize(
+    @source : String,
+    @kind : String,
+    @fields = {} of String => CapturedMacroNode,
+    @collections = {} of String => Array(CapturedMacroNode),
+    @booleans = {} of String => Bool,
+  )
+  end
+end
+
 record CapturedMacroArgument,
   name : String,
   source : String,
@@ -18,7 +37,8 @@ record CapturedMacroArgument,
   doc : String?,
   name_source : String?,
   name_kind : String?,
-  name_without_generic_args_source : String? do
+  name_without_generic_args_source : String?,
+  structure : CapturedMacroNode? do
   include JSON::Serializable
 end
 
@@ -42,7 +62,8 @@ record RuntimeMacroFixtureHeader,
   contextual_case_count : Int32,
   argument_case_count : Int32,
   metadata_argument_count : Int32,
-  structured_name_argument_count : Int32 do
+  structured_name_argument_count : Int32,
+  structured_call_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -71,6 +92,9 @@ header = RuntimeMacroFixtureHeader.new(
   end,
   structured_name_argument_count: cases.sum do |fixture_case|
     fixture_case.arguments.count { |argument| !argument.name_source.nil? }
+  end,
+  structured_call_argument_count: cases.sum do |fixture_case|
+    fixture_case.arguments.count { |argument| !argument.structure.nil? }
   end,
 )
 

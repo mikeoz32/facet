@@ -18,10 +18,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.argument_case_count.should eq(578)
     runtime_macro_header.metadata_argument_count.should eq(10)
     runtime_macro_header.structured_name_argument_count.should eq(198)
+    runtime_macro_header.structured_call_argument_count.should eq(21)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(568)
+    supported_runtime_macro_indices.size.should eq(581)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -38,6 +39,26 @@ describe "Crystal 1.21 runtime macro corpus" do
     end.not_nil!
     primitive_case.arguments.first.name_source.should eq(":abc")
     primitive_case.arguments.first.name_kind.should eq("symbol")
+  end
+
+  it "retains authoritative nested call structure" do
+    named_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3105
+    end.not_nil!
+    structure = named_case.arguments.first.structure.not_nil!
+    structure.kind.should eq("Crystal::Call")
+    structure.fields["receiver"].source.should eq("1")
+    structure.collections["named_args"].size.should eq(2)
+    first_named = structure.collections["named_args"].first
+    first_named.source.should eq("a: 1")
+    first_named.fields["name"].source.should eq("a")
+    first_named.fields["value"].source.should eq("1")
+    structure.booleans["global?"].should be_false
+
+    global_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3114
+    end.not_nil!
+    global_case.arguments.first.structure.not_nil!.booleans["global?"].should be_true
   end
 
   it "retains upstream AST location and documentation metadata" do

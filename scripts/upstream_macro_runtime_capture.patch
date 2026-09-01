@@ -1,5 +1,5 @@
 diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
-index b2378cd..349ae8c 100644
+index b2378cd..e03fb8d 100644
 --- a/spec/spec_helper.cr
 +++ b/spec/spec_helper.cr
 @@ -3,6 +3,7 @@
@@ -10,7 +10,7 @@ index b2378cd..349ae8c 100644
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,115 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,172 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -64,6 +64,9 @@ index b2378cd..349ae8c 100644
 +                  json.field "name_kind", captured_name.kind
 +                  json.field "name_without_generic_args_source", captured_name.without_generic_args_source
 +                end
++                if structure = facet_macro_capture_structure(node)
++                  json.field "structure", structure
++                end
 +              end
 +            end
 +          end
@@ -78,6 +81,60 @@ index b2378cd..349ae8c 100644
 +  source : String,
 +  kind : String,
 +  without_generic_args_source : String? = nil
++
++class FacetMacroCapturedNode
++  include JSON::Serializable
++
++  getter source : String
++  getter kind : String
++  getter fields : Hash(String, FacetMacroCapturedNode)
++  getter collections : Hash(String, Array(FacetMacroCapturedNode))
++  getter booleans : Hash(String, Bool)
++
++  def initialize(
++    @source : String,
++    @kind : String,
++    @fields = {} of String => FacetMacroCapturedNode,
++    @collections = {} of String => Array(FacetMacroCapturedNode),
++    @booleans = {} of String => Bool,
++  )
++  end
++end
++
++private def facet_macro_capture_structure(node : Crystal::ASTNode) : FacetMacroCapturedNode?
++  case node
++  when Crystal::Call
++    fields = {
++      "receiver"  => facet_macro_capture_node(node.obj),
++      "block"     => facet_macro_capture_node(node.block),
++      "block_arg" => facet_macro_capture_node(node.block_arg),
++    }
++    collections = {
++      "args"       => node.args.map { |argument| facet_macro_capture_node(argument) },
++      "named_args" => (node.named_args || [] of Crystal::NamedArgument).map { |argument| facet_macro_capture_named_argument(argument) },
++    }
++    FacetMacroCapturedNode.new(
++      node.to_s,
++      node.class.name,
++      fields,
++      collections,
++      {"global?" => node.global?}
++    )
++  end
++end
++
++private def facet_macro_capture_node(node : Crystal::ASTNode?) : FacetMacroCapturedNode
++  return FacetMacroCapturedNode.new("", "Crystal::Nop") unless node
++  FacetMacroCapturedNode.new(node.to_s, node.class.name)
++end
++
++private def facet_macro_capture_named_argument(node : Crystal::NamedArgument) : FacetMacroCapturedNode
++  fields = {
++    "name"  => FacetMacroCapturedNode.new(node.name, "identifier"),
++    "value" => facet_macro_capture_node(node.value),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
 +
 +private def facet_macro_capture_name(node : Crystal::ASTNode) : FacetMacroCapturedName?
 +  case node

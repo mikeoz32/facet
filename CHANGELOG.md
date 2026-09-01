@@ -4,7 +4,7 @@
 
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet
-  now matches exact output for 568/900 portable contracts executed by the
+  now matches exact output for 581/900 portable contracts executed by the
   official evaluator specs (including all 371/371 statically self-contained
   contracts); 117 program-context contracts and 133 semantic examples remain
   tracked explicitly for the next fixture layers.
@@ -15,6 +15,10 @@
   their `generic_args: false` variants, and exposed them through Facet macro
   values. This adds 51 exact official `name` contracts without parsing names
   heuristically from rendered source.
+- Added recursive captured-AST structure and Facet-native call argument views
+  for `args`, `receiver`, `block`, `block_arg`, `named_args` (including nested
+  names/values), and `global?`. This adds 13 exact official call-family
+  contracts while keeping collection elements as typed macro AST values.
 - Added Crystal-compatible macro hash iteration indices, union type arguments
   for `is_a?`, and target-layout-neutral number values for `sizeof`/`alignof`
   introspection.
