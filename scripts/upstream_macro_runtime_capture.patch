@@ -1,4 +1,5 @@
 diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
+index b2378cd..349ae8c 100644
 --- a/spec/spec_helper.cr
 +++ b/spec/spec_helper.cr
 @@ -3,6 +3,7 @@
@@ -9,7 +10,7 @@ diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,60 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,115 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -58,6 +59,11 @@ diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
 +                json.field "end_line_number", node.end_location.try(&.line_number)
 +                json.field "end_column_number", node.end_location.try(&.column_number)
 +                json.field "doc", node.doc
++                if captured_name = facet_macro_capture_name(node)
++                  json.field "name_source", captured_name.source
++                  json.field "name_kind", captured_name.kind
++                  json.field "name_without_generic_args_source", captured_name.without_generic_args_source
++                end
 +              end
 +            end
 +          end
@@ -66,6 +72,56 @@ diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
 +    end
 +    io << '\n'
 +  end
++end
++
++record FacetMacroCapturedName,
++  source : String,
++  kind : String,
++  without_generic_args_source : String? = nil
++
++private def facet_macro_capture_name(node : Crystal::ASTNode) : FacetMacroCapturedName?
++  case node
++  when Crystal::Primitive
++    value = node.name
++    source = value.matches?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/) ? ":#{value}" : ":#{value.inspect}"
++    FacetMacroCapturedName.new(source, "symbol")
++  when Crystal::RespondsTo
++    FacetMacroCapturedName.new(node.name.inspect, "string")
++  when Crystal::ClassDef
++    facet_macro_capture_generic_name(node.name, node.type_vars, node.splat_index)
++  when Crystal::ModuleDef
++    facet_macro_capture_generic_name(node.name, node.type_vars, node.splat_index)
++  when Crystal::Annotation
++    FacetMacroCapturedName.new(node.path.to_s, "identifier")
++  when Crystal::Include, Crystal::Extend, Crystal::Generic
++    FacetMacroCapturedName.new(node.name.to_s, "identifier")
++  when Crystal::AnnotationDef, Crystal::EnumDef, Crystal::LibDef, Crystal::Alias
++    FacetMacroCapturedName.new(node.name.to_s, "identifier")
++  when Crystal::Call, Crystal::Arg, Crystal::Def, Crystal::Macro,
++       Crystal::MacroVar, Crystal::MetaMacroVar, Crystal::ProcPointer,
++       Crystal::InstanceVar, Crystal::ReadInstanceVar, Crystal::ClassVar,
++       Crystal::Global, Crystal::CStructOrUnionDef, Crystal::FunDef,
++       Crystal::TypeDef, Crystal::ExternalVar
++    FacetMacroCapturedName.new(node.name.to_s, "identifier")
++  end
++end
++
++private def facet_macro_capture_generic_name(
++  name : Crystal::Path,
++  type_vars : Array(String)?,
++  splat_index : Int32?,
++) : FacetMacroCapturedName
++  base = name.to_s
++  variables = type_vars || [] of String
++  source = if variables.empty?
++             base
++           else
++             rendered = variables.map_with_index do |variable, index|
++               index == splat_index ? "*#{variable}" : variable
++             end
++             "#{base}(#{rendered.join(", ")})"
++           end
++  FacetMacroCapturedName.new(source, "identifier", base)
 +end
 +
  def assert_macro_error(macro_body, message = nil, args = nil, *, flags = nil, file = __FILE__, line = __LINE__)

@@ -49,7 +49,10 @@ record UpstreamRuntimeMacroArgument,
   end_filename : String?,
   end_line_number : Int32?,
   end_column_number : Int32?,
-  doc : String? do
+  doc : String?,
+  name_source : String?,
+  name_kind : String?,
+  name_without_generic_args_source : String? do
   include JSON::Serializable
 end
 
@@ -61,7 +64,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   direct_case_count : Int32,
   contextual_case_count : Int32,
   argument_case_count : Int32,
-  metadata_argument_count : Int32 do
+  metadata_argument_count : Int32,
+  structured_name_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -120,7 +124,7 @@ module UpstreamMacroParity
   end
 
   def expand(fixture_case : UpstreamRuntimeMacroFixtureCase, index : Int32) : UpstreamMacroParityResult
-    if fixture_case.arguments.any? { |argument| captured_metadata(argument) }
+    if fixture_case.arguments.any? { |argument| captured_argument_required?(fixture_case.body, argument) }
       expander = Facet::Compiler::MacroExpander.new
       arguments = {} of String => Facet::Compiler::MacroValue
       fixture_case.arguments.each do |argument|
@@ -172,8 +176,34 @@ module UpstreamMacroParity
   private def captured_metadata(argument : UpstreamRuntimeMacroArgument) : Facet::Compiler::MacroNodeMetadata?
     location = captured_location(argument.filename, argument.line_number, argument.column_number)
     end_location = captured_location(argument.end_filename, argument.end_line_number, argument.end_column_number)
-    return nil unless location || end_location || argument.doc
-    Facet::Compiler::MacroNodeMetadata.new(location, end_location, argument.doc)
+    fields = {} of String => Facet::Compiler::MacroCapturedField
+    if source = argument.name_source
+      fields["name"] = Facet::Compiler::MacroCapturedField.new(source, argument.name_kind || "identifier")
+    end
+    if source = argument.name_without_generic_args_source
+      fields["name_without_generic_args"] = Facet::Compiler::MacroCapturedField.new(source, argument.name_kind || "identifier")
+    end
+    return nil unless location || end_location || argument.doc || !fields.empty?
+    Facet::Compiler::MacroNodeMetadata.new(location, end_location, argument.doc, fields)
+  end
+
+  private def captured_argument_required?(body : String, argument : UpstreamRuntimeMacroArgument) : Bool
+    return true if argument.filename || argument.end_filename || argument.doc
+    return false unless argument.name_source
+    root_name_requested?(body, argument.name)
+  end
+
+  private def root_name_requested?(body : String, argument_name : String) : Bool
+    needle = "#{argument_name}.name"
+    offset = 0
+    while index = body.index(needle, offset)
+      next_byte = body.byte_at?(index + needle.bytesize)
+      return true unless next_byte && ((next_byte >= 'a'.ord && next_byte <= 'z'.ord) ||
+                         (next_byte >= 'A'.ord && next_byte <= 'Z'.ord) ||
+                         (next_byte >= '0'.ord && next_byte <= '9'.ord) || next_byte == '_'.ord)
+      offset = index + needle.bytesize
+    end
+    false
   end
 
   private def captured_location(filename : String?, line : Int32?, column : Int32?) : Facet::Compiler::MacroSourceLocation?

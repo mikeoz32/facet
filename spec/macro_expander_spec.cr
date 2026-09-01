@@ -137,6 +137,32 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "exposes captured AST names with generic argument control" do
+    fields = {
+      "name"                      => Facet::Compiler::MacroCapturedField.new("::Foo::Bar(A, *B)", "identifier"),
+      "name_without_generic_args" => Facet::Compiler::MacroCapturedField.new("::Foo::Bar", "identifier"),
+    }
+    metadata = Facet::Compiler::MacroNodeMetadata.new(fields: fields)
+    value = Facet::Compiler::MacroSyntaxValue.captured(
+      "class ::Foo::Bar(A, *B); end",
+      "Crystal::ClassDef",
+      metadata
+    )
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand_template(<<-CR, {"x" => value.as(Facet::Compiler::MacroValue)})
+      {{x.name}}
+      {{x.name(generic_args: true)}}
+      {{x.name(generic_args: false)}}
+    CR
+
+    expanded.lines.map(&.strip).should eq([
+      "::Foo::Bar(A, *B)",
+      "::Foo::Bar(A, *B)",
+      "::Foo::Bar",
+    ])
+    expander.diagnostics.should be_empty
+  end
+
   it "exposes sizeof and alignof results as macro number literals" do
     source = Facet::Compiler::Source.new(<<-CR)
       {{sizeof(Int32).is_a?(NumberLiteral)}}

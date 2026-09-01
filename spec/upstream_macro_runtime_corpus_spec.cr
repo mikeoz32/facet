@@ -17,10 +17,27 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.contextual_case_count.should eq(117)
     runtime_macro_header.argument_case_count.should eq(578)
     runtime_macro_header.metadata_argument_count.should eq(10)
+    runtime_macro_header.structured_name_argument_count.should eq(198)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(517)
+    supported_runtime_macro_indices.size.should eq(568)
+  end
+
+  it "retains authoritative structural names and generic variants" do
+    class_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3574
+    end.not_nil!
+    class_name = class_case.arguments.first
+    class_name.name_source.should eq("::Foo::Bar(A, B, *C, D)")
+    class_name.name_without_generic_args_source.should eq("::Foo::Bar")
+    class_name.name_kind.should eq("identifier")
+
+    primitive_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2853
+    end.not_nil!
+    primitive_case.arguments.first.name_source.should eq(":abc")
+    primitive_case.arguments.first.name_kind.should eq("symbol")
   end
 
   it "retains upstream AST location and documentation metadata" do

@@ -18,10 +18,13 @@ module Facet
 
     record MacroSourceLocation, filename : String, line_number : Int32, column_number : Int32
 
+    record MacroCapturedField, source : String, kind : String
+
     record MacroNodeMetadata,
       location : MacroSourceLocation? = nil,
       end_location : MacroSourceLocation? = nil,
-      doc : String? = nil
+      doc : String? = nil,
+      fields : Hash(String, MacroCapturedField) = {} of String => MacroCapturedField
 
     record MacroSyntaxValue,
       source : String,
@@ -1523,6 +1526,17 @@ module Facet
         end
 
         case name
+        when "name"
+          return nil unless receiver.is_a?(MacroSyntaxValue) && args.size <= 1
+          generic_args = args.empty? ? true : args.first
+          return nil unless generic_args.is_a?(Bool)
+          fields = receiver.metadata.try(&.fields)
+          field = if generic_args
+                    fields.try(&.["name"]?)
+                  else
+                    fields.try(&.["name_without_generic_args"]?) || fields.try(&.["name"]?)
+                  end
+          field ? MacroEvaluation.new(macro_captured_field_value(field)) : nil
         when "filename", "line_number", "column_number", "end_line_number", "end_column_number"
           return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue)
           metadata = receiver.metadata
@@ -2668,6 +2682,15 @@ module Facet
         end
       end
 
+      private def macro_captured_field_value(field : MacroCapturedField) : MacroValue
+        case field.kind
+        when "identifier"
+          MacroSyntaxValue.identifier(field.source)
+        else
+          MacroSyntaxValue.code(field.source)
+        end
+      end
+
       private def macro_value_is_a?(value : MacroValue, type_name : String) : Bool
         normalized = type_name.lchop("::")
         if normalized.includes?('|')
@@ -2730,6 +2753,9 @@ module Facet
           "end_line_number", "end_column_number", "doc", "doc_comment",
         }
         return true if common.includes?(method_name)
+        if value.is_a?(MacroSyntaxValue) && method_name == "name"
+          return value.metadata.try(&.fields.has_key?("name")) || false
+        end
         case value
         when Int64, MacroNumberValue
           {"kind", "to_number", "zero?"}.includes?(method_name)

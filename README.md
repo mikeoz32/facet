@@ -39,7 +39,7 @@ for future name resolution, type checking, and compilation stages.
 - A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
 - A committed Crystal 1.21 macro contract corpus. Facet matches exact expansion
-  text for 517/900 portable contracts captured from the executing official
+  text for 568/900 portable contracts captured from the executing official
   evaluator specs; all 371 statically self-contained contracts remain exact.
   Another 117 runtime contracts requiring mutated compiler program state and
   133 semantic examples remain explicit; see [macro parity](MACRO_PARITY.md).
