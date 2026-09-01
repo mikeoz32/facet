@@ -799,6 +799,9 @@ module Facet
 
       private def macro_structured_argument_value(node_id : NodeId, ast : AstFile) : MacroSyntaxValue?
         node = syntax_tree(ast).node(node_id)
+        if value = macro_structured_type_syntax_argument_value(node, ast)
+          return value
+        end
         unless macro_structured_call_node?(node, ast)
           return macro_structured_case_argument_value(node) if node.kind == NodeKind::Case
           return macro_structured_exception_argument_value(node, ast) if macro_exception_handler_node?(node)
@@ -989,6 +992,162 @@ module Facet
         [node]
       end
 
+      private def macro_structured_type_syntax_argument_value(node : SyntaxNode, ast : AstFile) : MacroSyntaxValue?
+        structure = macro_captured_type_syntax_node(node, ast)
+        return nil unless structure
+        fields = structure.fields.transform_values do |field|
+          MacroCapturedField.new(field.source, field.kind)
+        end
+        metadata = MacroNodeMetadata.new(fields: fields, structure: structure)
+        MacroSyntaxValue.captured(node.text, structure.kind, metadata)
+      end
+
+      private def macro_captured_type_syntax_node(node : SyntaxNode, ast : AstFile) : MacroCapturedNode?
+        case node.kind
+        when NodeKind::VarDecl
+          macro_captured_type_declaration(node, ast)
+        when NodeKind::ProcType
+          macro_captured_proc_notation(node, ast)
+        when NodeKind::TypeApply
+          macro_captured_generic(node, ast)
+        when NodeKind::Binary
+          if macro_metaclass_node?(node, ast)
+            macro_captured_metaclass(node, ast)
+          elsif macro_union_node?(node, ast)
+            macro_captured_union(node, ast)
+          end
+        when NodeKind::Path
+          macro_metaclass_path_node?(node) ? macro_captured_metaclass(node, ast) : macro_captured_path(node)
+        when NodeKind::Const
+          macro_captured_path(node)
+        when NodeKind::Ident
+          macro_path_identifier?(node) ? macro_captured_path(node) : nil
+        end
+      end
+
+      private def macro_captured_type_declaration(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        target = node.target
+        variable = if target && target.kind == NodeKind::Ident
+                     MacroCapturedNode.new(target.name || target.text, "Crystal::MacroId")
+                   else
+                     macro_captured_syntax_node(target)
+                   end
+        declared_type = node.declared_type
+        fields = {
+          "var"   => variable,
+          "type"  => declared_type.try { |type| macro_captured_type_syntax_node(type, ast) } || macro_captured_syntax_node(declared_type),
+          "value" => macro_captured_syntax_node(node.value),
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::TypeDeclaration", fields)
+      end
+
+      private def macro_captured_proc_notation(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        inputs = node.child(0).try(&.children) || [] of SyntaxNode
+        output = node.child(1)
+        fields = {
+          "output" => if output && output.kind != NodeKind::Nop
+            macro_captured_type_syntax_node(output, ast) || macro_captured_syntax_node(output)
+          else
+            MacroCapturedNode.new("nil", "Crystal::NilLiteral")
+          end,
+        }
+        collections = {
+          "inputs" => inputs.map { |input| macro_captured_type_syntax_node(input, ast) || macro_captured_syntax_node(input) },
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::ProcNotation", fields, collections)
+      end
+
+      private def macro_captured_metaclass(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        instance = node.child(0)
+        fields = {
+          "instance" => instance.try { |type| macro_captured_type_syntax_node(type, ast) } || macro_captured_syntax_node(instance),
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::Metaclass", fields)
+      end
+
+      private def macro_captured_generic(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        name_node = node.child(0)
+        arguments = node.child(1).try(&.children) || [] of SyntaxNode
+        type_vars = arguments.reject { |argument| argument.kind == NodeKind::NamedArg }
+        named_args = arguments.select { |argument| argument.kind == NodeKind::NamedArg }
+        named_source = if named_args.empty?
+                         "nil"
+                       else
+                         entries = named_args.map do |argument|
+                           "#{argument.name}: #{argument.value.try(&.text)}"
+                         end
+                         "{#{entries.join(", ")}}"
+                       end
+        fields = {
+          "name"       => name_node.try { |name| macro_captured_type_syntax_node(name, ast) } || macro_captured_syntax_node(name_node),
+          "named_args" => MacroCapturedNode.new(named_source, named_args.empty? ? "Crystal::NilLiteral" : "Crystal::NamedTupleLiteral"),
+        }
+        collections = {
+          "type_vars" => type_vars.map { |type_var| macro_captured_type_syntax_node(type_var, ast) || macro_captured_syntax_node(type_var) },
+          "types"     => [MacroCapturedNode.new(node.text.strip, "Crystal::Generic")],
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::Generic", fields, collections)
+      end
+
+      private def macro_captured_union(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        types = macro_union_type_nodes(node, ast)
+        collections = {
+          "types" => types.map { |type| macro_captured_type_syntax_node(type, ast) || macro_captured_syntax_node(type) },
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::Union", collections: collections)
+      end
+
+      private def macro_captured_path(node : SyntaxNode) : MacroCapturedNode
+        source = node.text.strip
+        global = source.starts_with?("::")
+        names = source.lchop("::").split("::").reject(&.empty?)
+        collections = {
+          "names" => names.map { |name| MacroCapturedNode.new(name, "Crystal::MacroId") },
+          "types" => [MacroCapturedNode.new(source, "Crystal::Path")],
+        }
+        booleans = {
+          "global?" => global,
+          "global"  => global,
+        }
+        MacroCapturedNode.new(source, "Crystal::Path", collections: collections, booleans: booleans)
+      end
+
+      private def macro_path_identifier?(node : SyntaxNode) : Bool
+        source = node.text.lchop("::")
+        first = source.byte_at?(0)
+        !!first && first >= 'A'.ord && first <= 'Z'.ord
+      end
+
+      private def macro_metaclass_node?(node : SyntaxNode, ast : AstFile) : Bool
+        return false unless node.kind == NodeKind::Binary
+        operator_index = node.raw.payload_index
+        return false unless operator_index.in?(0...ast.arena.operators.size)
+        return false unless ast.arena.operator_kind(operator_index) == TokenKind::Dot
+        instance = node.child(0)
+        member = node.child(1)
+        return false unless instance && member && member.symbol_name == "class"
+        macro_type_syntax_candidate?(instance, ast)
+      end
+
+      private def macro_metaclass_path_node?(node : SyntaxNode) : Bool
+        node.kind == NodeKind::Path && node.children.size == 2 && node.child(1).try(&.symbol_name) == "class"
+      end
+
+      private def macro_union_node?(node : SyntaxNode, ast : AstFile) : Bool
+        return false unless node.kind == NodeKind::Binary
+        operator_index = node.raw.payload_index
+        return false unless operator_index.in?(0...ast.arena.operators.size)
+        ast.arena.operator_kind(operator_index) == TokenKind::Pipe &&
+          node.children.all? { |child| macro_type_syntax_candidate?(child, ast) }
+      end
+
+      private def macro_type_syntax_candidate?(node : SyntaxNode, ast : AstFile) : Bool
+        return true if {NodeKind::TypeApply, NodeKind::ProcType, NodeKind::Path, NodeKind::Const}.includes?(node.kind)
+        return macro_path_identifier?(node) if node.kind == NodeKind::Ident
+        return macro_metaclass_node?(node, ast) || macro_union_node?(node, ast) if node.kind == NodeKind::Binary
+        false
+      end
+
       private def macro_structured_asm_argument_value(node : SyntaxNode) : MacroSyntaxValue
         fields = {
           "text" => macro_captured_syntax_node(node.child(0)),
@@ -1084,8 +1243,6 @@ module Facet
         when NodeKind::Enum          then "Crystal::EnumDef"
         when NodeKind::Lib           then "Crystal::LibDef"
         when NodeKind::AnnotationDef then "Crystal::AnnotationDef"
-        when NodeKind::Asm           then "Crystal::Asm"
-        when NodeKind::AsmOperand    then "Crystal::AsmOperand"
         else                              "Crystal::ASTNode"
         end
       end
@@ -1385,6 +1542,9 @@ module Facet
           return MacroCapturedNode.new("", "Crystal::Nop") if expressions.empty?
           return macro_captured_syntax_node(expressions.first) if expressions.size == 1
         end
+        if type_syntax = macro_captured_type_syntax_node(node, node.tree.ast)
+          return type_syntax
+        end
         MacroCapturedNode.new(node.text.strip, macro_crystal_syntax_kind(node.kind))
       end
 
@@ -1409,9 +1569,17 @@ module Facet
         when NodeKind::Enum          then "Crystal::EnumDef"
         when NodeKind::Lib           then "Crystal::LibDef"
         when NodeKind::AnnotationDef then "Crystal::AnnotationDef"
+        when NodeKind::Asm           then "Crystal::Asm"
+        when NodeKind::AsmOperand    then "Crystal::AsmOperand"
+        when NodeKind::VarDecl       then "Crystal::TypeDeclaration"
+        when NodeKind::ProcType      then "Crystal::ProcNotation"
+        when NodeKind::TypeApply     then "Crystal::Generic"
         when NodeKind::Const         then "Crystal::Path"
         when NodeKind::Path          then "Crystal::Path"
         when NodeKind::Ident         then "Crystal::Var"
+        when NodeKind::InstanceVar   then "Crystal::InstanceVar"
+        when NodeKind::ClassVar      then "Crystal::ClassVar"
+        when NodeKind::Global        then "Crystal::Global"
         when NodeKind::Expressions   then "Crystal::Expressions"
         when NodeKind::Nop           then "Crystal::Nop"
         else                              "Crystal::ASTNode"
@@ -2748,7 +2916,21 @@ module Facet
       ) : MacroEvaluation?
         case receiver
         when MacroSyntaxValue
-          if name == "name" && receiver.kind == MacroSyntaxKind::Code && args.size <= 1 && receiver.value.matches?(/\A::?[A-Z]|\A[A-Z]/)
+          if args.empty? && {"resolve", "resolve?"}.includes?(name)
+            if structure = receiver.metadata.try(&.structure)
+              if resolved = macro_resolve_captured_type_syntax(structure)
+                mark_type_introspection
+                return MacroEvaluation.new(resolved)
+              end
+              if macro_captured_resolvable_type_syntax?(structure)
+                mark_type_introspection
+                return MacroEvaluation.new(nil) if name == "resolve?"
+                return nil
+              end
+            end
+          end
+          captured_name = receiver.metadata.try(&.fields.has_key?("name")) || false
+          if name == "name" && !captured_name && receiver.kind == MacroSyntaxKind::Code && args.size <= 1 && receiver.value.matches?(/\A::?[A-Z]|\A[A-Z]/)
             generic_args = args.empty? ? true : args[0]
             return nil unless generic_args.is_a?(Bool)
             value = generic_args ? receiver.value : receiver.value.split('(', 2).first
@@ -2913,6 +3095,77 @@ module Facet
         end
         return MacroTypeValue.new(normalized, MacroTypeKind::Builtin) if builtin_type_name?(normalized)
         nil
+      end
+
+      private def macro_resolve_captured_type_syntax(node : MacroCapturedNode) : MacroTypeValue?
+        case node.kind
+        when "Crystal::Path"
+          macro_type_value(node.source, @active_index, current_type_scope)
+        when "Crystal::Generic"
+          name = node.fields["name"]?
+          return nil unless name
+          base = macro_resolve_captured_type_syntax(name)
+          return nil unless base
+          type_vars = node.collections["type_vars"]? || [] of MacroCapturedNode
+          rendered = [] of String
+          type_vars.each do |type_var|
+            resolved = macro_resolve_captured_type_syntax(type_var)
+            return nil unless resolved
+            rendered << resolved.name
+          end
+          MacroTypeValue.new("#{base.name}(#{rendered.join(", ")})", base.kind)
+        when "Crystal::Union"
+          types = node.collections["types"]? || [] of MacroCapturedNode
+          rendered = [] of String
+          types.each do |type|
+            resolved = macro_resolve_captured_type_syntax(type)
+            return nil unless resolved
+            rendered << resolved.name
+          end
+          MacroTypeValue.new("(#{rendered.join(" | ")})", MacroTypeKind::Builtin)
+        when "Crystal::ProcNotation"
+          inputs = node.collections["inputs"]? || [] of MacroCapturedNode
+          rendered = [] of String
+          inputs.each do |input|
+            resolved = macro_resolve_captured_type_syntax(input)
+            return nil unless resolved
+            rendered << resolved.name
+          end
+          if output = node.fields["output"]?
+            unless output.kind == "Crystal::NilLiteral"
+              resolved_output = macro_resolve_captured_type_syntax(output)
+              return nil unless resolved_output
+              rendered << resolved_output.name
+            end
+          end
+          MacroTypeValue.new("Proc(#{rendered.join(", ")})", MacroTypeKind::Builtin)
+        when "Crystal::Metaclass"
+          instance = node.fields["instance"]?
+          return nil unless instance
+          resolved = macro_resolve_captured_type_syntax(instance)
+          return nil unless resolved
+          MacroTypeValue.new("#{macro_metaclass_instance_name(resolved.name)}.class", MacroTypeKind::Builtin)
+        else
+          if {"Crystal::Var", "Crystal::MacroId"}.includes?(node.kind)
+            macro_type_value(node.source, @active_index, current_type_scope)
+          end
+        end
+      end
+
+      private def macro_captured_resolvable_type_syntax?(node : MacroCapturedNode) : Bool
+        {"Crystal::Path", "Crystal::Generic", "Crystal::Union", "Crystal::ProcNotation", "Crystal::Metaclass"}.includes?(node.kind)
+      end
+
+      private def macro_metaclass_instance_name(name : String) : String
+        case name
+        when "Array"       then "Array(T)"
+        when "Hash"        then "Hash(K, V)"
+        when "Pointer"     then "Pointer(T)"
+        when "Slice"       then "Slice(T)"
+        when "StaticArray" then "StaticArray(T, N)"
+        when "Range"       then "Range(B, E)"
+        else                    name
+        end
       end
 
       private def macro_type_kind(kind : NodeKind) : MacroTypeKind
@@ -3391,7 +3644,9 @@ module Facet
         end
         if collection = structure.collections[name]?
           values = collection.map { |node| macro_captured_node_value(node).as(MacroValue) }
-          value = {"free_vars", "type_vars", "outputs", "inputs", "clobbers"}.includes?(name) ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
+          typed_collection = {"free_vars", "outputs", "inputs", "clobbers"}.includes?(name) ||
+                             (name == "type_vars" && {"Crystal::ClassDef", "Crystal::ModuleDef"}.includes?(structure.kind))
+          value = typed_collection ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
           return MacroEvaluation.new(value)
         end
         if structure.booleans.has_key?(name)

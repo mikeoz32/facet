@@ -92,7 +92,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   structured_control_flow_argument_count : Int32,
   structured_declaration_argument_count : Int32,
   structured_type_declaration_argument_count : Int32,
-  structured_asm_argument_count : Int32 do
+  structured_asm_argument_count : Int32,
+  structured_type_syntax_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -220,6 +221,10 @@ module UpstreamMacroParity
     return true if argument.name_source && root_member_requested?(body, argument.name, "name")
     if structure = argument.structure
       return true if root_member_requested?(body, argument.name, "is_a?")
+      if {"Crystal::ProcNotation", "Crystal::Metaclass", "Crystal::Generic", "Crystal::Union"}.includes?(structure.kind)
+        return true if root_member_requested?(body, argument.name, "resolve") ||
+                       root_member_requested?(body, argument.name, "resolve?")
+      end
       members = structure.fields.keys + structure.collections.keys + structure.booleans.keys + structure.nil_fields
       return true if members.any? { |member| root_member_requested?(body, argument.name, member) }
     end

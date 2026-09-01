@@ -557,6 +557,103 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "derives structured type syntax fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_type_declaration(x)
+        declaration_class_name = {{x.class_name}}
+        declaration_var = {{x.var.stringify}}
+        declaration_type = {{x.type.stringify}}
+        declaration_value = {{x.value.stringify}}
+      end
+
+      macro describe_generic(x)
+        generic_class_name = {{x.class_name}}
+        generic_name = {{x.name.stringify}}
+        generic_type_vars = {{x.type_vars.stringify}}
+        generic_types = {{x.types.stringify}}
+        generic_type_vars_size = {{(x.type_vars << "Extra"; x.type_vars.size)}}
+      end
+
+      macro describe_named_generic(x)
+        generic_named_args = {{x.named_args.stringify}}
+      end
+
+      macro describe_proc_type(x)
+        proc_class_name = {{x.type.class_name}}
+        proc_inputs = {{x.type.inputs.stringify}}
+        proc_output = {{x.type.output.stringify}}
+        proc_inputs_size = {{(x.type.inputs << "Extra"; x.type.inputs.size)}}
+      end
+
+      macro describe_metaclass(x)
+        metaclass_class_name = {{x.type.class_name}}
+        metaclass_instance = {{x.type.instance.stringify}}
+      end
+
+      macro describe_union(x)
+        union_class_name = {{x.type.class_name}}
+        union_types = {{x.type.types.stringify}}
+        union_types_size = {{(x.type.types << "Extra"; x.type.types.size)}}
+      end
+
+      macro describe_path(x)
+        path_class_name = {{x.class_name}}
+        path_names = {{x.names.stringify}}
+        path_global = {{x.global?.stringify}}
+        path_deprecated_global = {{x.global.stringify}}
+        path_types = {{x.types.stringify}}
+      end
+
+      describe_type_declaration((some_name : SomeType = 1))
+      describe_type_declaration((@some_name : SomeType))
+      describe_generic((Foo(T, U)))
+      describe_named_generic((Foo(x: U, y: V)))
+      describe_proc_type((callback : (SomeType, OtherType -> SomeResult)))
+      describe_metaclass((meta : Int32.class))
+      describe_union((choice : Int32 | String))
+      describe_path((::Foo::Bar))
+      describe_path((String))
+    CR
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+    parser.diagnostics.should be_empty
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(declaration_class_name = "TypeDeclaration"))
+    expanded.source.text.should contain(%(declaration_var = "some_name"))
+    expanded.source.text.should contain(%(declaration_var = "@some_name"))
+    expanded.source.text.should contain(%(declaration_type = "SomeType"))
+    expanded.source.text.should contain(%(declaration_value = "1"))
+    expanded.source.text.should contain(%(generic_class_name = "Generic"))
+    expanded.source.text.should contain(%(generic_name = "Foo"))
+    expanded.source.text.should contain(%(generic_type_vars = "[T, U]"))
+    expanded.source.text.should contain(%(generic_types = "[Foo(T, U)]"))
+    expanded.source.text.should contain("generic_type_vars_size = 2")
+    expanded.source.text.should contain(%(generic_named_args = "{x: U, y: V}"))
+    expanded.source.text.should contain(%(proc_class_name = "ProcNotation"))
+    expanded.source.text.should contain(%(proc_inputs = "[SomeType, OtherType]"))
+    expanded.source.text.should contain(%(proc_output = "SomeResult"))
+    expanded.source.text.should contain("proc_inputs_size = 2")
+    expanded.source.text.should contain(%(metaclass_class_name = "Metaclass"))
+    expanded.source.text.should contain(%(metaclass_instance = "Int32"))
+    expanded.source.text.should contain(%(union_class_name = "Union"))
+    expanded.source.text.should contain(%(union_types = "[Int32, String]"))
+    expanded.source.text.should contain("union_types_size = 2")
+    expanded.source.text.should contain(%(path_class_name = "Path"))
+    expanded.source.text.should contain(%(path_names = "[Foo, Bar]"))
+    expanded.source.text.should contain(%(path_names = "[String]"))
+    expanded.source.text.should contain(%(path_global = "true"))
+    expanded.source.text.should contain(%(path_global = "false"))
+    expanded.source.text.should contain(%(path_deprecated_global = "true"))
+    expanded.source.text.should contain(%(path_deprecated_global = "false"))
+    expanded.source.text.should contain(%(path_types = "[::Foo::Bar]"))
+    expanded.source.text.should contain(%(path_types = "[String]"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "derives structured def and argument fields from Facet macro arguments" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro describe_def(x)

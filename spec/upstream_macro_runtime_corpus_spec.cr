@@ -23,10 +23,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_declaration_argument_count.should eq(54)
     runtime_macro_header.structured_type_declaration_argument_count.should eq(63)
     runtime_macro_header.structured_asm_argument_count.should eq(20)
+    runtime_macro_header.structured_type_syntax_argument_count.should eq(46)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(718)
+    supported_runtime_macro_indices.size.should eq(755)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -216,6 +217,57 @@ describe "Crystal 1.21 runtime macro corpus" do
     operand_structure.kind.should eq("Crystal::AsmOperand")
     operand_structure.fields["constraint"].source.should eq(%("i"))
     operand_structure.fields["exp"].source.should eq("1")
+  end
+
+  it "retains authoritative type syntax structure" do
+    declaration_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2679
+    end.not_nil!
+    declaration = declaration_contract.arguments.first.structure.not_nil!
+    declaration.kind.should eq("Crystal::TypeDeclaration")
+    declaration.fields["var"].source.should eq("some_name")
+    declaration.fields["var"].kind.should eq("Crystal::MacroId")
+    declaration.fields["type"].source.should eq("SomeType")
+    declaration.fields["value"].kind.should eq("Crystal::Nop")
+
+    proc_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2707
+    end.not_nil!
+    proc_notation = proc_contract.arguments.first.structure.not_nil!
+    proc_notation.kind.should eq("Crystal::ProcNotation")
+    proc_notation.collections["inputs"].map(&.source).should eq(["SomeType"])
+    proc_notation.fields["output"].source.should eq("SomeResult")
+
+    metaclass_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3050
+    end.not_nil!
+    metaclass = metaclass_contract.arguments.first.structure.not_nil!
+    metaclass.kind.should eq("Crystal::Metaclass")
+    metaclass.fields["instance"].source.should eq("Int32")
+
+    generic_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3416
+    end.not_nil!
+    generic = generic_contract.arguments.first.structure.not_nil!
+    generic.kind.should eq("Crystal::Generic")
+    generic.fields["name"].source.should eq("Foo")
+    generic.collections["type_vars"].map(&.source).should eq(["T", "U"])
+    generic.collections["types"].map(&.source).should eq(["Foo(T, U)"])
+
+    union_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3444
+    end.not_nil!
+    union = union_contract.arguments.first.structure.not_nil!
+    union.kind.should eq("Crystal::Union")
+    union.collections["types"].map(&.source).should eq(["Int32", "String"])
+
+    path_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3491
+    end.not_nil!
+    path = path_contract.arguments.first.structure.not_nil!
+    path.kind.should eq("Crystal::Path")
+    path.collections["names"].map(&.source).should eq(["Foo", "Bar"])
+    path.booleans["global?"].should be_false
   end
 
   it "retains upstream AST location and documentation metadata" do
