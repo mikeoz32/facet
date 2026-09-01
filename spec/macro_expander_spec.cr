@@ -105,6 +105,38 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "preserves captured AST source locations and documentation" do
+    location = Facet::Compiler::MacroSourceLocation.new("sample.cr", 3, 7)
+    metadata = Facet::Compiler::MacroNodeMetadata.new(
+      location: location,
+      end_location: Facet::Compiler::MacroSourceLocation.new("sample.cr", 4, 9),
+      doc: "First\nsecond"
+    )
+    value = Facet::Compiler::MacroSyntaxValue.captured("some_call", "Crystal::Call", metadata)
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand_template(<<-CR, {"x" => value.as(Facet::Compiler::MacroValue)})
+      {{x.filename}}
+      {{x.line_number}}
+      {{x.column_number}}
+      {{x.end_line_number}}
+      {{x.end_column_number}}
+      {{x.doc}}
+      {{x.doc_comment}}
+    CR
+
+    expanded.lines.map(&.strip).should eq([
+      %("sample.cr"),
+      "3",
+      "7",
+      "4",
+      "9",
+      %("First\\nsecond"),
+      "First",
+      "# second",
+    ])
+    expander.diagnostics.should be_empty
+  end
+
   it "exposes sizeof and alignof results as macro number literals" do
     source = Facet::Compiler::Source.new(<<-CR)
       {{sizeof(Int32).is_a?(NumberLiteral)}}

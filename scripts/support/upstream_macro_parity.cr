@@ -42,7 +42,14 @@ end
 record UpstreamRuntimeMacroArgument,
   name : String,
   source : String,
-  kind : String do
+  kind : String,
+  filename : String?,
+  line_number : Int32?,
+  column_number : Int32?,
+  end_filename : String?,
+  end_line_number : Int32?,
+  end_column_number : Int32?,
+  doc : String? do
   include JSON::Serializable
 end
 
@@ -53,7 +60,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   case_count : Int32,
   direct_case_count : Int32,
   contextual_case_count : Int32,
-  argument_case_count : Int32 do
+  argument_case_count : Int32,
+  metadata_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -112,6 +120,25 @@ module UpstreamMacroParity
   end
 
   def expand(fixture_case : UpstreamRuntimeMacroFixtureCase, index : Int32) : UpstreamMacroParityResult
+    if fixture_case.arguments.any? { |argument| captured_metadata(argument) }
+      expander = Facet::Compiler::MacroExpander.new
+      arguments = {} of String => Facet::Compiler::MacroValue
+      fixture_case.arguments.each do |argument|
+        metadata = captured_metadata(argument) || Facet::Compiler::MacroNodeMetadata.new
+        arguments[argument.name] = Facet::Compiler::MacroSyntaxValue.captured(
+          argument.source,
+          argument.kind,
+          metadata
+        )
+      end
+      actual = expander.expand_template(
+        fixture_case.body,
+        arguments,
+        "#{fixture_case.source_file}:#{fixture_case.line}"
+      ).chomp(';')
+      return UpstreamMacroParityResult.new(actual, expander.diagnostics.map(&.message), [] of String)
+    end
+
     macro_name = "__facet_upstream_runtime_macro_#{index}"
     parameters = fixture_case.arguments.map(&.name).join(", ")
     definition_source = Facet::Compiler::Source.new(
@@ -140,5 +167,17 @@ module UpstreamMacroParity
     UpstreamMacroParityResult.new(expanded.source.text.chomp(';'), diagnostics, output_diagnostics)
   rescue ex : Exception
     UpstreamMacroParityResult.new(nil, ["#{ex.class}: #{ex.message}"], [] of String)
+  end
+
+  private def captured_metadata(argument : UpstreamRuntimeMacroArgument) : Facet::Compiler::MacroNodeMetadata?
+    location = captured_location(argument.filename, argument.line_number, argument.column_number)
+    end_location = captured_location(argument.end_filename, argument.end_line_number, argument.end_column_number)
+    return nil unless location || end_location || argument.doc
+    Facet::Compiler::MacroNodeMetadata.new(location, end_location, argument.doc)
+  end
+
+  private def captured_location(filename : String?, line : Int32?, column : Int32?) : Facet::Compiler::MacroSourceLocation?
+    return nil unless filename && line && column
+    Facet::Compiler::MacroSourceLocation.new(filename, line, column)
   end
 end

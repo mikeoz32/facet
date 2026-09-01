@@ -16,7 +16,19 @@ module Facet
       Code
     end
 
-    record MacroSyntaxValue, source : String, value : String, kind : MacroSyntaxKind do
+    record MacroSourceLocation, filename : String, line_number : Int32, column_number : Int32
+
+    record MacroNodeMetadata,
+      location : MacroSourceLocation? = nil,
+      end_location : MacroSourceLocation? = nil,
+      doc : String? = nil
+
+    record MacroSyntaxValue,
+      source : String,
+      value : String,
+      kind : MacroSyntaxKind,
+      crystal_kind : String? = nil,
+      metadata : MacroNodeMetadata? = nil do
       def self.string(value : String) : self
         new(value.inspect, value, MacroSyntaxKind::StringLiteral)
       end
@@ -53,6 +65,17 @@ module Facet
 
       def self.code(value : String) : self
         new(value, value, MacroSyntaxKind::Code)
+      end
+
+      def self.captured(source : String, crystal_kind : String, metadata : MacroNodeMetadata) : self
+        kind = case crystal_kind.lchop("Crystal::")
+               when "StringLiteral" then MacroSyntaxKind::StringLiteral
+               when "SymbolLiteral" then MacroSyntaxKind::SymbolLiteral
+               when "CharLiteral"   then MacroSyntaxKind::CharLiteral
+               when "RegexLiteral"  then MacroSyntaxKind::RegexLiteral
+               else                      MacroSyntaxKind::Code
+               end
+        new(source, source, kind, crystal_kind, metadata)
       end
     end
 
@@ -243,6 +266,38 @@ module Facet
         @last_footprint = footprint
         @file_cache[cache_key] = current_ast
         current_ast
+      end
+
+      # Expands a macro template with already materialized AST-backed values.
+      # This is used by compiler passes and parity fixtures that must retain
+      # metadata which cannot be reconstructed by parsing rendered source.
+      def expand_template(
+        body : String,
+        arguments : Hash(String, MacroValue),
+        filename : String = "macro-template.cr",
+      ) : String
+        @root_macro_vars.clear
+        @root_env.clear
+        macro_name = "__facet_template"
+        params = arguments.keys.join(", ")
+        parser = Parser.new(Source.new("macro #{macro_name}(#{params});#{body};end", filename, SourceKind::Virtual))
+        definition = parser.parse_file
+        parser.diagnostics.each { |diagnostic| @diagnostics << diagnostic }
+        return "" unless parser.diagnostics.empty?
+
+        index = Indexer.index_macros([definition])
+        ref = index.macros_for(macro_name, "").try(&.first?)
+        return "" unless ref
+        positional = [] of MacroValue
+        arguments.each_value { |value| positional << value }
+        macro_args = {positional, {} of String => MacroValue, nil.as(MacroBlockValue?)}
+        previous_index = @active_index
+        @active_index = index
+        begin
+          expand_macro_def(ref, macro_args, index, nil, "").chomp(';')
+        ensure
+          @active_index = previous_index
+        end
       end
 
       private def expand_text(
@@ -1468,6 +1523,26 @@ module Facet
         end
 
         case name
+        when "filename", "line_number", "column_number", "end_line_number", "end_column_number"
+          return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue)
+          metadata = receiver.metadata
+          location = name.starts_with?("end_") ? metadata.try(&.end_location) : metadata.try(&.location)
+          return MacroEvaluation.new(nil) unless location
+          case name
+          when "filename"
+            MacroEvaluation.new(MacroSyntaxValue.string(location.filename))
+          when "line_number", "end_line_number"
+            MacroEvaluation.new(location.line_number.to_i64)
+          else
+            MacroEvaluation.new(location.column_number.to_i64)
+          end
+        when "doc"
+          return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue)
+          MacroEvaluation.new(MacroSyntaxValue.generated_string(receiver.metadata.try(&.doc) || ""))
+        when "doc_comment"
+          return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue)
+          doc = receiver.metadata.try(&.doc)
+          MacroEvaluation.new(MacroSyntaxValue.code(doc ? doc.gsub("\n", "\n# ") : ""))
         when "class_name"
           return nil unless args.empty?
           MacroEvaluation.new(MacroSyntaxValue.string(macro_class_name(receiver)))
@@ -2565,6 +2640,9 @@ module Facet
         when Bool                    then "BoolLiteral"
         when Int64, MacroNumberValue then "NumberLiteral"
         when MacroSyntaxValue
+          if crystal_kind = value.crystal_kind
+            return crystal_kind.lchop("Crystal::")
+          end
           case value.kind
           when MacroSyntaxKind::StringLiteral          then "StringLiteral"
           when MacroSyntaxKind::SymbolLiteral          then "SymbolLiteral"
@@ -2598,6 +2676,9 @@ module Facet
         return true if normalized == "ASTNode" && !value.is_a?(String)
         case value
         when MacroSyntaxValue
+          if crystal_kind = value.crystal_kind
+            return crystal_kind.lchop("Crystal::") == normalized
+          end
           case normalized
           when "StringLiteral"
             {MacroSyntaxKind::StringLiteral, MacroSyntaxKind::GeneratedStringLiteral}.includes?(value.kind)
@@ -2644,7 +2725,10 @@ module Facet
       end
 
       private def macro_value_responds_to?(value : MacroValue, method_name : String) : Bool
-        common = {"class_name", "stringify", "nil?"}
+        common = {
+          "class_name", "stringify", "nil?", "filename", "line_number", "column_number",
+          "end_line_number", "end_column_number", "doc", "doc_comment",
+        }
         return true if common.includes?(method_name)
         case value
         when Int64, MacroNumberValue

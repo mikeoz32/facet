@@ -8,7 +8,14 @@ require "json"
 record CapturedMacroArgument,
   name : String,
   source : String,
-  kind : String do
+  kind : String,
+  filename : String?,
+  line_number : Int32?,
+  column_number : Int32?,
+  end_filename : String?,
+  end_line_number : Int32?,
+  end_column_number : Int32?,
+  doc : String? do
   include JSON::Serializable
 end
 
@@ -30,7 +37,8 @@ record RuntimeMacroFixtureHeader,
   case_count : Int32,
   direct_case_count : Int32,
   contextual_case_count : Int32,
-  argument_case_count : Int32 do
+  argument_case_count : Int32,
+  metadata_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -52,6 +60,11 @@ header = RuntimeMacroFixtureHeader.new(
   direct_case_count: cases.count { |fixture_case| !fixture_case.contextual_program },
   contextual_case_count: cases.count(&.contextual_program),
   argument_case_count: cases.count { |fixture_case| !fixture_case.arguments.empty? },
+  metadata_argument_count: cases.sum do |fixture_case|
+    fixture_case.arguments.count do |argument|
+      !argument.filename.nil? || !argument.end_filename.nil? || !argument.doc.nil?
+    end
+  end,
 )
 
 File.open(output_path, "w") do |io|

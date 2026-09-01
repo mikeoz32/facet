@@ -16,10 +16,26 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.direct_case_count.should eq(900)
     runtime_macro_header.contextual_case_count.should eq(117)
     runtime_macro_header.argument_case_count.should eq(578)
+    runtime_macro_header.metadata_argument_count.should eq(10)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(506)
+    supported_runtime_macro_indices.size.should eq(517)
+  end
+
+  it "retains upstream AST location and documentation metadata" do
+    location_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 52
+    end.not_nil!
+    location = location_case.arguments.first
+    location.filename.should eq("foo.cr")
+    location.line_number.should eq(1)
+    location.column_number.should eq(2)
+
+    doc_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 243
+    end.not_nil!
+    doc_case.arguments.first.doc.should eq("Some docs")
   end
 
   supported_runtime_macro_indices.each do |index|
