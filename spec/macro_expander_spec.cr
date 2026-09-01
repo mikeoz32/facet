@@ -215,6 +215,156 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "derives structured case, exhaustive case, and select fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_case(x)
+        case_kind = {{x.class_name}}
+        case_cond = {{x.cond.stringify}}
+        case_when_conds = {{x.whens[0].conds.stringify}}
+        case_when_body = {{x.whens[0].body.stringify}}
+        case_when_exhaustive = {{x.whens[0].exhaustive?.stringify}}
+        case_else = {{x.else.stringify}}
+        case_else_kind = {{x.else.class_name}}
+        case_exhaustive = {{x.exhaustive?.stringify}}
+      end
+
+      macro describe_select(x)
+        select_kind = {{x.class_name}}
+        select_when_cond = {{x.whens[0].conds[0].stringify}}
+        select_when_body = {{x.whens[0].body.stringify}}
+        select_else = {{x.else.stringify}}
+        select_has_cond = {{x.responds_to?(:cond).stringify}}
+      end
+
+      describe_case((case 1
+      when 2, 3
+        4
+      else
+        5
+      end))
+
+      describe_case((case 1
+      in 1
+        2
+      end))
+
+      describe_select((select
+      when channel.receive
+        6
+      else
+        7
+      end))
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(case_kind = "Case"))
+    expanded.source.text.should contain(%(case_cond = "1"))
+    expanded.source.text.should contain(%(case_when_conds = "[2, 3]"))
+    expanded.source.text.should contain(%(case_when_body = "4"))
+    expanded.source.text.should contain(%(case_when_exhaustive = "false"))
+    expanded.source.text.should contain(%(case_else = "5"))
+    expanded.source.text.should contain(%(case_else_kind = "NumberLiteral"))
+    expanded.source.text.should contain(%(case_exhaustive = "false"))
+    expanded.source.text.should contain(%(case_when_exhaustive = "true"))
+    expanded.source.text.should contain(%(case_exhaustive = "true"))
+    expanded.source.text.should contain(%(case_else_kind = "Nop"))
+    expanded.source.text.should contain(%(select_kind = "Select"))
+    expanded.source.text.should contain(%(select_when_cond = "channel.receive"))
+    expanded.source.text.should contain(%(select_when_body = "6"))
+    expanded.source.text.should contain(%(select_else = "7"))
+    expanded.source.text.should contain(%(select_has_cond = "false"))
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "derives structured exception and rescue fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_handler(x)
+        handler_kind = {{x.class_name}}
+        handler_body = {{x.body.stringify}}
+        first_rescue_name = {{x.rescues[0].name.stringify}}
+        first_rescue_types = {{x.rescues[0].types.stringify}}
+        first_rescue_body = {{x.rescues[0].body.stringify}}
+        second_rescue_name = {{x.rescues[1].name.stringify}}
+        second_rescue_types = {{x.rescues[1].types.stringify}}
+        handler_else = {{x.else.stringify}}
+        handler_ensure = {{x.ensure.stringify}}
+      end
+
+      macro describe_untyped_rescue(x)
+        rescue_types_nil = {{x.rescues[0].types.nil?.stringify}}
+        rescue_has_types = {{x.rescues[0].responds_to?(:types).stringify}}
+        rescue_name = {{x.rescues[0].name.stringify}}
+        rescue_name_kind = {{x.rescues[0].name.class_name}}
+      end
+
+      macro describe_inline_rescue(x)
+        inline_rescue_kind = {{x.class_name}}
+        inline_rescue_body = {{x.body.stringify}}
+        inline_rescue_handler = {{x.rescues[0].body.stringify}}
+        inline_rescue_types_nil = {{x.rescues[0].types.nil?.stringify}}
+      end
+
+      macro describe_inline_ensure(x)
+        inline_ensure_kind = {{x.class_name}}
+        inline_ensure_body = {{x.body.stringify}}
+        inline_ensure_handler = {{x.ensure.stringify}}
+        inline_ensure_rescues = {{x.rescues.size}}
+      end
+
+      describe_handler((begin
+        1
+      rescue ex : Int32
+        2
+      rescue Char | String
+      else
+        3
+      ensure
+        4
+      end))
+
+      describe_untyped_rescue((begin
+        1
+      rescue
+        2
+      end))
+
+      describe_inline_rescue((1 rescue 2))
+      describe_inline_ensure((1 ensure 2))
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(handler_kind = "ExceptionHandler"))
+    expanded.source.text.should contain(%(handler_body = "1"))
+    expanded.source.text.should contain(%(first_rescue_name = "ex"))
+    expanded.source.text.should contain(%(first_rescue_types = "[Int32]"))
+    expanded.source.text.should contain(%(first_rescue_body = "2"))
+    expanded.source.text.should contain(%(second_rescue_name = ""))
+    expanded.source.text.should contain(%(second_rescue_types = "[Char, String]"))
+    expanded.source.text.should contain(%(handler_else = "3"))
+    expanded.source.text.should contain(%(handler_ensure = "4"))
+    expanded.source.text.should contain(%(rescue_types_nil = "true"))
+    expanded.source.text.should contain(%(rescue_has_types = "true"))
+    expanded.source.text.should contain(%(rescue_name = ""))
+    expanded.source.text.should contain(%(rescue_name_kind = "Nop"))
+    expanded.source.text.should contain(%(inline_rescue_kind = "ExceptionHandler"))
+    expanded.source.text.should contain(%(inline_rescue_body = "1"))
+    expanded.source.text.should contain(%(inline_rescue_handler = "2"))
+    expanded.source.text.should contain(%(inline_rescue_types_nil = "true"))
+    expanded.source.text.should contain(%(inline_ensure_kind = "ExceptionHandler"))
+    expanded.source.text.should contain(%(inline_ensure_body = "1"))
+    expanded.source.text.should contain(%(inline_ensure_handler = "2"))
+    expanded.source.text.should contain("inline_ensure_rescues = 0")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "exposes sizeof and alignof results as macro number literals" do
     source = Facet::Compiler::Source.new(<<-CR)
       {{sizeof(Int32).is_a?(NumberLiteral)}}

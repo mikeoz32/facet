@@ -47,6 +47,7 @@ class UpstreamRuntimeMacroNode
   getter fields : Hash(String, UpstreamRuntimeMacroNode)
   getter collections : Hash(String, Array(UpstreamRuntimeMacroNode))
   getter booleans : Hash(String, Bool)
+  getter nil_fields : Array(String)
 
   def initialize(
     @source : String,
@@ -54,6 +55,7 @@ class UpstreamRuntimeMacroNode
     @fields = {} of String => UpstreamRuntimeMacroNode,
     @collections = {} of String => Array(UpstreamRuntimeMacroNode),
     @booleans = {} of String => Bool,
+    @nil_fields = [] of String,
   )
   end
 end
@@ -86,7 +88,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   argument_case_count : Int32,
   metadata_argument_count : Int32,
   structured_name_argument_count : Int32,
-  structured_call_argument_count : Int32 do
+  structured_call_argument_count : Int32,
+  structured_control_flow_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -213,7 +216,7 @@ module UpstreamMacroParity
     return true if argument.filename || argument.end_filename || argument.doc
     return true if argument.name_source && root_member_requested?(body, argument.name, "name")
     if structure = argument.structure
-      members = structure.fields.keys + structure.collections.keys + structure.booleans.keys
+      members = structure.fields.keys + structure.collections.keys + structure.booleans.keys + structure.nil_fields
       return true if members.any? { |member| root_member_requested?(body, argument.name, member) }
     end
     false
@@ -237,7 +240,7 @@ module UpstreamMacroParity
     collections = node.collections.transform_values do |items|
       items.map { |item| captured_structure(item) }
     end
-    Facet::Compiler::MacroCapturedNode.new(node.source, node.kind, fields, collections, node.booleans)
+    Facet::Compiler::MacroCapturedNode.new(node.source, node.kind, fields, collections, node.booleans, node.nil_fields)
   end
 
   private def captured_location(filename : String?, line : Int32?, column : Int32?) : Facet::Compiler::MacroSourceLocation?

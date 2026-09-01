@@ -19,10 +19,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.metadata_argument_count.should eq(10)
     runtime_macro_header.structured_name_argument_count.should eq(198)
     runtime_macro_header.structured_call_argument_count.should eq(21)
+    runtime_macro_header.structured_control_flow_argument_count.should eq(28)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(581)
+    supported_runtime_macro_indices.size.should eq(609)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -59,6 +60,40 @@ describe "Crystal 1.21 runtime macro corpus" do
       fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3114
     end.not_nil!
     global_case.arguments.first.structure.not_nil!.booleans["global?"].should be_true
+  end
+
+  it "retains authoritative case, select, and exception-handler structure" do
+    case_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3181
+    end.not_nil!
+    case_structure = case_contract.arguments.first.structure.not_nil!
+    case_structure.kind.should eq("Crystal::Case")
+    case_structure.fields["cond"].source.should eq("1")
+    case_structure.collections["whens"].first.collections["conds"].map(&.source).should eq(["2", "3"])
+    case_structure.collections["whens"].first.fields["body"].source.should eq("4")
+    case_structure.booleans["exhaustive?"].should be_false
+
+    select_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3220
+    end.not_nil!
+    select_structure = select_contract.arguments.first.structure.not_nil!
+    select_structure.kind.should eq("Crystal::Select")
+    select_structure.fields.has_key?("cond").should be_false
+    select_structure.collections["whens"].first.fields["body"].source.should eq("1")
+
+    handler_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3316
+    end.not_nil!
+    handler_structure = handler_contract.arguments.first.structure.not_nil!
+    handler_structure.kind.should eq("Crystal::ExceptionHandler")
+    handler_structure.collections["rescues"].first.fields["name"].source.should eq("ex")
+    handler_structure.collections["rescues"].last.collections["types"].map(&.source).should eq(["Char", "String"])
+    handler_structure.fields["ensure"].source.should eq("4")
+
+    rescue_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3323
+    end.not_nil!
+    rescue_contract.arguments.first.structure.not_nil!.nil_fields.should contain("types")
   end
 
   it "retains upstream AST location and documentation metadata" do

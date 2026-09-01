@@ -26,6 +26,7 @@ module Facet
       getter fields : Hash(String, MacroCapturedNode)
       getter collections : Hash(String, Array(MacroCapturedNode))
       getter booleans : Hash(String, Bool)
+      getter nil_fields : Array(String)
 
       def initialize(
         @source : String,
@@ -33,6 +34,7 @@ module Facet
         @fields = {} of String => MacroCapturedNode,
         @collections = {} of String => Array(MacroCapturedNode),
         @booleans = {} of String => Bool,
+        @nil_fields = [] of String,
       )
       end
     end
@@ -784,7 +786,15 @@ module Facet
 
       private def macro_structured_argument_value(node_id : NodeId, ast : AstFile) : MacroSyntaxValue?
         node = syntax_tree(ast).node(node_id)
-        return nil unless macro_structured_call_node?(node, ast)
+        unless macro_structured_call_node?(node, ast)
+          return macro_structured_case_argument_value(node) if node.kind == NodeKind::Case
+          return macro_structured_exception_argument_value(node, ast) if macro_exception_handler_node?(node)
+          if node.kind == NodeKind::Rescue && !node.semantic_flag?(SemanticFlag::RescueClause)
+            return macro_structured_inline_rescue_argument_value(node)
+          end
+          return macro_structured_inline_ensure_argument_value(node) if node.kind == NodeKind::Ensure && node.children.size == 2
+          return nil
+        end
 
         fields = {} of String => MacroCapturedNode
         fields["receiver"] = macro_captured_syntax_node(node.receiver)
@@ -817,6 +827,144 @@ module Facet
         end
         metadata = MacroNodeMetadata.new(fields: name_fields, structure: structure)
         MacroSyntaxValue.captured(source, "Crystal::Call", metadata)
+      end
+
+      private def macro_structured_case_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        is_select = node.semantic_flag?(SemanticFlag::Select)
+        exhaustive = node.semantic_flag?(SemanticFlag::Exhaustive)
+        fields = {} of String => MacroCapturedNode
+        fields["cond"] = macro_captured_syntax_node(node.child(0)) unless is_select
+        fields["else"] = macro_captured_syntax_node(node.child(2))
+
+        whens = node.child(1).try(&.children) || [] of SyntaxNode
+        collections = {
+          "whens" => whens.map { |item| macro_captured_when(item, exhaustive && !is_select) },
+        }
+        booleans = is_select ? ({} of String => Bool) : {"exhaustive?" => exhaustive}
+        kind = is_select ? "Crystal::Select" : "Crystal::Case"
+        structure = MacroCapturedNode.new(node.text, kind, fields, collections, booleans)
+        MacroSyntaxValue.captured(node.text, kind, MacroNodeMetadata.new(structure: structure))
+      end
+
+      private def macro_captured_when(node : SyntaxNode, exhaustive : Bool) : MacroCapturedNode
+        fields = {
+          "body" => macro_captured_syntax_node(node.child(1)),
+        }
+        conditions = node.child(0).try(&.children) || [] of SyntaxNode
+        collections = {
+          "conds" => conditions.map { |condition| macro_captured_syntax_node(condition) },
+        }
+        MacroCapturedNode.new(
+          node.text,
+          "Crystal::When",
+          fields,
+          collections,
+          {"exhaustive?" => exhaustive}
+        )
+      end
+
+      private def macro_structured_exception_argument_value(node : SyntaxNode, ast : AstFile) : MacroSyntaxValue
+        ensure_node = node.child(3)
+        ensure_body = if ensure_node && ensure_node.kind == NodeKind::Ensure
+                        ensure_node.child(0)
+                      end
+        fields = {
+          "body"   => macro_captured_syntax_node(node.child(0)),
+          "else"   => macro_captured_syntax_node(node.child(2)),
+          "ensure" => macro_captured_syntax_node(ensure_body),
+        }
+        rescues = node.child(1).try do |clauses|
+          clauses.kind == NodeKind::Expressions ? clauses.children : [] of SyntaxNode
+        end || [] of SyntaxNode
+        collections = {
+          "rescues" => rescues.map { |clause| macro_captured_rescue(clause, ast) },
+        }
+        kind = "Crystal::ExceptionHandler"
+        structure = MacroCapturedNode.new(node.text, kind, fields, collections)
+        MacroSyntaxValue.captured(node.text, kind, MacroNodeMetadata.new(structure: structure))
+      end
+
+      private def macro_exception_handler_node?(node : SyntaxNode) : Bool
+        return false unless node.kind == NodeKind::Begin
+        node.children[1..3].any? { |child| child.kind != NodeKind::Nop }
+      end
+
+      private def macro_structured_inline_rescue_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        rescue_fields = {
+          "body" => macro_captured_syntax_node(node.child(1)),
+          "name" => macro_captured_syntax_node(nil),
+        }
+        rescue_node = MacroCapturedNode.new(
+          node.text,
+          "Crystal::Rescue",
+          rescue_fields,
+          nil_fields: ["types"]
+        )
+        macro_inline_exception_handler_value(node, [rescue_node], nil)
+      end
+
+      private def macro_structured_inline_ensure_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        macro_inline_exception_handler_value(node, [] of MacroCapturedNode, node.child(1))
+      end
+
+      private def macro_inline_exception_handler_value(
+        node : SyntaxNode,
+        rescues : Array(MacroCapturedNode),
+        ensure_body : SyntaxNode?,
+      ) : MacroSyntaxValue
+        fields = {
+          "body"   => macro_captured_syntax_node(node.child(0)),
+          "else"   => macro_captured_syntax_node(nil),
+          "ensure" => macro_captured_syntax_node(ensure_body),
+        }
+        collections = {"rescues" => rescues}
+        kind = "Crystal::ExceptionHandler"
+        structure = MacroCapturedNode.new(node.text, kind, fields, collections)
+        MacroSyntaxValue.captured(node.text, kind, MacroNodeMetadata.new(structure: structure))
+      end
+
+      private def macro_captured_rescue(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        header = node.child(0)
+        name = nil.as(SyntaxNode?)
+        types = nil.as(Array(SyntaxNode)?)
+        if header
+          case header.kind
+          when NodeKind::VarDecl
+            name = header.target
+            if declared_type = header.declared_type
+              types = macro_union_type_nodes(declared_type, ast)
+            end
+          when NodeKind::Ident
+            name = header
+          when NodeKind::Nop
+          else
+            types = macro_union_type_nodes(header, ast)
+          end
+        end
+
+        fields = {
+          "body" => macro_captured_syntax_node(node.child(1)),
+          "name" => name ? MacroCapturedNode.new(name.text, "identifier") : macro_captured_syntax_node(nil),
+        }
+        collections = {} of String => Array(MacroCapturedNode)
+        nil_fields = [] of String
+        if resolved_types = types
+          collections["types"] = resolved_types.map { |type| macro_captured_syntax_node(type) }
+        else
+          nil_fields << "types"
+        end
+        MacroCapturedNode.new(node.text, "Crystal::Rescue", fields, collections, nil_fields: nil_fields)
+      end
+
+      private def macro_union_type_nodes(node : SyntaxNode, ast : AstFile) : Array(SyntaxNode)
+        if node.kind == NodeKind::Binary &&
+           ast.arena.operator_kind(node.raw.payload_index) == TokenKind::Pipe
+          left = node.child(0)
+          right = node.child(1)
+          return [] of SyntaxNode unless left && right
+          return macro_union_type_nodes(left, ast) + macro_union_type_nodes(right, ast)
+        end
+        [node]
       end
 
       private def macro_structured_call_node?(node : SyntaxNode, ast : AstFile) : Bool
@@ -863,6 +1011,11 @@ module Facet
 
       private def macro_captured_syntax_node(node : SyntaxNode?) : MacroCapturedNode
         return MacroCapturedNode.new("", "Crystal::Nop") unless node
+        if node.kind == NodeKind::Expressions
+          expressions = node.children
+          return MacroCapturedNode.new("", "Crystal::Nop") if expressions.empty?
+          return macro_captured_syntax_node(expressions.first) if expressions.size == 1
+        end
         MacroCapturedNode.new(node.text, macro_crystal_syntax_kind(node.kind))
       end
 
@@ -881,6 +1034,8 @@ module Facet
         when NodeKind::Const         then "Crystal::Path"
         when NodeKind::Path          then "Crystal::Path"
         when NodeKind::Ident         then "Crystal::Var"
+        when NodeKind::Expressions   then "Crystal::Expressions"
+        when NodeKind::Nop           then "Crystal::Nop"
         else                              "Crystal::ASTNode"
         end
       end
@@ -2838,6 +2993,7 @@ module Facet
         if structure.booleans.has_key?(name)
           return MacroEvaluation.new(structure.booleans[name])
         end
+        return MacroEvaluation.new(nil) if structure.nil_fields.includes?(name)
         nil
       end
 
@@ -2845,7 +3001,7 @@ module Facet
         fields = node.fields.transform_values do |field|
           MacroCapturedField.new(field.source, field.kind)
         end
-        structure = MacroCapturedNode.new(node.source, node.kind, node.fields, node.collections, node.booleans)
+        structure = MacroCapturedNode.new(node.source, node.kind, node.fields, node.collections, node.booleans, node.nil_fields)
         metadata = MacroNodeMetadata.new(fields: fields, structure: structure)
         MacroSyntaxValue.captured(node.source, node.kind, metadata)
       end
@@ -2919,7 +3075,8 @@ module Facet
           if structure = value.metadata.try(&.structure)
             return true if structure.fields.has_key?(method_name) ||
                            structure.collections.has_key?(method_name) ||
-                           structure.booleans.has_key?(method_name)
+                           structure.booleans.has_key?(method_name) ||
+                           structure.nil_fields.includes?(method_name)
           end
         end
         case value

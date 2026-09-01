@@ -1,5 +1,5 @@
 diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
-index b2378cd..e03fb8d 100644
+index b2378cd..1ba5728 100644
 --- a/spec/spec_helper.cr
 +++ b/spec/spec_helper.cr
 @@ -3,6 +3,7 @@
@@ -10,7 +10,7 @@ index b2378cd..e03fb8d 100644
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,172 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,224 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -90,6 +90,7 @@ index b2378cd..e03fb8d 100644
 +  getter fields : Hash(String, FacetMacroCapturedNode)
 +  getter collections : Hash(String, Array(FacetMacroCapturedNode))
 +  getter booleans : Hash(String, Bool)
++  getter nil_fields : Array(String)
 +
 +  def initialize(
 +    @source : String,
@@ -97,6 +98,7 @@ index b2378cd..e03fb8d 100644
 +    @fields = {} of String => FacetMacroCapturedNode,
 +    @collections = {} of String => Array(FacetMacroCapturedNode),
 +    @booleans = {} of String => Bool,
++    @nil_fields = [] of String,
 +  )
 +  end
 +end
@@ -120,7 +122,57 @@ index b2378cd..e03fb8d 100644
 +      collections,
 +      {"global?" => node.global?}
 +    )
++  when Crystal::Case
++    fields = {
++      "cond" => facet_macro_capture_node(node.cond),
++      "else" => facet_macro_capture_node(node.else),
++    }
++    collections = {
++      "whens" => node.whens.map { |item| facet_macro_capture_when(item) },
++    }
++    FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections, {"exhaustive?" => node.exhaustive?})
++  when Crystal::Select
++    fields = {"else" => facet_macro_capture_node(node.else)}
++    collections = {
++      "whens" => node.whens.map { |item| facet_macro_capture_when(item) },
++    }
++    FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
++  when Crystal::ExceptionHandler
++    fields = {
++      "body"   => facet_macro_capture_node(node.body),
++      "else"   => facet_macro_capture_node(node.else),
++      "ensure" => facet_macro_capture_node(node.ensure),
++    }
++    collections = {
++      "rescues" => (node.rescues || [] of Crystal::Rescue).map { |item| facet_macro_capture_rescue(item) },
++    }
++    FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
++  when Crystal::Rescue
++    facet_macro_capture_rescue(node)
 +  end
++end
++
++private def facet_macro_capture_when(node : Crystal::When) : FacetMacroCapturedNode
++  fields = {"body" => facet_macro_capture_node(node.body)}
++  collections = {
++    "conds" => node.conds.map { |condition| facet_macro_capture_node(condition) },
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections, {"exhaustive?" => node.exhaustive?})
++end
++
++private def facet_macro_capture_rescue(node : Crystal::Rescue) : FacetMacroCapturedNode
++  fields = {
++    "body" => facet_macro_capture_node(node.body),
++    "name" => node.name ? FacetMacroCapturedNode.new(node.name.not_nil!, "identifier") : facet_macro_capture_node(nil),
++  }
++  collections = {} of String => Array(FacetMacroCapturedNode)
++  nil_fields = [] of String
++  if types = node.types
++    collections["types"] = types.map { |type| facet_macro_capture_node(type) }
++  else
++    nil_fields << "types"
++  end
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections, nil_fields: nil_fields)
 +end
 +
 +private def facet_macro_capture_node(node : Crystal::ASTNode?) : FacetMacroCapturedNode

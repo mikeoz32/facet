@@ -13,6 +13,7 @@ class CapturedMacroNode
   getter fields : Hash(String, CapturedMacroNode)
   getter collections : Hash(String, Array(CapturedMacroNode))
   getter booleans : Hash(String, Bool)
+  getter nil_fields : Array(String)
 
   def initialize(
     @source : String,
@@ -20,6 +21,7 @@ class CapturedMacroNode
     @fields = {} of String => CapturedMacroNode,
     @collections = {} of String => Array(CapturedMacroNode),
     @booleans = {} of String => Bool,
+    @nil_fields = [] of String,
   )
   end
 end
@@ -63,7 +65,8 @@ record RuntimeMacroFixtureHeader,
   argument_case_count : Int32,
   metadata_argument_count : Int32,
   structured_name_argument_count : Int32,
-  structured_call_argument_count : Int32 do
+  structured_call_argument_count : Int32,
+  structured_control_flow_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -94,7 +97,18 @@ header = RuntimeMacroFixtureHeader.new(
     fixture_case.arguments.count { |argument| !argument.name_source.nil? }
   end,
   structured_call_argument_count: cases.sum do |fixture_case|
-    fixture_case.arguments.count { |argument| !argument.structure.nil? }
+    fixture_case.arguments.count do |argument|
+      argument.structure.try do |node|
+        {"Crystal::Call", "Crystal::IsA", "Crystal::RespondsTo", "Crystal::TypeOf"}.includes?(node.kind)
+      end || false
+    end
+  end,
+  structured_control_flow_argument_count: cases.sum do |fixture_case|
+    fixture_case.arguments.count do |argument|
+      argument.structure.try do |node|
+        {"Crystal::Case", "Crystal::Select", "Crystal::ExceptionHandler", "Crystal::Rescue"}.includes?(node.kind)
+      end || false
+    end
   end,
 )
 
