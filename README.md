@@ -171,6 +171,11 @@ the lexer, parser, and AST. `pending_expansion_file_ids` exposes the exact files
 whose cached expansion became stale so incremental semantic consumers can
 reindex them without rebuilding the workspace.
 
+`QueryDb#expand(file_id, context)` accepts the explicit
+`MacroExpansionContext` used by target flags, environment values, captured
+commands, and semantic snapshots. Its fingerprint is part of the expansion
+cache key, so changing compiler context cannot reuse stale generated syntax.
+
 Type-aware expansions additionally depend on the workspace declaration
 revision. This conservatively invalidates only materialized consumers that used
 type introspection when a declaration may have changed, while ordinary macro
@@ -396,7 +401,7 @@ Current Crystal 1.21.0 parity baseline:
 | Macro evaluator | 1,042 executed contracts | 1,042/1,042 exact expansions, diagnostics, and output effects |
 | Semantic macros | 133 examples; 147 expansion events | 147/147 exact-text or semantic-AST matches; 0 skipped events |
 | Full semantic macros | 3,288 examples; 2,736 unique expansion contexts | 2,736/2,736 exact-text or semantic-AST-and-literal matches; all 1,077 call and 1,659 inline events covered |
-| Facet native suite | — | 11,789 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Facet native suite | — | 11,790 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

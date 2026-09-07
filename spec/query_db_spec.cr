@@ -11,6 +11,23 @@ describe Facet::Compiler::QueryDb do
     expanded1.source.text.should eq(expanded2.source.text)
   end
 
+  it "keys expansion caches by explicit macro context" do
+    manager = Facet::Compiler::SourceManager.new
+    file_id = manager.add(%({{ flag?(:feature) }}), "context.cr")
+    queries = Facet::Compiler::QueryDb.new(manager)
+    disabled = Facet::Compiler::MacroExpansionContext.new
+    enabled = Facet::Compiler::MacroExpansionContext.new(flags: ["feature"])
+
+    queries.expand(file_id, disabled).source.text.should eq("false")
+    executions = queries.stats.expand_executions
+    queries.expand(file_id, disabled).source.text.should eq("false")
+    queries.stats.expand_executions.should eq(executions)
+    queries.stats.expand_cache_hits.should be > 0
+
+    queries.expand(file_id, enabled).source.text.should eq("true")
+    queries.stats.expand_executions.should eq(executions + 1)
+  end
+
   it "invalidates on source change" do
     mgr = Facet::Compiler::SourceManager.new
     fid = mgr.add("macro foo; end\n{{ foo }}")

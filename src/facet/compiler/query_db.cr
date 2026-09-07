@@ -13,6 +13,7 @@ module Facet
       getter value : AstFile
       getter version : UInt64
       getter deps : Array(UInt64)
+      getter context_fingerprint : UInt64
       getter macro_names : Set(String)
       getter required_files : Set(FileId)
       getter? type_introspection : Bool
@@ -21,6 +22,7 @@ module Facet
         @value : AstFile,
         @version : UInt64,
         @deps : Array(UInt64),
+        @context_fingerprint : UInt64,
         @macro_names : Set(String),
         @required_files : Set(FileId),
         @type_introspection : Bool,
@@ -128,7 +130,10 @@ module Facet
         tree
       end
 
-      def expand(file_id : FileId) : AstFile
+      def expand(
+        file_id : FileId,
+        context : MacroExpansionContext = MacroExpansionContext.new,
+      ) : AstFile
         parse_ast = parse(file_id)
         idx = build_global_index
 
@@ -139,7 +144,7 @@ module Facet
             cached.macro_names,
             cached.type_introspection?
           )
-          if cached.deps == current_deps
+          if cached.deps == current_deps && cached.context_fingerprint == context.fingerprint
             @stats.expand_cache_hits += 1
             return cached.value
           end
@@ -147,7 +152,7 @@ module Facet
 
         footprint = MacroFootprint.new
         footprint.require_file(file_id)
-        expander = MacroExpander.new(idx)
+        expander = MacroExpander.new(idx, context: context)
         expanded = expander.expand(parse_ast, idx, footprint)
         footprint = expander.last_footprint || footprint
         required_files = footprint.required_files.to_set
@@ -161,6 +166,7 @@ module Facet
           expanded,
           version,
           deps,
+          context.fingerprint,
           macro_names,
           required_files,
           type_introspection
