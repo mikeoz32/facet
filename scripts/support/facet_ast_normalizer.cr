@@ -65,6 +65,8 @@ module FacetAstNormalizer
     "typeof", "uninitialized", "union", "unless", "until", "verbatim", "when", "while", "with", "yield",
   }
 
+  HYGIENIC_IDENTIFIER = /\A__[A-Za-z_][A-Za-z0-9_]*_\d+\z/
+
   def normalize(ast : Facet::Compiler::AstFile) : SemanticAstNode
     root = normalize_node(ast, ast.root)
     if root.kind == "File" && root.children.size == 1
@@ -74,6 +76,22 @@ module FacetAstNormalizer
       end
     end
     root
+  end
+
+  def normalize_macro_output(ast : Facet::Compiler::AstFile) : SemanticAstNode
+    normalize_hygienic_identifiers(normalize(ast), {} of String => String)
+  end
+
+  private def normalize_hygienic_identifiers(
+    node : SemanticAstNode,
+    identifiers : Hash(String, String),
+  ) : SemanticAstNode
+    payload = node.payload
+    if node.kind == "Ident" && (identifier = payload) && identifier.matches?(HYGIENIC_IDENTIFIER)
+      payload = identifiers[identifier] ||= "__facet_hygiene_#{identifiers.size}"
+    end
+    children = node.children.map { |child| normalize_hygienic_identifiers(child, identifiers) }
+    SemanticAstNode.new(node.kind, children, payload, node.flags)
   end
 
   private def normalize_node(ast : Facet::Compiler::AstFile, node_id : Facet::Compiler::NodeId) : SemanticAstNode

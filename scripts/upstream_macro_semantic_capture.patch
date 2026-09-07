@@ -147,7 +147,7 @@ diff --git a/src/compiler/crystal/macros/macros.cr b/src/compiler/crystal/macros
 index 8d48be6..32f7002 100644
 --- a/src/compiler/crystal/macros/macros.cr
 +++ b/src/compiler/crystal/macros/macros.cr
-@@ -19,13 +19,168 @@ class Crystal::Program
+@@ -19,13 +19,206 @@ class Crystal::Program
    property macro_expanded_hook : Proc(Nil)? = nil
    property macro_expansion_error_hook : Proc(::Exception?, Nil)? = nil
 
@@ -176,6 +176,7 @@ index 8d48be6..32f7002 100644
 +          json.field "definition", definition
 +          json.field "macro_name", macro_name
 +          json.field "scope", scope.to_s
++          json.field "scope_abstract", scope.abstract?
 +          json.field "flags", flags.to_a
 +          json.field "free_vars" do
 +            json.object do
@@ -233,6 +234,29 @@ index 8d48be6..32f7002 100644
 +                      json.field "module", value.type.module?
 +                      json.field "class", value.type.class?
 +                      json.field "struct", value.type.struct?
++                      json.field "constants" do
++                        json.array do
++                          if invocation.includes?(".constants") || definition.includes?(".constants") ||
++                             invocation.includes?(".has_constant?") || definition.includes?(".has_constant?")
++                            value.type.types.each_key { |constant| json.string constant }
++                          end
++                        end
++                      end
++                      json.field "methods" do
++                        json.array do
++                          if invocation.includes?(".methods") || definition.includes?(".methods") ||
++                             invocation.includes?(".has_method?") || definition.includes?(".has_method?")
++                            TypeNode.methods(value.type).elements.each do |method|
++                              if method.is_a?(Def)
++                                json.object do
++                                  json.field "name", method.name
++                                  json.field "source", method.to_s
++                                end
++                              end
++                            end
++                          end
++                        end
++                      end
 +                      json.field "class_methods" do
 +                        json.array do
 +                          if invocation.includes?(".methods") || definition.includes?(".methods")
@@ -274,6 +298,20 @@ index 8d48be6..32f7002 100644
 +                      json.field "name", method.name
 +                      json.field "source", method.to_s
 +                    end
++                  end
++                end
++              end
++            end
++          end
++          json.field "scope_constants" do
++            json.array do
++              if invocation.includes?("@type.constants") || definition.includes?("@type.constants") ||
++                 invocation.includes?("@type.constant(") || definition.includes?("@type.constant(")
++                scope.types.each_key do |name|
++                  value = TypeNode.constant(scope, name)
++                  json.object do
++                    json.field "name", name
++                    json.field "source", value.to_s
 +                  end
 +                end
 +              end

@@ -18,8 +18,15 @@
 - Added a deduplicated full-semantic macro corpus from all 3,288 official
   `spec/compiler/semantic` examples (nine upstream pending). It retains 2,731
   distinct invocation/definition/scope/target-flag/semantic-context contracts
-  from 150,926 raw events and currently matches 2,027/2,731, with all 704
-  mismatches kept in the denominator.
+  from 150,926 raw events and currently matches 2,376/2,731. All 1,077
+  user-macro call events match; all 355 remaining inline mismatches stay in the
+  denominator.
+- Expanded semantic snapshots with lexical scope, abstractness, type methods,
+  constants and values; added hygienic AST alpha-normalization, external named
+  parameter binding, enum and union subtype predicates, tuple sizes, generated
+  declaration parsing, and caller-context diagnostic comparison. Parenthesized
+  builtin spans and macro-header `do ... end` balancing now preserve the exact
+  generated Facet AST contract.
 - Added target flags to semantic expansion snapshots and cache fingerprints,
   single-pass `MacroExpander#expand_once`, `elsif` execution, nil optional block
   binding, external/internal macro parameter binding, nested `skip_file`, and

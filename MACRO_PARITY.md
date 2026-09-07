@@ -44,12 +44,14 @@ compile-time constants, resolved paths and path errors are explicit fixture
 inputs that participate in the expansion-context fingerprint.
 
 Across the complete official semantic suite, Facet currently matches
-**2,027/2,731 (74.22%)** distinct expansion contexts. All 2,691 successful
-expansions and 40 expansion errors remain in the corpus; all 704 mismatches stay
-in the denominator. This broader gate covers target-flag branches plus stdlib
-and bootstrap macros which the dedicated macro examples never execute. It
-compares one Facet `expand_once` compiler pass to one upstream macro expansion;
-the normal `expand` API continues iterating to a fixed point.
+**2,376/2,731 (87.00%)** distinct expansion contexts. All 1,077 user-macro call
+events match; the remaining 355 mismatches are confined to the 1,654 inline
+expansions. All 2,691 successful expansions and 40 expansion errors remain in
+the corpus, and every mismatch stays in the denominator. This broader gate
+covers target-flag branches plus stdlib and bootstrap macros which the dedicated
+macro examples never execute. It compares one Facet `expand_once` compiler pass
+to one upstream macro expansion; the normal `expand` API continues iterating to
+a fixed point.
 
 The runtime corpus contains 1,042 contracts in total:
 
@@ -76,7 +78,7 @@ The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, actual AST
 arguments, and all 25 evaluator error assertions, then classifies the resulting
 1,042 executions directly. Neither 1,042/1,042, 371/371, 147/147, nor
-2,027/2,731 is a claim of complete Crystal macro compatibility. The semantic
+2,376/2,731 is a claim of complete Crystal macro compatibility. The semantic
 event corpora make both the dedicated macro-suite behavior and the broader
 compiler/stdlib surface explicit and regression-tested without embedding
 Crystal compiler objects in Facet.

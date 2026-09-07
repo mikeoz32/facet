@@ -7,6 +7,26 @@ full_semantic_header, full_semantic_cases = UpstreamSemanticMacroParity.load(fix
 supported_full_semantic_indices = File.read_lines(baseline_path).map(&.to_i)
 
 describe "Crystal 1.21 full semantic macro event corpus" do
+  it "compares hygienic identifiers by binding identity instead of generated spelling" do
+    actual = Facet::Compiler::Parser.new(
+      Facet::Compiler::Source.new("__value_1 = 1\n__value_1", "actual.cr")
+    ).parse_file
+    expected = Facet::Compiler::Parser.new(
+      Facet::Compiler::Source.new("__temp_32 = 1\n__temp_32", "expected.cr")
+    ).parse_file
+
+    FacetAstNormalizer.normalize(actual).should_not eq(FacetAstNormalizer.normalize(expected))
+    FacetAstNormalizer.normalize_macro_output(actual).should eq(FacetAstNormalizer.normalize_macro_output(expected))
+  end
+
+  it "compares matching caller-local diagnostics only after AST equivalence" do
+    expected = "counter += 1\ncounter"
+    actual = "counter += 1\n counter"
+
+    UpstreamSemanticMacroParity.equivalent_output?(actual, expected).should be_true
+    UpstreamSemanticMacroParity.equivalent_output?("other += 1\nother", expected).should be_false
+  end
+
   it "loads every unique expansion context from the official semantic suite" do
     full_semantic_header.kind.should eq("facet-upstream-macro-semantic-full-events")
     full_semantic_header.crystal_version.should eq("1.21.0")
@@ -27,7 +47,7 @@ describe "Crystal 1.21 full semantic macro event corpus" do
     )
     full_semantic_cases.size.should eq(full_semantic_header.event_count)
     supported_full_semantic_indices.should eq(supported_full_semantic_indices.sort.uniq)
-    supported_full_semantic_indices.size.should eq(2027)
+    supported_full_semantic_indices.size.should eq(2376)
   end
 
   supported_full_semantic_indices.each do |index|

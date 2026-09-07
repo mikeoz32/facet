@@ -19,7 +19,9 @@ record RawSemanticMacroEvent,
   invocation_file : String?,
   invocation_line : Int32?,
   definition_file : String?,
-  definition_line : Int32? do
+  definition_line : Int32?,
+  scope_abstract : Bool = false,
+  scope_constants : Array(JSON::Any) = [] of JSON::Any do
   include JSON::Serializable
 end
 
@@ -55,7 +57,9 @@ record SemanticMacroFixtureCase,
   path_errors : Hash(String, String),
   expected : String?,
   expected_error_type : String?,
-  expected_error_message : String? do
+  expected_error_message : String?,
+  scope_abstract : Bool = false,
+  scope_constants : Array(JSON::Any) = [] of JSON::Any do
   include JSON::Serializable
 end
 
@@ -96,6 +100,8 @@ File.open(capture_path) do |file|
       expected: event.expanded,
       expected_error_type: event.error_type,
       expected_error_message: event.error_message,
+      scope_abstract: event.scope_abstract,
+      scope_constants: event.scope_constants,
     )
     if mode == "full"
       signature = fixture_case.to_json

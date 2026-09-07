@@ -4,6 +4,7 @@ require "./upstream_support"
 include UpstreamSupport
 
 describe "Parser upstream parity (calls and blocks)" do
+  it_parses "record(State, field : Int32, count = 0)"
   it_parses "Number.expand_div [Int32, Int64], BigInt"
   it_parses "ivar_ptr type, name, value"
   it_parses "default_value_index.try(&.< splat_index)"

@@ -185,6 +185,18 @@ describe "Facet AST contract" do
     ast.literal_content_string(clobber).should eq("memory")
   end
 
+  it "retains delimiters in parenthesized builtin call spans" do
+    ast = facet_ast("atomicrmw(:add, pointerof(@value), value, ordering)")
+    expressions = ast.children(ast.root)[0]
+    outer_call = ast.children(expressions)[0]
+    outer_args = ast.children(outer_call)[1]
+    pointerof_call = ast.children(outer_args)[1]
+    pointerof_args = ast.children(pointerof_call)[1]
+
+    ast.node_string(pointerof_call).should eq("pointerof(@value)")
+    ast.node_string(pointerof_args).should eq("(@value)")
+  end
+
   it "does not let Nop or container spans hide a significant token" do
     source = Facet::Compiler::Source.new("lost")
     arena = Facet::Compiler::AstArena.new

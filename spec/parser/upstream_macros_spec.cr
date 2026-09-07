@@ -8,6 +8,7 @@ describe "Parser upstream parity (macros)" do
   it_parses "fun {{name}}(a : {{from}}) : {{to}}\n  a\nend"
   it_parses "struct {{name}}\nend"
   it_parses "def self.{{name.id}}({{args.splat}}) : {{return_type}}\nend"
+  it_parses "method_added(def foo\nend)"
   it_parses "::String.build do |%io|\nend"
   it_parses "macro choose\n  value\n  \\{% else %}\nend"
   it_parses "def to_i{{n}}! : Int{{n}}\nend"
@@ -182,6 +183,7 @@ describe "Parser upstream parity (macros)" do
     parse_ok(%(macro foo\n"\\'"\nend))
     parse_ok(%(macro foo\n"\\\\"\nend))
     parse_ok("macro foo;bar(end: 1);end")
+    parse_ok("macro ann; annotation MyAnnotation; end; end")
     parse_ok("macro foo; bar class: 1; end")
     parse_ok("macro foo(@[Foo] var);end")
     parse_ok("macro foo(@[Foo] outer inner);end")
@@ -217,6 +219,7 @@ describe "Parser upstream parity (macros)" do
   it_parses "{% if 1; 2; end %}"
   it_parses "{%\nif 1; 2; end\n%}"
   it_parses "{% if 1\n  x\nend %}"
+  it_parses "{% if values.all? do |value| value end && ready %}body{% end %}"
   it_parses "{% x if 1 %}"
   it_parses "{% unless 1; 2; end %}"
   it_parses "{% unless 1; 2; else 3; end %}"

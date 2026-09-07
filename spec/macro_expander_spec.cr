@@ -44,6 +44,22 @@ describe Facet::Compiler::MacroExpander do
     uncaptured.diagnostics.should be_empty
   end
 
+  it "uses an explicit lexical scope for isolated macro expansion" do
+    definition = Facet::Compiler::Parser.new(
+      Facet::Compiler::Source.new("macro owner\n  {{ @type }}\nend")
+    ).parse_file
+    call = Facet::Compiler::Parser.new(Facet::Compiler::Source.new("owner")).parse_file
+    index = Facet::Compiler::Indexer.index_macros(definition)
+    context = Facet::Compiler::MacroExpansionContext.new(lexical_scope: "RuntimeError")
+    expander = Facet::Compiler::MacroExpander.new(index, context: context)
+
+    expander.expand_once(call, index).source.text.strip.should eq("RuntimeError")
+    expander.diagnostics.should be_empty
+
+    other_context = Facet::Compiler::MacroExpansionContext.new(lexical_scope: "IO::Error")
+    context.fingerprint.should_not eq(other_context.fingerprint)
+  end
+
   it "isolates mutable semantic snapshots between top-level expansions" do
     entries = [Facet::Compiler::MacroSemanticEntrySnapshot.new(%("foo"), "nil")]
     snapshot = Facet::Compiler::MacroSemanticPathSnapshot.new(
@@ -60,6 +76,100 @@ describe Facet::Compiler::MacroExpander do
 
     expander.expand_template(%({% FOO["foo"] = "changed" %}), arguments).should be_empty
     expander.expand_template(%({{ FOO["foo"] }}), arguments).should eq("nil")
+    expander.diagnostics.should be_empty
+  end
+
+  it "uses snapshotted type constants and methods for semantic predicates" do
+    type = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "DayOfWeek",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::EnumType"
+    )
+    method = Facet::Compiler::MacroSemanticMethodSnapshot.new("strerror_r", "fun strerror_r")
+    tuple = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "Tuple(String, Int32, String)",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::TupleInstanceType"
+    )
+    primitive = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "(Float32 | Float64 | Int32)",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::MixedUnionType"
+    )
+    int_primitive = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "(Int32 | UInt32)",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::MixedUnionType"
+    )
+    uint = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "UInt32",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::IntegerType",
+      struct_type: true
+    )
+    int_or_nil = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "(Int32 | Nil)",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::MixedUnionType"
+    )
+    int = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "Int32",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::IntegerType",
+      struct_type: true
+    )
+    float = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "Float32",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::FloatType",
+      struct_type: true
+    )
+    empty_tuple = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "::Tuple.new",
+      "Crystal::TupleLiteral"
+    )
+    enum_base = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "Enum",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::NonGenericClassType",
+      class_type: true,
+      struct_type: true
+    )
+    context = Facet::Compiler::MacroExpansionContext.new(
+      semantic_paths: {
+        "DayOfWeek"             => type,
+        "LibC"                  => type,
+        "T"                     => tuple,
+        "EmptyTuple"            => empty_tuple,
+        "Enum"                  => enum_base,
+        "::Union(Int32, ::Nil)" => int_or_nil,
+        "Int32"                 => int,
+        "Int::Primitive"        => int_primitive,
+        "Number::Primitive"     => primitive,
+        "Float"                 => float,
+        "UInt32"                => uint,
+      },
+      type_constants: {"DayOfWeek" => ["Monday", "Tuesday"]},
+      type_constant_values: {"DayOfWeek" => {"Monday" => "1", "Tuesday" => "2"}},
+      type_methods: {"DayOfWeek" => [method]}
+    )
+    expander = Facet::Compiler::MacroExpander.new(context: context)
+
+    expander.expand_template(
+      "{% for name in DayOfWeek.constants %}{{ name.id }} {% end %}" \
+      "{% if DayOfWeek.has_method?(:strerror_r) %}method {% end %}" \
+      "{% for i in 0...T.size %}{{ i }}{% end %}" \
+      "{% for i in 0...EmptyTuple.size %}unreachable{{ i }}{% end %}" \
+      "{% if Number::Primitive.union_types.includes?(Float) %} primitive{% end %}" \
+      "{% if Float < Number::Primitive %} subtype{% end %}" \
+      "{% if !UInt32.union? && UInt32 < Int::Primitive %} integer{% end %}" \
+      "{% if ::Union(Int32, ::Nil).union_types.includes?(Int32) %} union-includes{% end %}" \
+      "{% unless UInt32 <= UInt32 %} unreachable{% end %}" \
+      "{% unless Int32 <= ::Union(Int32, ::Nil) %} unreachable{% end %}" \
+      "{% if DayOfWeek < Enum %} enum{% end %}" \
+      " {{ DayOfWeek.constant(:Monday) }}",
+      {} of String => Facet::Compiler::MacroValue
+    ).should eq("Monday Tuesday method 012 primitive subtype integer union-includes enum 1")
     expander.diagnostics.should be_empty
   end
 
@@ -1383,6 +1493,39 @@ describe Facet::Compiler::MacroExpander do
     expanded.first.source.text.should eq("1\n")
   end
 
+  it "unescapes deferred macro delimiters in generated macro definitions" do
+    expander = Facet::Compiler::MacroExpander.new
+    arguments = {} of String => Facet::Compiler::MacroValue
+
+    adjacent = expander.expand_template("macro inner(value)\n  \\{{ value }}\nend", arguments)
+    adjacent.should contain("{{ value }}")
+    adjacent.should_not contain("\\{{ value }}")
+
+    canonical = expander.expand_template("macro inner(value)\n  \\{\n{ value }}\nend", arguments)
+    canonical.should contain("{{ value }}")
+    canonical.should_not contain("{\n{ value }}")
+    expander.diagnostics.should be_empty
+  end
+
+  it "expands macro expressions embedded in generated string literals" do
+    source = Facet::Compiler::Source.new(<<-'CR')
+      macro nil_message(name)
+        "{{ @type.id }}{{ "#".id }}{{ name }} cannot be nil"
+      end
+
+      class Widget
+        nil_message(value)
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%("Widget#value cannot be nil"))
+    expander.diagnostics.should be_empty
+  end
+
   it "expands ordinary receiverless macro calls" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro make_getter(name)
@@ -1747,6 +1890,7 @@ describe Facet::Compiler::MacroExpander do
       end
 
       declare(Example)
+      declare(__name: NamedExample)
     CR
     ast = Facet::Compiler::Parser.new(source).parse_file
     index = Facet::Compiler::Indexer.index_macros(ast)
@@ -1754,6 +1898,74 @@ describe Facet::Compiler::MacroExpander do
     expanded = expander.expand(ast, index)
 
     expanded.source.text.should contain("class Example")
+    expanded.source.text.should contain("class NamedExample")
+    expander.diagnostics.should be_empty
+  end
+
+  it "exposes the indexed abstract type flag through @type" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro generate_initializer
+        {% unless @type.abstract? %}
+          def generated_initializer
+          end
+        {% end %}
+      end
+
+      abstract class Base
+        generate_initializer
+      end
+
+      class Concrete
+        generate_initializer
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    tree = Facet::Compiler::SyntaxTree.new(expanded)
+    tree.root.descendants(Facet::Compiler::NodeKind::Def).size.should eq(1)
+    expander.diagnostics.should be_empty
+  end
+
+  it "defers caller-local compound assignment checks until semantic analysis" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro increment
+        arg_index += 1
+      end
+
+      increment
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand_once(ast, index)
+
+    expanded.source.text.should contain("arg_index += 1")
+    expander.diagnostics.should be_empty
+  end
+
+  it "accepts generated constants wrapped by macro expression containers" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro define_constant
+        begin
+          GENERATED_VALUE = 1
+        end
+      end
+
+      struct Container
+        define_constant
+      end
+    CR
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+    parser.diagnostics.should be_empty
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand_once(ast, index)
+
+    expanded.source.text.should contain("GENERATED_VALUE = 1")
     expander.diagnostics.should be_empty
   end
 
@@ -1841,7 +2053,7 @@ describe Facet::Compiler::MacroExpander do
   it "exposes a missing type-declaration default as a nil-like Nop" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro default_kind(value)
-        {% if value.value.nil? %}missing{% else %}present{% end %}
+        {% if value.value.nil? %}nil-like{% end %}/{% if value.value %}present{% else %}missing{% end %}
       end
 
       default_kind(example : Int32)
@@ -1851,7 +2063,7 @@ describe Facet::Compiler::MacroExpander do
     expander = Facet::Compiler::MacroExpander.new(index)
     expanded = expander.expand(ast, index)
 
-    expanded.source.text.should match(/\bmissing\s*\z/)
+    expanded.source.text.should match(/\bnil-like\/missing\s*\z/)
     expander.diagnostics.should be_empty
   end
 
@@ -1939,6 +2151,7 @@ describe Facet::Compiler::MacroExpander do
       end
 
       describe(String)
+      describe(String | Pointer(UInt8))
     CR
     ast = Facet::Compiler::Parser.new(source).parse_file
     index = Facet::Compiler::Indexer.index_macros(ast)
@@ -1947,6 +2160,7 @@ describe Facet::Compiler::MacroExpander do
     expanded = expander.expand(ast, index)
 
     expanded.source.text.should contain("true/String")
+    expanded.source.text.should contain("true/(String | Pointer(UInt8))")
     expander.diagnostics.should be_empty
   end
 

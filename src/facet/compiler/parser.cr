@@ -453,7 +453,7 @@ module Facet
         end
         colon = expect(TokenKind::Colon, "expected ':' in declaration")
         type_node = parse_type(-> { current.kind == TokenKind::Assign || current.kind == TokenKind::Semicolon || current.kind == TokenKind::KeywordEnd || (stop ? stop.call : false) })
-        if current.kind == TokenKind::Comma && peek1.kind == TokenKind::Identifier && peek2.kind == TokenKind::Assign &&
+        if !(stop && stop.call) && current.kind == TokenKind::Comma && peek1.kind == TokenKind::Identifier && peek2.kind == TokenKind::Assign &&
            !newline_between?(current.span.finish, peek1.span.start)
           @diagnostics << Diagnostic.new(current.span, "unexpected token: \",\"")
         end
@@ -2898,8 +2898,9 @@ module Facet
         }.includes?(token.kind)
         explicit_parens = current.kind == TokenKind::LParen &&
                           (token.kind != TokenKind::KeywordUninitialized || adjacent?(token, current))
+        parenthesized_args_span = nil.as(Span?)
         if explicit_parens
-          advance
+          start = advance
           if current.kind != TokenKind::RParen
             arg_index = 0
             loop do
@@ -2914,7 +2915,8 @@ module Facet
               break if current.kind == TokenKind::RParen
             end
           end
-          expect(TokenKind::RParen, "expected ')' after #{name}")
+          finish = expect(TokenKind::RParen, "expected ')' after #{name}")
+          parenthesized_args_span = Span.new(start.span.start, finish.span.finish)
         elsif token.kind == TokenKind::KeywordUninitialized
           if !current.eof? && current.kind != TokenKind::Pipe && current.kind != TokenKind::LBrace && expression_follows?
             argument = parse_expression(0, -> { expression_stop? })
@@ -2959,7 +2961,7 @@ module Facet
           return callee
         end
         args_finish = args_children.last?.try { |argument| node_span(argument).finish } || token.span.finish
-        args_span = Span.new(token.span.finish, args_finish)
+        args_span = parenthesized_args_span || Span.new(token.span.finish, args_finish)
         args = @arena.add_node(NodeKind::Args, args_span, args_children)
         span = Span.new(token.span.start, node_span(args).finish)
         @arena.add_node(NodeKind::Call, span, [callee, args])
@@ -3729,6 +3731,8 @@ module Facet
           return @arena.add_named_arg(symbol_id, span, value)
         elsif var_decl_start?(current.kind) && peek1.kind == TokenKind::Colon
           return parse_var_decl(-> { current.kind == TokenKind::Comma || current.kind == TokenKind::RParen || current.kind == TokenKind::RBracket })
+        elsif current.kind == TokenKind::KeywordDef
+          return parse_def(NodeKind::Def, TokenKind::KeywordEnd, "expected 'end' to close def")
         elsif current.kind == TokenKind::Ampersand
           return parse_block_argument(-> { current.kind == TokenKind::Comma || current.kind == TokenKind::RParen || current.kind == TokenKind::RBracket })
         end
@@ -6779,7 +6783,7 @@ module Facet
                    TokenKind::KeywordBegin, TokenKind::KeywordClass, TokenKind::KeywordModule,
                    TokenKind::KeywordStruct, TokenKind::KeywordLib, TokenKind::KeywordDef,
                    TokenKind::KeywordMacro, TokenKind::KeywordEnum, TokenKind::KeywordSelect,
-                   TokenKind::KeywordFun
+                   TokenKind::KeywordFun, TokenKind::KeywordAnnotation
                 if delimiter_depth == 0 && macro_block_opener_start?(current.kind, current.span.start, body_start)
                   unless current.kind == TokenKind::KeywordFun && block_stack.includes?(TokenKind::KeywordLib)
                     block_stack << current.kind
@@ -7012,6 +7016,7 @@ module Facet
 
       private def macro_tag_contains_end? : Bool
         offset = 0
+        do_depth = 0
         loop do
           tok = @tokens.peek(offset)
           return false if tok.kind == TokenKind::Eof
@@ -7019,7 +7024,15 @@ module Facet
             nxt = @tokens.peek(offset + 1)
             return false if nxt.kind == TokenKind::RBrace && adjacent?(tok, nxt)
           end
-          return true if tok.kind == TokenKind::KeywordEnd
+          if tok.kind == TokenKind::KeywordDo
+            do_depth += 1
+          elsif tok.kind == TokenKind::KeywordEnd
+            if do_depth > 0
+              do_depth -= 1
+            else
+              return true
+            end
+          end
           offset += 1
         end
       end

@@ -34,7 +34,9 @@ record UpstreamSemanticMacroCase,
   path_errors : Hash(String, String),
   expected : String?,
   expected_error_type : String?,
-  expected_error_message : String? do
+  expected_error_message : String?,
+  scope_abstract : Bool = false,
+  scope_constants : Array(JSON::Any) = [] of JSON::Any do
   include JSON::Serializable
 end
 
@@ -90,8 +92,17 @@ module UpstreamSemanticMacroParity
       Facet::Compiler::Source.new(expected, "facet-semantic-macro-expected.cr", Facet::Compiler::SourceKind::Virtual)
     )
     expected_ast = expected_parser.parse_file
-    return false unless actual_parser.diagnostics.empty? && expected_parser.diagnostics.empty?
-    FacetAstNormalizer.normalize(actual_ast) == FacetAstNormalizer.normalize(expected_ast)
+    actual_context = actual_parser.diagnostics.select { |diagnostic| caller_context_diagnostic?(diagnostic.message) }.map(&.message)
+    expected_context = expected_parser.diagnostics.select { |diagnostic| caller_context_diagnostic?(diagnostic.message) }.map(&.message)
+    return false unless actual_context == expected_context
+    return false unless actual_parser.diagnostics.all? { |diagnostic| caller_context_diagnostic?(diagnostic.message) }
+    return false unless expected_parser.diagnostics.all? { |diagnostic| caller_context_diagnostic?(diagnostic.message) }
+    FacetAstNormalizer.normalize_macro_output(actual_ast) == FacetAstNormalizer.normalize_macro_output(expected_ast)
+  end
+
+  private def caller_context_diagnostic?(message : String) : Bool
+    message.matches?(/\A'.+' before definition of '.+'\z/) ||
+      message == "dynamic constant assignment. Constants can only be declared at the top level or inside other types."
   end
 
   private def expand_call(fixture_case : UpstreamSemanticMacroCase, index : Int32) : UpstreamSemanticMacroResult
@@ -125,7 +136,11 @@ module UpstreamSemanticMacroParity
   private def expand_inline(fixture_case : UpstreamSemanticMacroCase, index : Int32) : UpstreamSemanticMacroResult
     expander = Facet::Compiler::MacroExpander.new(context: semantic_context(fixture_case))
     scope = fixture_case.scope.rchop("+")
-    type = Facet::Compiler::MacroTypeValue.new(scope, Facet::Compiler::MacroTypeKind::Class)
+    type = Facet::Compiler::MacroTypeValue.new(
+      scope,
+      Facet::Compiler::MacroTypeKind::Class,
+      abstract: fixture_case.scope_abstract
+    )
     actual = expander.expand_template(
       fixture_case.invocation,
       {
@@ -151,6 +166,8 @@ module UpstreamSemanticMacroParity
   private def semantic_context(fixture_case : UpstreamSemanticMacroCase) : Facet::Compiler::MacroExpansionContext
     paths = {} of String => Facet::Compiler::MacroSemanticPathSnapshot
     type_methods = {} of String => Array(Facet::Compiler::MacroSemanticMethodSnapshot)
+    type_constants = {} of String => Array(String)
+    type_constant_values = {} of String => Hash(String, String)
     fixture_case.resolved_paths.each do |name, raw_path|
       keys = fixture_case.free_vars[name]?.try do |raw_variable|
         raw_variable["keys"].as_a.map do |raw_key|
@@ -182,8 +199,28 @@ module UpstreamSemanticMacroParity
           type_methods["#{raw_path["source"].as_s}.class"] = semantic_methods(raw_methods)
         end
       end
+      if fixture_case.invocation.includes?(".methods") || fixture_case.definition.includes?(".methods") ||
+         fixture_case.invocation.includes?(".has_method?") || fixture_case.definition.includes?(".has_method?")
+        if raw_methods = raw_path["methods"]?.try(&.as_a?)
+          type_methods[raw_path["source"].as_s] = semantic_methods(raw_methods)
+        end
+      end
+      if fixture_case.invocation.includes?(".constants") || fixture_case.definition.includes?(".constants") ||
+         fixture_case.invocation.includes?(".has_constant?") || fixture_case.definition.includes?(".has_constant?")
+        if raw_constants = raw_path["constants"]?.try(&.as_a?)
+          type_constants[raw_path["source"].as_s] = raw_constants.map(&.as_s)
+        end
+      end
     end
     type_name = fixture_case.scope.rchop("+")
+    unless fixture_case.scope_constants.empty?
+      constants = {} of String => String
+      fixture_case.scope_constants.each do |raw_constant|
+        constants[raw_constant["name"].as_s] = raw_constant["source"].as_s
+      end
+      type_constants[type_name] = constants.keys
+      type_constant_values[type_name] = constants
+    end
     unless fixture_case.scope_class_methods.empty?
       type_methods["#{type_name}.class"] = semantic_methods(fixture_case.scope_class_methods)
     end
@@ -191,10 +228,14 @@ module UpstreamSemanticMacroParity
     Facet::Compiler::MacroExpansionContext.new(
       flags: fixture_case.flags,
       resolve_type_arguments: true,
+      lexical_scope: fixture_case.kind == "call" && type_name != "main" ? type_name : nil,
       semantic_paths: paths,
       semantic_path_errors: fixture_case.path_errors,
       type_instance_vars: instance_vars,
-      type_methods: type_methods
+      type_methods: type_methods,
+      type_constants: type_constants,
+      type_constant_values: type_constant_values,
+      type_abstractness: type_name == "main" ? ({} of String => Bool) : {type_name => fixture_case.scope_abstract}
     )
   end
 
