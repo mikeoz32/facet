@@ -1029,6 +1029,7 @@ module Facet
         start = advance
         children = [] of NodeId
         if !newline_between?(start.span.finish, current.span.start) &&
+           !(stop && stop.call) &&
            expression_follows? &&
            current.kind != TokenKind::Dot &&
            !(kind == NodeKind::Yield && {TokenKind::OrOr, TokenKind::AndAnd}.includes?(current.kind))
@@ -1953,7 +1954,8 @@ module Facet
             end
             # Stop at assignment operators so multi-assign `a, b = 1, 2` parses correctly
             # as Assign(Tuple(a, b), Tuple(1, 2)) instead of Tuple(a, Assign(b, Tuple(1, 2)))
-            right = parse_expression(0, -> { assignment_op?(current.kind) }, allow_var_decl, allow_type_apply)
+            tuple_stop = -> { assignment_op?(current.kind) || (stop ? stop.call : false) }
+            right = parse_expression(0, tuple_stop, allow_var_decl, allow_type_apply)
             children = [] of NodeId
             if @arena.node(left).kind == NodeKind::Tuple
               children.concat(@arena.children(left))

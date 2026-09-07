@@ -8,8 +8,18 @@
   for all 1,042/1,042 contracts executed by the official evaluator specs
   (including all 900 portable and 142 program-context contracts, plus all
   371/371 statically self-contained contracts). This covers all 25 official
-  `assert_macro_error` calls and all four nested `parse_type` failures; 133
-  semantic examples remain tracked explicitly for the next fixture layer.
+  `assert_macro_error` calls and all four nested `parse_type` failures.
+- Added a captured event corpus for all 133 official semantic macro examples:
+  147 expansion events (69 user-macro calls and 78 inline expansions), including
+  131 successful outputs and 16 errors. Facet currently matches 127/147 by exact
+  text or equivalent Facet semantic AST with no skipped events; all 20 remaining
+  compiler-context mismatches stay in the denominator and are reported by the
+  parity runner.
+- Added structured `@caller`, yielded-argument binding, `skip_file`, exact macro
+  `raise` and undefined-variable diagnostics, semantic `TypeNode` argument
+  resolution, tuple splat binding, and macro-control multi-assignment/bare-yield
+  parsing. Caller AST numeric literals now participate in numeric operations and
+  equality without losing their captured AST identity.
 - Added explicit macro expansion inputs for environment values, compiler flags,
   and captured command output, including cache fingerprinting. `env`, `flag?`,
   safe backtick replay, and `parse_type` validation close the final 23 portable

@@ -50,11 +50,13 @@ module Facet
     # depend on ambient process state and poison incremental expansion caches.
     class MacroExpansionContext
       getter fingerprint : UInt64
+      getter resolve_type_arguments : Bool
 
       def initialize(
         environment : Hash(String, String?) = {} of String => String?,
         flags : Array(String) = [] of String,
         command_outputs : Hash(String, String) = {} of String => String,
+        @resolve_type_arguments : Bool = false,
       )
         @environment = environment.dup
         @flags = flags.dup
@@ -67,6 +69,7 @@ module Facet
           @command_outputs.keys.sort.each do |command|
             io << "command:" << command << '=' << @command_outputs[command] << '\n'
           end
+          io << "resolve-type-arguments:" << @resolve_type_arguments << '\n'
         end
         @fingerprint = payload.hash
       end
@@ -262,6 +265,7 @@ module Facet
 
       getter diagnostics : Array(Diagnostic)
       getter side_effect_output : String
+      getter skipped_file : Bool
       getter cache_hits : Int32
       getter last_footprint : MacroFootprint?
 
@@ -272,6 +276,8 @@ module Facet
       )
         @diagnostics = [] of Diagnostic
         @side_effect_output = ""
+        @skipped_file = false
+        @macro_body_depth = 0
         @env_stack = [] of Hash(String, MacroValue)
         @root_env = {} of String => MacroValue
         @macro_var_stack = [] of Hash(String, String)
@@ -300,6 +306,7 @@ module Facet
         base_fp = fingerprint_text(ast.source, Span.new(0, ast.source.size)).hash.to_u64
         idx_fp = idx ? idx.fingerprint : 0_u64
         cache_key = base_fp ^ idx_fp ^ @context.fingerprint
+        @skipped_file = false
         if cached = @file_cache[cache_key]?
           @cache_hits += 1
           return cached
@@ -349,7 +356,7 @@ module Facet
 
         footprint.merge_macro_uses
         @last_footprint = footprint
-        @file_cache[cache_key] = current_ast
+        @file_cache[cache_key] = current_ast unless @skipped_file
         current_ast
       end
 
@@ -408,6 +415,10 @@ module Facet
           expansion = expand_macro(id, ast, index, footprint) || ""
           builder << expansion
           last = span.finish
+          if @skipped_file
+            last = end_pos
+            break
+          end
         end
 
         if last < end_pos
@@ -597,7 +608,8 @@ module Facet
 
         call_args = macro_call_args(node_id, ast)
         ref = select_macro_ref(refs, node_id, ast)
-        key = cache_key(ref, call_args, call_scope)
+        caller = macro_caller_value(node_id, ast)
+        key = cache_key(ref, call_args, call_scope, caller)
         cacheable = macro_cacheable?(ref)
         if cacheable
           if cached = @cache[key]?
@@ -605,7 +617,7 @@ module Facet
             return cached
           end
         end
-        result = expand_macro_def(ref, call_args, index, footprint, call_scope)
+        result = expand_macro_def(ref, call_args, index, footprint, call_scope, caller)
         @cache[key] = result if cacheable
         result
       end
@@ -834,13 +846,55 @@ module Facet
         {positional, named, nil}
       end
 
+      private def macro_caller_value(node_id : NodeId, ast : AstFile) : MacroValue
+        if structured = macro_structured_argument_value(node_id, ast)
+          return structured
+        end
+
+        name = macro_call_name(node_id, ast) || ast.node_string(node_id)
+        structure = MacroCapturedNode.new(
+          ast.node_string(node_id),
+          "Crystal::Call",
+          {
+            "receiver"  => macro_captured_syntax_node(nil),
+            "block_arg" => macro_captured_syntax_node(nil),
+            "block"     => macro_captured_syntax_node(nil),
+          },
+          {
+            "args"       => [] of MacroCapturedNode,
+            "named_args" => [] of MacroCapturedNode,
+          },
+          {"global?" => false}
+        )
+        metadata = MacroNodeMetadata.new(
+          fields: {"name" => MacroCapturedField.new(name, "identifier")},
+          structure: structure
+        )
+        MacroSyntaxValue.captured(ast.node_string(node_id), "Crystal::Call", metadata)
+      end
+
       # Crystal macro parameters are AST nodes. The lightweight evaluator uses
       # scalar values when it understands an expression, but an unsupported
       # expression must still survive as source-backed syntax for `{{arg}}`
       # substitution instead of being silently discarded.
       private def macro_argument_value(node_id : NodeId, ast : AstFile) : MacroValue
         if value = macro_structured_argument_value(node_id, ast)
+          if @context.resolve_type_arguments
+            if structure = value.metadata.try(&.structure)
+              if macro_captured_resolvable_type_syntax?(structure)
+                if resolved = macro_resolve_captured_type_syntax(structure)
+                  return resolved
+                end
+              end
+            end
+          end
           return value
+        end
+        node = ast.node(node_id)
+        if node.kind == NodeKind::Ident
+          name = ast.arena.symbols[node.payload_index]
+          return current_macro_env[name] if current_macro_env.has_key?(name)
+          return MacroSyntaxValue.identifier(name)
         end
         evaluation = eval_value(node_id, ast)
         evaluation ? evaluation.value : MacroSyntaxValue.code(ast.node_string(node_id))
@@ -2048,11 +2102,13 @@ module Facet
         index : ProgramIndex?,
         footprint : MacroFootprint?,
         call_scope : String,
+        caller : MacroValue? = nil,
       ) : String
         params_id = ref.ast.children(ref.node_id)[1]?
         body_id = ref.ast.children(ref.node_id)[3]?
         return "" unless body_id && params_id
         env = build_param_env(params_id, ref.ast, args)
+        env["@caller"] = MacroArrayValue.new([caller.as(MacroValue)]) if caller
         unless call_scope.empty?
           if type = macro_type_value(call_scope, index, absolute: true)
             env["@type"] = type
@@ -2060,12 +2116,14 @@ module Facet
         end
         @env_stack << env
         @macro_var_stack << {} of String => String
+        @macro_body_depth += 1
         text = begin
           body_span = ref.ast.node(body_id).span
           macros = [] of NodeId
           collect_macros(body_id, ref.ast, macros, index, footprint: footprint)
           expand_text(ref.ast, macros, index, body_span, footprint)
         ensure
+          @macro_body_depth -= 1
           @macro_var_stack.pop
           @env_stack.pop
         end
@@ -2073,14 +2131,15 @@ module Facet
         text
       end
 
-      private def cache_key(ref : DeclRef, args : MacroArguments, call_scope : String) : String
+      private def cache_key(ref : DeclRef, args : MacroArguments, call_scope : String, caller : MacroValue? = nil) : String
         def_node = ref.ast.node(ref.node_id)
         name_id = ref.ast.children(ref.node_id)[0]
         name = ref.ast.arena.symbols[ref.ast.node(name_id).payload_index]
         body_id = ref.ast.children(ref.node_id)[3]?
         body_fp = body_id ? fingerprint_text(ref.ast.source, ref.ast.node(body_id).span) : "nil"
         args_fp = fingerprint_args(args)
-        "#{ref.scope}|#{call_scope}|#{name}|#{body_fp}|#{args_fp}"
+        caller_fp = caller ? fingerprint_value(caller) : "nil"
+        "#{ref.scope}|#{call_scope}|#{name}|#{body_fp}|#{args_fp}|#{caller_fp}"
       end
 
       private def macro_cacheable?(ref : DeclRef) : Bool
@@ -2091,8 +2150,9 @@ module Facet
       private def contains_hygienic_macro_value?(node_id : NodeId, ast : AstFile) : Bool
         node = ast.node(node_id)
         return true if node.kind == NodeKind::MacroVar
-        if node.kind == NodeKind::Ident && ast.arena.symbols[node.payload_index] == "gensym"
-          return true
+        if node.kind == NodeKind::Ident
+          name = ast.arena.symbols[node.payload_index]
+          return true if name == "gensym" || name == "skip_file"
         end
         ast.children(node_id).any? { |child| contains_hygienic_macro_value?(child, ast) }
       end
@@ -2128,7 +2188,7 @@ module Facet
             name = splat_name(param_id, ast)
             splat_values = positional_args[positional_index..-1]? || [] of MacroValue
             positional_index = positional_args.size
-            env[name] = splat_values if name
+            env[name] = MacroTupleValue.new(splat_values) if name
           when NodeKind::DoubleSplat
             name = splat_name(param_id, ast)
             if name
@@ -2311,6 +2371,14 @@ module Facet
         when TokenKind::Unknown
           header = children[0]?
           return "" unless header
+          while ast.node(header).kind == NodeKind::Expressions && ast.children(header).size == 1
+            header = ast.children(header).first
+          end
+          header_node = ast.node(header)
+          if header_node.kind == NodeKind::Ident && ast.arena.symbols[header_node.payload_index] == "skip_file"
+            @skipped_file = true
+            return ""
+          end
           unless eval_value(header, ast)
             @diagnostics << Diagnostic.new(ast.node(header).span, "unsupported macro control expression")
           end
@@ -2434,7 +2502,11 @@ module Facet
               "wrong number of arguments for macro '::flag?' (given 0, expected 1)"
             )
           end
-          MacroEvaluation.new(MacroSyntaxValue.identifier(name))
+          if @macro_body_depth > 0 && name[0]?.try(&.ascii_lowercase?)
+            macro_diagnostic(node.span, "undefined macro variable '#{name}'")
+          else
+            MacroEvaluation.new(MacroSyntaxValue.identifier(name))
+          end
         when NodeKind::Const, NodeKind::Path, NodeKind::TypeApply
           source = ast.node_string(node_id)
           MacroEvaluation.new(MacroSyntaxValue.code(source))
@@ -2455,7 +2527,8 @@ module Facet
           value ? MacroEvaluation.new(MacroSyntaxValue.identifier(value)) : nil
         when NodeKind::Yield
           if block = current_macro_env[YIELD_ENV_KEY]?
-            MacroEvaluation.new(block)
+            return nil unless block.is_a?(MacroBlockValue)
+            eval_macro_yield(node_id, ast, block)
           else
             @diagnostics << Diagnostic.new(node.span, "can't use macro yield without a block")
             MacroEvaluation.new(nil)
@@ -2536,6 +2609,13 @@ module Facet
           end
           if callee.kind == NodeKind::Ident
             name = ast.arena.symbols[callee.payload_index]
+            if name == "raise"
+              arguments = syntax_tree(ast).node(node_id).arguments
+              return nil unless arguments.size == 1
+              message = eval_value(arguments.first.id, ast).try { |evaluation| macro_scalar_text(evaluation.value) }
+              return nil unless message
+              return macro_diagnostic(node.span, message)
+            end
             if name == "`"
               arguments = syntax_tree(ast).node(node_id).arguments
               return nil unless arguments.size == 1
@@ -2930,6 +3010,11 @@ module Facet
                     fields.try(&.["name_without_generic_args"]?) || fields.try(&.["name"]?)
                   end
           field ? MacroEvaluation.new(macro_captured_field_value(field)) : nil
+        when "raise"
+          return nil unless args.size == 1
+          message = macro_scalar_text(args.first)
+          return nil unless message
+          macro_diagnostic(span, message)
         when "filename", "line_number", "column_number", "end_line_number", "end_column_number"
           return nil unless args.empty? && receiver.is_a?(MacroSyntaxValue)
           metadata = receiver.metadata
@@ -4185,6 +4270,11 @@ module Facet
           MacroNumberValue.new(value.to_i128, kind, value.to_s, false)
         when MacroNumberValue
           value
+        when MacroSyntaxValue
+          if value.crystal_kind == "Crystal::NumberLiteral"
+            parsed = macro_number_literal(value.source)
+            parsed ? macro_number(parsed) : nil
+          end
         end
       end
 
@@ -4528,6 +4618,31 @@ module Facet
         evaluation
       end
 
+      private def eval_macro_yield(node_id : NodeId, ast : AstFile, block : MacroBlockValue) : MacroEvaluation?
+        values = [] of MacroValue
+        ast.children(node_id).each do |argument_id|
+          evaluation = eval_value(argument_id, ast)
+          return nil unless evaluation
+          values << evaluation.value
+        end
+
+        parser = Parser.new(Source.new(block.body, "facet:macro-yield", SourceKind::Virtual))
+        body_ast = parser.parse_file
+        parser.diagnostics.each { |diagnostic| @diagnostics << diagnostic }
+        return nil unless parser.diagnostics.empty?
+
+        env = current_macro_env.dup
+        block.parameters.each_with_index do |parameter, index|
+          env[parameter] = values[index] if index < values.size
+        end
+        expanded = expand_with_env(env) do
+          macros = [] of NodeId
+          collect_macros(body_ast.root, body_ast, macros, @active_index, footprint: @active_footprint)
+          macros.empty? ? body_ast.source.text : expand_text(body_ast, macros, @active_index, footprint: @active_footprint)
+        end
+        MacroEvaluation.new(MacroSyntaxValue.code("begin\n#{expanded} end"))
+      end
+
       private def eval_macro_parse_type(node_id : NodeId, ast : AstFile) : MacroEvaluation?
         node = syntax_tree(ast).node(node_id)
         arguments = node.arguments
@@ -4750,8 +4865,27 @@ module Facet
           end
         when NodeKind::Tuple
           values = macro_sequence_values(value) || [value] of MacroValue
-          ast.children(target_id).each_with_index do |child, index|
-            assign_macro_value(child, values[index]? || nil, ast)
+          targets = ast.children(target_id)
+          if splat_index = targets.index { |child| ast.node(child).kind == NodeKind::Splat }
+            targets[0, splat_index].each_with_index do |child, index|
+              assign_macro_value(child, values[index]? || nil, ast)
+            end
+            suffix_count = targets.size - splat_index - 1
+            targets[(splat_index + 1)..].each_with_index do |child, index|
+              value_index = values.size - suffix_count + index
+              assign_macro_value(child, value_index >= 0 ? values[value_index]? : nil, ast)
+            end
+            middle_finish = values.size - suffix_count
+            middle = middle_finish > splat_index ? values[splat_index...middle_finish] : [] of MacroValue
+            assign_macro_value(targets[splat_index], MacroArrayValue.new(middle.to_a), ast)
+          else
+            targets.each_with_index do |child, index|
+              assign_macro_value(child, values[index]? || nil, ast)
+            end
+          end
+        when NodeKind::Splat
+          if child = ast.children(target_id).first?
+            assign_macro_value(child, value, ast)
           end
         end
       end
@@ -4845,7 +4979,9 @@ module Facet
           end
         end
 
-        if op == TokenKind::Spaceship || left.is_a?(MacroNumberValue) || right.is_a?(MacroNumberValue)
+        if op == TokenKind::Spaceship || left.is_a?(MacroNumberValue) || right.is_a?(MacroNumberValue) ||
+           (left.is_a?(MacroSyntaxValue) && left.crystal_kind == "Crystal::NumberLiteral") ||
+           (right.is_a?(MacroSyntaxValue) && right.crystal_kind == "Crystal::NumberLiteral")
           if left_number = macro_number(left)
             if right_number = macro_number(right)
               if evaluation = eval_number_binary(op, left_number, right_number)

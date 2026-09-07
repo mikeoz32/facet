@@ -1592,7 +1592,7 @@ describe Facet::Compiler::MacroExpander do
     expanded = expander.expand_all([ast_use], index)
 
     expanded.first.source.text.should contain("A=10")
-    expanded.first.source.text.should contain("REST=[20]")
+    expanded.first.source.text.should contain("REST={20}")
     expanded.first.source.text.should contain("OPTS={bar: 30}")
   end
 
@@ -1700,6 +1700,91 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.scan("source_call(1)").size.should eq(2)
     expanded.source.text.should_not contain("wrap do")
     expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
+  it "passes macro yield arguments into caller block parameters" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro wrap(value)
+        {{ yield value }}
+      end
+
+      wrap("value") do |yielded|
+        {{ yielded }}
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(begin\n"value" end))
+    expander.diagnostics.should be_empty
+  end
+
+  it "exposes the caller call AST to user macros" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro choose(value)
+        {{ @caller.first.args[0] == 1 ? 1 : 'f' }}
+      end
+
+      choose(1)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should match(/\b1\s*\z/)
+    expander.diagnostics.should be_empty
+  end
+
+  it "supports skip_file and exact user-macro failures" do
+    skipped_expander = Facet::Compiler::MacroExpander.new
+    skipped = skipped_expander.expand_template(
+      "{% if true %}before{% skip_file %}after{% end %}",
+      {} of String => Facet::Compiler::MacroValue
+    )
+    skipped_expander.skipped_file.should be_true
+    skipped.should_not contain("after")
+    skipped_expander.diagnostics.should be_empty
+    skipped_again = skipped_expander.expand_template(
+      "{% if true %}before{% skip_file %}after{% end %}",
+      {} of String => Facet::Compiler::MacroValue
+    )
+    skipped_expander.skipped_file.should be_true
+    skipped_again.should eq(skipped)
+
+    undefined_source = Facet::Compiler::Source.new("macro fail(x)\n  {{ y }}\nend\nfail(1)")
+    undefined_ast = Facet::Compiler::Parser.new(undefined_source).parse_file
+    undefined_index = Facet::Compiler::Indexer.index_macros(undefined_ast)
+    undefined_expander = Facet::Compiler::MacroExpander.new(undefined_index)
+    undefined_expander.expand(undefined_ast, undefined_index)
+    undefined_expander.diagnostics.map(&.message).should eq(["undefined macro variable 'y'"])
+
+    raise_source = Facet::Compiler::Source.new(%(macro fail\n  {{ raise("OH NO") }}\nend\nfail))
+    raise_ast = Facet::Compiler::Parser.new(raise_source).parse_file
+    raise_index = Facet::Compiler::Indexer.index_macros(raise_ast)
+    raise_expander = Facet::Compiler::MacroExpander.new(raise_index)
+    raise_expander.expand(raise_ast, raise_index)
+    raise_expander.diagnostics.map(&.message).should eq(["OH NO"])
+  end
+
+  it "resolves type-syntax arguments only in semantic expansion context" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe(type)
+        {{ type.is_a?(TypeNode) }}/{{ type.name }}
+      end
+
+      describe(String)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    context = Facet::Compiler::MacroExpansionContext.new(resolve_type_arguments: true)
+    expander = Facet::Compiler::MacroExpander.new(index, context: context)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("true/String")
     expander.diagnostics.should be_empty
   end
 

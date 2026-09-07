@@ -45,8 +45,10 @@ for future name resolution, type checking, and compilation stages.
   `assert_macro_error` calls and four nested `parse_type` failures. Environment,
   flags, captured command output, and 106 structured `TypeNode` snapshots are
   explicit expansion inputs, and Facet does not execute arbitrary shell
-  commands. Another 133 semantic examples remain explicit; see
-  [macro parity](MACRO_PARITY.md).
+  commands. A second committed corpus runs all 147 expansion events emitted by
+  the 133 official semantic macro examples; 127/147 currently match exact text
+  or equivalent Facet semantic AST, with all 20 remaining events retained as
+  explicit mismatches. See [macro parity](MACRO_PARITY.md).
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
@@ -204,8 +206,10 @@ expanded. Ordinary calls resolve through lexical type scopes, select overloads
 by arity, and support bare zero-argument calls while respecting parameters and
 previous local assignments that shadow the macro name. Calls with an explicit
 receiver remain runtime calls. User macro blocks are source-backed values:
-`{{yield}}`, `{{block.body}}`, and `block.args` preserve caller syntax, and the
-block body and parameters participate in expansion cache keys.
+`{{yield}}`, yielded arguments, `{{block.body}}`, and `block.args` preserve
+caller syntax. `@caller` exposes the structured call AST, and the block body,
+parameters, and caller participate in expansion cache keys. Bare `skip_file`
+stops the active file expansion explicitly.
 
 The standard `getter`, `setter`, and `property` families (including class,
 query, bang, typed, and block forms) plus `record` have Facet-native lowering.
@@ -234,10 +238,12 @@ self-contained slice remains at 371/371. The static inventory still excludes
 602 context-dependent or dynamically constructed assertions, while runtime
 capture resolves those executions into explicit arguments, type-state
 snapshots, output effects, and exact expected errors. All 25 `assert_macro_error`
-calls in the official evaluator suites are covered; 133 semantic examples still
-require richer compiler behavior, generic/union type semantics, and broader
-name/type resolution. Unsupported non-output control expressions produce an
-explicit expansion diagnostic.
+calls in the official evaluator suites are covered. Across the 133 semantic
+examples, Facet runs all 147 captured expansion events and matches 127/147;
+the other 20 remain visible and require generic/free-variable context,
+compile-time constant state, or nested method-introspection control flow.
+Unsupported non-output control expressions produce an explicit expansion
+diagnostic.
 
 ## Architecture
 
@@ -381,7 +387,9 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 8,869 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Macro evaluator | 1,042 executed contracts | 1,042/1,042 exact expansions, diagnostics, and output effects |
+| Semantic macros | 133 examples; 147 expansion events | 127/147 exact-text or semantic-AST matches; all 20 mismatches retained |
+| Facet native suite | — | 9,002 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

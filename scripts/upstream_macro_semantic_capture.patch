@@ -1,0 +1,186 @@
+diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
+index b2378cd..30833f3 100644
+--- a/spec/spec_helper.cr
++++ b/spec/spec_helper.cr
+@@ -3,6 +3,7 @@
+ Crystal::Config.path = "#{__DIR__}/../src"
+ 
+ require "spec"
++require "json"
+ 
+ require "compiler/requires"
+ require "./support/syntax"
+@@ -40,6 +41,28 @@ record SemanticResult,
+   program : Program,
+   node : ASTNode
+ 
++private def record_semantic_macro_fixture(
++  input : String,
++  expanded : String?,
++  error_type : String? = nil,
++  error_message : String? = nil,
++)
++  path = ENV["FACET_SEMANTIC_MACRO_CAPTURE"]?
++  return unless path
++
++  File.open(path, "a") do |io|
++    JSON.build(io) do |json|
++      json.object do
++        json.field "input", input
++        json.field "expanded", expanded
++        json.field "error_type", error_type
++        json.field "error_message", error_message
++      end
++    end
++    io << '\n'
++  end
++end
++
+ def assert_type(str, *, inject_primitives = false, flags = nil, file = __FILE__, line = __LINE__, &)
+   result = semantic(str, flags: flags, inject_primitives: inject_primitives)
+   program = result.program
+@@ -73,13 +96,21 @@ private def inject_primitives(node : ASTNode)
+ end
+ 
+ def semantic(node : ASTNode, *, warnings = nil, wants_doc = false, flags = nil)
+-  program = new_program
+-  program.warnings = warnings if warnings
+-  program.flags.concat(flags.split) if flags
+-  program.wants_doc = wants_doc
+-  node = program.normalize node
+-  node = program.semantic node
+-  SemanticResult.new(program, node)
++  input = node.to_s
++  begin
++    program = new_program
++    program.warnings = warnings if warnings
++    program.flags.concat(flags.split) if flags
++    program.wants_doc = wants_doc
++    node = program.normalize node
++    node = program.semantic node
++    result = SemanticResult.new(program, node)
++    record_semantic_macro_fixture(input, result.node.to_s)
++    result
++  rescue ex
++    record_semantic_macro_fixture(input, nil, ex.class.name, ex.message)
++    raise ex
++  end
+ end
+ 
+ def top_level_semantic(code : String, wants_doc = false, inject_primitives = false)
+@@ -89,11 +120,19 @@ def top_level_semantic(code : String, wants_doc = false, inject_primitives = fal
+ end
+ 
+ def top_level_semantic(node : ASTNode, wants_doc = false)
+-  program = new_program
+-  program.wants_doc = wants_doc
+-  node = program.normalize node
+-  node, _ = program.top_level_semantic node
+-  SemanticResult.new(program, node)
++  input = node.to_s
++  begin
++    program = new_program
++    program.wants_doc = wants_doc
++    node = program.normalize node
++    node, _ = program.top_level_semantic node
++    result = SemanticResult.new(program, node)
++    record_semantic_macro_fixture(input, result.node.to_s)
++    result
++  rescue ex
++    record_semantic_macro_fixture(input, nil, ex.class.name, ex.message)
++    raise ex
++  end
+ end
+ 
+ def assert_normalize(from, to, flags = nil, *, filename = nil, file = __FILE__, line = __LINE__)
+@@ -312,6 +351,8 @@ def run(code, filename : String? = nil, inject_primitives = true, debug = Crysta
+     code = %(require "primitives"\n#{code})
+   end
+ 
++  semantic(code) if ENV["FACET_SEMANTIC_MACRO_CAPTURE"]?
++
+   # Code that requires the prelude doesn't run in LLVM's MCJIT
+   # because of missing linked functions (which are available
+   # in the current executable!), so instead we compile
+diff --git a/src/compiler/crystal/macros/macros.cr b/src/compiler/crystal/macros/macros.cr
+index 8d48be6..2122f37 100644
+--- a/src/compiler/crystal/macros/macros.cr
++++ b/src/compiler/crystal/macros/macros.cr
+@@ -19,13 +19,57 @@ class Crystal::Program
+   property macro_expanded_hook : Proc(Nil)? = nil
+   property macro_expansion_error_hook : Proc(::Exception?, Nil)? = nil
+ 
++  private def record_facet_semantic_macro_event(
++    kind : String,
++    invocation : String,
++    definition : String,
++    macro_name : String?,
++    scope : String,
++    invocation_location : Location?,
++    definition_location : Location?,
++    expanded : String?,
++    error : ::Exception? = nil,
++  )
++    path = ENV["FACET_SEMANTIC_MACRO_EVENT_CAPTURE"]?
++    return unless path
++
++    File.open(path, "a") do |io|
++      JSON.build(io) do |json|
++        json.object do
++          json.field "kind", kind
++          json.field "invocation", invocation
++          json.field "definition", definition
++          json.field "macro_name", macro_name
++          json.field "scope", scope
++          json.field "invocation_file", invocation_location.try(&.filename).try(&.to_s)
++          json.field "invocation_line", invocation_location.try(&.line_number)
++          json.field "definition_file", definition_location.try(&.filename).try(&.to_s)
++          json.field "definition_line", definition_location.try(&.line_number)
++          json.field "expanded", expanded
++          json.field "error_type", error.try(&.class.name)
++          json.field "error_message", error.try(&.message)
++        end
++      end
++      io << '\n'
++    end
++  end
++
+   def expand_macro(a_macro : Macro, call : Call, scope : Type, path_lookup : Type? = nil, a_def : Def? = nil)
+     check_call_to_deprecated_macro a_macro, call
+ 
+     interpreter = MacroInterpreter.new self, scope, path_lookup || scope, a_macro, call, a_def, in_macro: true
+     a_macro.body.accept interpreter
+-    {interpreter.to_s, interpreter.macro_expansion_pragmas}
++    expanded = interpreter.to_s
++    record_facet_semantic_macro_event(
++      "call", call.to_s, a_macro.to_s, a_macro.name, scope.to_s,
++      call.location, a_macro.location, expanded
++    )
++    {expanded, interpreter.macro_expansion_pragmas}
+   rescue ex
++    record_facet_semantic_macro_event(
++      "call", call.to_s, a_macro.to_s, a_macro.name, scope.to_s,
++      call.location, a_macro.location, nil, ex
++    )
+     raise ex if @program.macro_expansion_error_hook.nil?
+ 
+     # See SkipMacroCodeCoverageException's definition for more information.
+@@ -38,8 +82,17 @@ class Crystal::Program
+     interpreter = MacroInterpreter.new self, scope, path_lookup || scope, node.location, def: a_def, in_macro: false
+     interpreter.free_vars = free_vars
+     node.accept interpreter
+-    {interpreter.to_s, interpreter.macro_expansion_pragmas}
++    expanded = interpreter.to_s
++    record_facet_semantic_macro_event(
++      "inline", node.to_s, node.to_s, nil, scope.to_s,
++      node.location, node.location, expanded
++    )
++    {expanded, interpreter.macro_expansion_pragmas}
+   rescue ex
++    record_facet_semantic_macro_event(
++      "inline", node.to_s, node.to_s, nil, scope.to_s,
++      node.location, node.location, nil, ex
++    )
+     raise ex if @program.macro_expansion_error_hook.nil?
+ 
+     # See SkipMacroCodeCoverageException's definition for more information.

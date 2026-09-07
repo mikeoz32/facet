@@ -12,9 +12,10 @@ The first two source suites contain 731 declared examples, 973 syntactic
 `assert_macro` calls, and 25 `assert_macro_error` calls. Compile-time loops
 expand the successful assertions into 1,017 executions; together with the 25
 error assertions they form 1,042 runtime contracts. The semantic suites add 133
-examples. The committed fixtures retain both the static inventory and every
-executed evaluator input, so an unsupported contract cannot disappear from the
-denominator.
+examples which execute 147 distinct macro-expansion events: 69 user-macro calls
+and 78 inline expansions. The committed fixtures retain both the static
+inventory and every executed evaluator or semantic input, so an unsupported
+contract cannot disappear from the denominator.
 
 ## Current result
 
@@ -26,6 +27,15 @@ output side effects for six print-family contracts. It includes every one of
 the original 371 self-contained contracts plus argument-bearing,
 compile-time-generated, environment/flag, captured-command, and structured
 program-type-context cases from the executing Crystal 1.21 specs.
+
+Facet also matches **127/147 (86.39%)** captured expansion events from all 133
+official semantic macro examples. The gate runs every event, including all 131
+successful expansions and 16 expansion errors, and never removes an unsupported
+event from the denominator. It accepts exact text or equivalent Facet semantic
+AST for successful output and exact diagnostic text for failures. The remaining
+20 events are reported as mismatches: 11 require richer generic/free-variable or
+type-member context, six require compile-time constant state and constant
+resolution, and three require nested/verbatim method-introspection control flow.
 
 The runtime corpus contains 1,042 contracts in total:
 
@@ -51,9 +61,9 @@ The earlier static extractor intentionally excludes 602 syntactic
 The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, actual AST
 arguments, and all 25 evaluator error assertions, then classifies the resulting
-1,042 executions directly. Neither 1,042/1,042 nor 371/371 is a claim of
-complete Crystal macro compatibility. The 133 semantic examples remain an
-explicit backlog.
+1,042 executions directly. Neither 1,042/1,042, 371/371, nor 127/147 is a claim
+of complete Crystal macro compatibility. The semantic event corpus makes the
+remaining compiler-context work explicit and regression-tested.
 
 Every portable direct AST-field, returned-collection, `env`/`flag?`,
 `parse_type`, and backtick contract is exact. Ambient environment values,
@@ -125,7 +135,37 @@ CRYSTAL_CACHE_DIR=/tmp/facet-spec-cache \
     spec/upstream_macro_runtime_corpus_spec.cr
 ```
 
+Capture every expansion event executed by the official semantic macro suites:
+
+```bash
+git -C /path/to/crystal apply \
+  /path/to/facet/scripts/upstream_macro_semantic_capture.patch
+FACET_SEMANTIC_MACRO_EVENT_CAPTURE=/tmp/crystal-macro-semantic-events.jsonl \
+  /path/to/crystal/bin/crystal spec \
+  /path/to/crystal/spec/compiler/semantic/macro_spec.cr \
+  /path/to/crystal/spec/compiler/semantic/macro_overload_spec.cr
+
+CRYSTAL_CACHE_DIR=/tmp/facet-semantic-fixture-cache \
+  crystal run scripts/normalize_upstream_macro_semantic_capture.cr -- \
+  /tmp/crystal-macro-semantic-events.jsonl /path/to/crystal \
+  spec/fixtures/crystal_1_21_macro_semantic_events.jsonl
+```
+
+Run all 147 semantic events and refresh their no-regression baseline:
+
+```bash
+CRYSTAL_CACHE_DIR=/tmp/facet-semantic-parity-cache \
+  crystal run scripts/check_upstream_macro_semantic_parity.cr -- \
+  spec/fixtures/crystal_1_21_macro_semantic_events.jsonl \
+  spec/fixtures/crystal_1_21_macro_semantic_events_supported.txt
+
+CRYSTAL_CACHE_DIR=/tmp/facet-semantic-spec-cache \
+  crystal spec spec/upstream_macro_semantic_corpus_spec.cr
+```
+
 ## Next coverage layers
 
-1. Port the 133 semantic macro examples once name resolution and type semantics
-   can express their contracts without the Crystal compiler runtime.
+1. Capture explicit free-variable, type-member, and compile-time constant state
+   for the remaining 20 semantic expansion events.
+2. Implement the nested/verbatim method-introspection control expressions, then
+   drive the semantic event denominator from 127/147 to 147/147.
