@@ -35,7 +35,11 @@ record UpstreamMacroParityResult,
   end
 
   def matches?(fixture_case : UpstreamRuntimeMacroFixtureCase) : Bool
-    diagnostics.empty? && actual == fixture_case.expected
+    if expected_error = fixture_case.expected_error_message
+      diagnostics == [expected_error]
+    else
+      diagnostics.empty? && actual == fixture_case.expected
+    end
   end
 end
 
@@ -86,6 +90,10 @@ record UpstreamRuntimeMacroFixtureHeader,
   direct_case_count : Int32,
   contextual_case_count : Int32,
   argument_case_count : Int32,
+  environment_case_count : Int32,
+  flag_case_count : Int32,
+  command_case_count : Int32,
+  error_case_count : Int32,
   metadata_argument_count : Int32,
   structured_name_argument_count : Int32,
   structured_call_argument_count : Int32,
@@ -108,6 +116,10 @@ record UpstreamRuntimeMacroFixtureCase,
   body : String,
   expected : String,
   flags : JSON::Any,
+  environment : Hash(String, String?),
+  commands : Hash(String, String),
+  expected_error_type : String?,
+  expected_error_message : String?,
   contextual_program : Bool,
   arguments : Array(UpstreamRuntimeMacroArgument) do
   include JSON::Serializable
@@ -157,8 +169,13 @@ module UpstreamMacroParity
   end
 
   def expand(fixture_case : UpstreamRuntimeMacroFixtureCase, index : Int32) : UpstreamMacroParityResult
+    context = Facet::Compiler::MacroExpansionContext.new(
+      fixture_case.environment,
+      runtime_flags(fixture_case.flags),
+      fixture_case.commands
+    )
     if fixture_case.arguments.any? { |argument| captured_argument_required?(fixture_case.body, argument) }
-      expander = Facet::Compiler::MacroExpander.new
+      expander = Facet::Compiler::MacroExpander.new(context: context)
       arguments = {} of String => Facet::Compiler::MacroValue
       fixture_case.arguments.each do |argument|
         metadata = captured_metadata(argument) || Facet::Compiler::MacroNodeMetadata.new
@@ -196,7 +213,7 @@ module UpstreamMacroParity
     return UpstreamMacroParityResult.new(nil, diagnostics, [] of String) unless diagnostics.empty?
 
     program_index = Facet::Compiler::Indexer.index_macros([definition])
-    expander = Facet::Compiler::MacroExpander.new(program_index)
+    expander = Facet::Compiler::MacroExpander.new(program_index, context: context)
     expanded = expander.expand(call, program_index)
     diagnostics.concat(expander.diagnostics.map(&.message))
     output_diagnostics = expanded.diagnostics.map(&.message)
@@ -204,6 +221,17 @@ module UpstreamMacroParity
     UpstreamMacroParityResult.new(expanded.source.text.chomp(';'), diagnostics, output_diagnostics)
   rescue ex : Exception
     UpstreamMacroParityResult.new(nil, ["#{ex.class}: #{ex.message}"], [] of String)
+  end
+
+  private def runtime_flags(flags : JSON::Any) : Array(String)
+    case raw = flags.raw
+    when String
+      [raw]
+    when Array(JSON::Any)
+      raw.compact_map(&.as_s?)
+    else
+      [] of String
+    end
   end
 
   private def captured_metadata(argument : UpstreamRuntimeMacroArgument) : Facet::Compiler::MacroNodeMetadata?

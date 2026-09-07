@@ -50,6 +50,10 @@ record CapturedMacroCase,
   body : String,
   expected : String,
   flags : JSON::Any,
+  environment : Hash(String, String?),
+  commands : Hash(String, String),
+  expected_error_type : String?,
+  expected_error_message : String?,
   contextual_program : Bool,
   arguments : Array(CapturedMacroArgument) do
   include JSON::Serializable
@@ -63,6 +67,10 @@ record RuntimeMacroFixtureHeader,
   direct_case_count : Int32,
   contextual_case_count : Int32,
   argument_case_count : Int32,
+  environment_case_count : Int32,
+  flag_case_count : Int32,
+  command_case_count : Int32,
+  error_case_count : Int32,
   metadata_argument_count : Int32,
   structured_name_argument_count : Int32,
   structured_call_argument_count : Int32,
@@ -97,6 +105,10 @@ header = RuntimeMacroFixtureHeader.new(
   direct_case_count: cases.count { |fixture_case| !fixture_case.contextual_program },
   contextual_case_count: cases.count(&.contextual_program),
   argument_case_count: cases.count { |fixture_case| !fixture_case.arguments.empty? },
+  environment_case_count: cases.count { |fixture_case| !fixture_case.environment.empty? },
+  flag_case_count: cases.count { |fixture_case| !fixture_case.flags.raw.nil? },
+  command_case_count: cases.count { |fixture_case| !fixture_case.commands.empty? },
+  error_case_count: cases.count { |fixture_case| !fixture_case.expected_error_message.nil? },
   metadata_argument_count: cases.sum do |fixture_case|
     fixture_case.arguments.count do |argument|
       !argument.filename.nil? || !argument.end_filename.nil? || !argument.doc.nil?

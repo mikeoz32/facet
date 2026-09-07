@@ -46,6 +46,48 @@ module Facet
       fields : Hash(String, MacroCapturedField) = {} of String => MacroCapturedField,
       structure : MacroCapturedNode? = nil
 
+    # Explicit, snapshotted inputs for macro builtins whose result would otherwise
+    # depend on ambient process state and poison incremental expansion caches.
+    class MacroExpansionContext
+      getter fingerprint : UInt64
+
+      def initialize(
+        environment : Hash(String, String?) = {} of String => String?,
+        flags : Array(String) = [] of String,
+        command_outputs : Hash(String, String) = {} of String => String,
+      )
+        @environment = environment.dup
+        @flags = flags.dup
+        @command_outputs = command_outputs.dup
+        payload = String.build do |io|
+          @environment.keys.sort.each do |key|
+            io << "env:" << key << '=' << (@environment[key] || "<nil>") << '\n'
+          end
+          @flags.each { |flag| io << "flag:" << flag << '\n' }
+          @command_outputs.keys.sort.each do |command|
+            io << "command:" << command << '=' << @command_outputs[command] << '\n'
+          end
+        end
+        @fingerprint = payload.hash
+      end
+
+      def env(name : String) : String?
+        @environment[name]?
+      end
+
+      def flag(name : String) : String | Bool
+        return @flags.includes?(name) if name.includes?('=')
+        entry = @flags.reverse.find { |flag| flag == name || flag.starts_with?("#{name}=") }
+        return false unless entry
+        return true if entry == name
+        entry.byte_slice(name.bytesize + 1, entry.bytesize - name.bytesize - 1)
+      end
+
+      def command_output(command : String) : String?
+        @command_outputs[command]?
+      end
+    end
+
     record MacroSyntaxValue,
       source : String,
       value : String,
@@ -222,7 +264,11 @@ module Facet
       getter cache_hits : Int32
       getter last_footprint : MacroFootprint?
 
-      def initialize(@index : ProgramIndex? = nil, @max_passes : Int32 = 8)
+      def initialize(
+        @index : ProgramIndex? = nil,
+        @max_passes : Int32 = 8,
+        @context : MacroExpansionContext = MacroExpansionContext.new,
+      )
         @diagnostics = [] of Diagnostic
         @env_stack = [] of Hash(String, MacroValue)
         @root_env = {} of String => MacroValue
@@ -251,7 +297,7 @@ module Facet
         current_ast = ast
         base_fp = fingerprint_text(ast.source, Span.new(0, ast.source.size)).hash.to_u64
         idx_fp = idx ? idx.fingerprint : 0_u64
-        cache_key = base_fp ^ idx_fp
+        cache_key = base_fp ^ idx_fp ^ @context.fingerprint
         if cached = @file_cache[cache_key]?
           @cache_hits += 1
           return cached
@@ -2473,6 +2519,26 @@ module Facet
           end
           if callee.kind == NodeKind::Ident
             name = ast.arena.symbols[callee.payload_index]
+            if name == "`"
+              arguments = syntax_tree(ast).node(node_id).arguments
+              return nil unless arguments.size == 1
+              command = eval_value(arguments.first.id, ast).try { |evaluation| macro_scalar_text(evaluation.value) }
+              return nil unless command
+              output = @context.command_output(command)
+              return nil unless output
+              return MacroEvaluation.new(MacroSyntaxValue.code(output))
+            end
+            if name == "env"
+              arguments = syntax_tree(ast).node(node_id).arguments
+              return nil unless arguments.size == 1
+              key = eval_value(arguments.first.id, ast).try { |evaluation| macro_scalar_text(evaluation.value) }
+              return nil unless key
+              value = @context.env(key)
+              return MacroEvaluation.new(value ? MacroSyntaxValue.string(value) : nil)
+            end
+            if name == "parse_type"
+              return eval_macro_parse_type(node_id, ast)
+            end
             if name == "gensym"
               args = ast.children(node_id)[1]?
               base = "tmp"
@@ -2493,7 +2559,10 @@ module Facet
               end
               if name == "flag?"
                 return nil unless values.size == 1
-                return MacroEvaluation.new(false)
+                flag = macro_scalar_text(values.first)
+                return nil unless flag
+                value = @context.flag(flag)
+                return MacroEvaluation.new(value.is_a?(String) ? MacroSyntaxValue.string(value) : value)
               end
               return nil unless values.size == 2
               left = macro_scalar_text(values[0])
@@ -4285,6 +4354,50 @@ module Facet
           parent[name] = value unless block.parameters.includes?(name)
         end
         evaluation
+      end
+
+      private def eval_macro_parse_type(node_id : NodeId, ast : AstFile) : MacroEvaluation?
+        node = syntax_tree(ast).node(node_id)
+        arguments = node.arguments
+        return nil unless arguments.size == 1
+        evaluation = eval_value(arguments.first.id, ast)
+        return nil unless evaluation
+        value = evaluation.value
+        unless value.is_a?(MacroSyntaxValue) && {
+                 MacroSyntaxKind::StringLiteral,
+                 MacroSyntaxKind::GeneratedStringLiteral,
+               }.includes?(value.kind)
+          @diagnostics << Diagnostic.new(
+            node.span,
+            "argument to parse_type must be a StringLiteral, not #{macro_class_name(value)}"
+          )
+          return MacroEvaluation.new(nil)
+        end
+
+        type_text = value.value
+        if type_text.empty?
+          @diagnostics << Diagnostic.new(node.span, "argument to parse_type cannot be an empty value")
+          return MacroEvaluation.new(nil)
+        end
+
+        prefix = "__facet_parse_type_value : "
+        source = Source.new("#{prefix}#{type_text}", "facet:macro-parse-type")
+        parser = Parser.new(source)
+        parsed = parser.parse_file
+        tree = SyntaxTree.new(parsed)
+        declaration = tree.root.descendants(NodeKind::VarDecl).first?
+        declared_type = declaration.try(&.declared_type)
+        remainder = declared_type.try do |type_node|
+          source.text.byte_slice(type_node.span.finish, source.size - type_node.span.finish)
+        end
+        unless parser.diagnostics.empty? && declared_type && remainder.try(&.strip.empty?)
+          @diagnostics << Diagnostic.new(node.span, "Invalid type name: #{type_text.inspect}")
+          return MacroEvaluation.new(nil)
+        end
+
+        MacroEvaluation.new(
+          macro_structured_type_syntax_argument_value(declared_type, parsed) || MacroSyntaxValue.code(type_text)
+        )
       end
 
       private def eval_macro_index(receiver : MacroValue, index : MacroValue) : MacroEvaluation?

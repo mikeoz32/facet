@@ -16,6 +16,10 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.direct_case_count.should eq(900)
     runtime_macro_header.contextual_case_count.should eq(117)
     runtime_macro_header.argument_case_count.should eq(578)
+    runtime_macro_header.environment_case_count.should eq(2)
+    runtime_macro_header.flag_case_count.should eq(15)
+    runtime_macro_header.command_case_count.should eq(2)
+    runtime_macro_header.error_case_count.should eq(4)
     runtime_macro_header.metadata_argument_count.should eq(10)
     runtime_macro_header.structured_name_argument_count.should eq(198)
     runtime_macro_header.structured_call_argument_count.should eq(25)
@@ -32,7 +36,7 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(877)
+    supported_runtime_macro_indices.size.should eq(900)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -604,8 +608,14 @@ describe "Crystal 1.21 runtime macro corpus" do
 
     it "matches executed upstream macro contract #{index}: #{preview.dump}" do
       result = UpstreamMacroParity.expand(fixture_case, index)
-      result.diagnostics.should be_empty
-      result.actual.should eq(fixture_case.expected)
+      result.matches?(fixture_case).should be_true
+      if expected_error = fixture_case.expected_error_message
+        fixture_case.expected_error_type.should eq("Crystal::TypeException")
+        result.diagnostics.should eq([expected_error])
+      else
+        result.diagnostics.should be_empty
+        result.actual.should eq(fixture_case.expected)
+      end
     end
   end
 

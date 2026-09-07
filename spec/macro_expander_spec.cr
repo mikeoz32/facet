@@ -24,6 +24,44 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "uses explicit environment, flag, and command inputs" do
+    context = Facet::Compiler::MacroExpansionContext.new(
+      {"FOO" => "bar", "MISSING" => nil},
+      ["foo", "target=x"],
+      {"true" => "", "echo facet" => "facet\n"}
+    )
+    expander = Facet::Compiler::MacroExpander.new(context: context)
+    arguments = {} of String => Facet::Compiler::MacroValue
+    output = expander.expand_template(<<-CR, arguments)
+      {{env("FOO")}}|{{env("MISSING")}}|{{flag?(:foo)}}|{{flag?(:target)}}|{{flag?("target=x")}}|{{ `true` }}|{{ `echo facet` }}
+    CR
+
+    output.lstrip.should eq(%("bar"|nil|true|"x"|true||facet\n))
+    expander.diagnostics.should be_empty
+
+    uncaptured = Facet::Compiler::MacroExpander.new
+    uncaptured.expand_template(%({{ `facet-command-must-not-run` }}), arguments).should eq(%(`facet-command-must-not-run`))
+    uncaptured.diagnostics.should be_empty
+  end
+
+  it "validates parse_type and reports the official diagnostics" do
+    arguments = {} of String => Facet::Compiler::MacroValue
+    valid = Facet::Compiler::MacroExpander.new
+    valid.expand_template(%({{parse_type "Foo(Int32)"}}), arguments).should eq("Foo(Int32)")
+    valid.diagnostics.should be_empty
+
+    {
+      %({{parse_type ""}})              => "argument to parse_type cannot be an empty value",
+      %({{parse_type "100Foo"}})        => %(Invalid type name: "100Foo"),
+      %({{parse_type "Foo(Int32)100"}}) => %(Invalid type name: "Foo(Int32)100"),
+      %({{parse_type :Foo}})            => "argument to parse_type must be a StringLiteral, not SymbolLiteral",
+    }.each do |body, expected_diagnostic|
+      expander = Facet::Compiler::MacroExpander.new
+      expander.expand_template(body, arguments).should eq("nil")
+      expander.diagnostics.map(&.message).should eq([expected_diagnostic])
+    end
+  end
+
   it "preserves direct collection and range syntax and evaluates string interpolation" do
     source = Facet::Compiler::Source.new(<<-CR)
       array = {{[1, 2, 3]}}

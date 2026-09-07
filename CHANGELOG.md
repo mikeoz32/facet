@@ -4,10 +4,15 @@
 
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet
-  now matches exact output for 877/900 portable contracts executed by the
-  official evaluator specs (including all 371/371 statically self-contained
-  contracts); 117 program-context contracts and 133 semantic examples remain
-  tracked explicitly for the next fixture layers.
+  now matches exact output or expected diagnostic text for all 900/900 portable
+  contracts executed by the official evaluator specs (including all 371/371
+  statically self-contained contracts); 117 program-context contracts and 133
+  semantic examples remain tracked explicitly for the next fixture layers.
+- Added explicit macro expansion inputs for environment values, compiler flags,
+  and captured command output, including cache fingerprinting. `env`, `flag?`,
+  safe backtick replay, and `parse_type` validation close the final 23 portable
+  runtime contracts. Facet does not execute arbitrary shell commands, and the
+  four official `parse_type` failures require exact diagnostic parity.
 - Preserved captured AST start/end locations and documentation through
   source-independent macro template expansion, covering `filename`, line/column,
   `doc`, and `doc_comment` contracts from the official runtime corpus.

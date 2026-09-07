@@ -39,10 +39,13 @@ for future name resolution, type checking, and compilation stages.
 - A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
 - A committed Crystal 1.21 macro contract corpus. Facet matches exact expansion
-  text for 877/900 portable contracts captured from the executing official
-  evaluator specs; all 371 statically self-contained contracts remain exact.
-  Another 117 runtime contracts requiring mutated compiler program state and
-  133 semantic examples remain explicit; see [macro parity](MACRO_PARITY.md).
+  or expected diagnostic text for all 900/900 portable contracts captured from
+  the executing official evaluator specs; all 371 statically self-contained
+  contracts remain exact. Environment, flags, and captured command output are
+  explicit expansion inputs, and Facet does not execute arbitrary shell
+  commands. Another 117 runtime contracts requiring mutated compiler program
+  state and 133 semantic examples remain explicit; see
+  [macro parity](MACRO_PARITY.md).
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
@@ -225,11 +228,14 @@ that use `%name` or `gensym` bypass the text cache so cached output cannot
 reintroduce identifier collisions.
 
 This remains a partial macro interpreter, not Crystal's complete compiler macro
-engine. The self-contained upstream evaluator slice is at 371/371, but 602
-contextual evaluator assertions and 133 semantic examples still require
-injected compiler objects, error contracts, flags/environment dependencies,
-generic/union type semantics, and broader name/type resolution. Unsupported
-non-output control expressions produce an explicit expansion diagnostic.
+engine. The portable runtime slice is at 900/900 and the earlier statically
+self-contained slice remains at 371/371. The static inventory still excludes
+602 context-dependent or dynamically constructed assertions, while runtime
+capture resolves many of those into the portable gate. The remaining 117
+program-context runtime contracts, broader error contracts, and 133 semantic
+examples require richer compiler state, generic/union type semantics, and
+broader name/type resolution. Unsupported non-output control expressions
+produce an explicit expansion diagnostic.
 
 ## Architecture
 

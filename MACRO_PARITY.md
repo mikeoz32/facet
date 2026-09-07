@@ -16,16 +16,18 @@ so an unsupported contract cannot disappear from the denominator.
 
 ## Current result
 
-Facet matches Crystal's exact expansion text for **877/900 (97.44%)** portable
-runtime contracts. This is the primary no-regression gate. It includes every
-one of the original 371 self-contained contracts plus argument-bearing and
-compile-time-generated cases captured from the executing Crystal 1.21 specs.
+Facet matches **900/900 (100%)** portable runtime contracts. This is the primary
+no-regression gate. It checks exact expansion text for successful evaluations
+and exact diagnostic text for four expected `parse_type` failures. It includes
+every one of the original 371 self-contained contracts plus argument-bearing,
+compile-time-generated, environment/flag, and captured-command cases from the
+executing Crystal 1.21 specs.
 
 The runtime corpus contains 1,017 contracts in total:
 
 | Runtime slice | Count | Current status |
 | --- | ---: | --- |
-| Direct, source-replayable calls | 900 | 877 exact; 23 explicit mismatches |
+| Direct, source-replayable calls | 900 | 900 exact; full portable slice |
 | Program-context calls | 117 | Captured, but not replayed until the fixture models compiler program mutations |
 | Calls carrying AST arguments | 578 | Included in the totals above; their exact AST kind and source rendering are retained |
 
@@ -44,13 +46,16 @@ Another 602 `assert_macro` calls remain outside this first executable slice:
 The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, and actual AST
 arguments, then classifies the resulting 1,017 executions directly. Neither
-877/900 nor 371/371 is a claim of complete Crystal macro compatibility. The 23
-direct mismatches, 117 program-context contracts, diagnostic/error assertions,
-and 133 semantic examples remain explicit backlog.
+900/900 nor 371/371 is a claim of complete Crystal macro compatibility. The 117
+program-context contracts, broader diagnostic/error assertions, and 133
+semantic examples remain explicit backlog.
 
-Every direct mismatch that depended on an injected AST-node field or returned
-AST collection is now exact. The remaining direct set is limited to ambient
-`env`/`flag?` inputs, invalid `parse_type` calls, and shell execution.
+Every portable direct AST-field, returned-collection, `env`/`flag?`,
+`parse_type`, and backtick contract is exact. Ambient environment values,
+compiler flags, and command outputs are explicit `MacroExpansionContext`
+inputs and participate in expansion cache fingerprints. Facet never executes
+an arbitrary shell command: a caller must provide its captured output, and an
+unknown command remains source-backed.
 
 Output-fragment diagnostics are tracked separately from evaluator diagnostics.
 An official macro result such as `1, 2, 3` is a valid splat fragment in its
@@ -111,12 +116,10 @@ CRYSTAL_CACHE_DIR=/tmp/facet-spec-cache \
 
 ## Next coverage layers
 
-1. Model ambient environment and compiler flags as explicit expansion inputs,
-   then cover invalid `parse_type` results and sandboxed shell execution. The
-   portable direct corpus no longer has an AST-node-field mismatch.
-2. Add expected diagnostic and exception parity for `assert_macro_error` and
-   nested `expect_raises` contracts.
-3. Model compiler program/type setup as explicit expansion dependencies for
+1. Add expected diagnostic and exception parity for the broader
+   `assert_macro_error` inventory. The four nested `parse_type`
+   `expect_raises` contracts are already in the runtime gate.
+2. Model compiler program/type setup as explicit expansion dependencies for
    the 117 contextual runtime contracts.
-4. Port the 133 semantic macro examples once name resolution and type semantics
+3. Port the 133 semantic macro examples once name resolution and type semantics
    can express their contracts without the Crystal compiler runtime.
