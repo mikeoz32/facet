@@ -71,7 +71,8 @@ record RuntimeMacroFixtureHeader,
   structured_type_declaration_argument_count : Int32,
   structured_asm_argument_count : Int32,
   structured_type_syntax_argument_count : Int32,
-  structured_expression_argument_count : Int32 do
+  structured_expression_argument_count : Int32,
+  structured_collection_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -151,6 +152,13 @@ header = RuntimeMacroFixtureHeader.new(
         {"Crystal::ProcLiteral", "Crystal::ProcPointer", "Crystal::Cast", "Crystal::NilableCast",
          "Crystal::If", "Crystal::Assign", "Crystal::MultiAssign", "Crystal::RangeLiteral",
          "Crystal::And", "Crystal::Or"}.includes?(node.kind)
+      end || false
+    end
+  end,
+  structured_collection_argument_count: cases.sum do |fixture_case|
+    fixture_case.arguments.count do |argument|
+      argument.structure.try do |node|
+        {"Crystal::ArrayLiteral", "Crystal::HashLiteral"}.includes?(node.kind)
       end || false
     end
   end,

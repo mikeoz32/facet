@@ -154,6 +154,34 @@ describe Facet::Compiler::MacroExpander do
     captured_expander.diagnostics.should be_empty
   end
 
+  it "exposes typed collection metadata only at the macro-argument boundary" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_array(x)
+        array_of = {{x.of}}
+      end
+
+      macro describe_hash(x)
+        hash_of_key = {{x.of_key}}
+        hash_of_value = {{x.of_value}}
+      end
+
+      describe_array([] of Int64)
+      describe_hash({} of String => UInt8)
+    CR
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+    parser.diagnostics.should be_empty
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("array_of = Int64")
+    expanded.source.text.should contain("hash_of_key = String")
+    expanded.source.text.should contain("hash_of_value = UInt8")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "preserves captured AST source locations and documentation" do
     location = Facet::Compiler::MacroSourceLocation.new("sample.cr", 3, 7)
     metadata = Facet::Compiler::MacroNodeMetadata.new(

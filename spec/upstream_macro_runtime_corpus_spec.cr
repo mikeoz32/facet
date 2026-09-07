@@ -25,10 +25,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_asm_argument_count.should eq(20)
     runtime_macro_header.structured_type_syntax_argument_count.should eq(46)
     runtime_macro_header.structured_expression_argument_count.should eq(38)
+    runtime_macro_header.structured_collection_argument_count.should eq(12)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(810)
+    supported_runtime_macro_indices.size.should eq(815)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -271,7 +272,7 @@ describe "Crystal 1.21 runtime macro corpus" do
     path.booleans["global?"].should be_false
   end
 
-  it "retains authoritative expression structure" do
+  it "retains authoritative expression and collection structure" do
     proc_literal_contract = runtime_macro_cases.find do |fixture_case|
       fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2743
     end.not_nil!
@@ -348,6 +349,33 @@ describe "Crystal 1.21 runtime macro corpus" do
     disjunction = or_contract.arguments.first.structure.not_nil!
     disjunction.kind.should eq("Crystal::Or")
     disjunction.fields.values_at("left", "right").map(&.source).to_a.should eq(["1", "2"])
+
+    array_of_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1065
+    end.not_nil!
+    array_of = array_of_contract.arguments.first.structure.not_nil!
+    array_of.kind.should eq("Crystal::ArrayLiteral")
+    array_of.fields["of"].source.should eq("Int64")
+    array_of.fields["type"].kind.should eq("Crystal::Nop")
+
+    named_array_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1073
+    end.not_nil!
+    named_array = named_array_contract.arguments.first.structure.not_nil!
+    named_array.fields["type"].source.should eq("Deque")
+
+    hash_of_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1130
+    end.not_nil!
+    hash_of = hash_of_contract.arguments.first.structure.not_nil!
+    hash_of.kind.should eq("Crystal::HashLiteral")
+    hash_of.fields["of_key"].source.should eq("String")
+    hash_of.fields["of_value"].source.should eq("UInt8")
+
+    named_hash_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1153
+    end.not_nil!
+    named_hash_contract.arguments.first.structure.not_nil!.fields["type"].source.should eq("Headers")
   end
 
   it "retains upstream AST location and documentation metadata" do

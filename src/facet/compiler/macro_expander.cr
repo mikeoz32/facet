@@ -800,6 +800,9 @@ module Facet
 
       private def macro_structured_argument_value(node_id : NodeId, ast : AstFile) : MacroSyntaxValue?
         node = syntax_tree(ast).node(node_id)
+        if value = macro_structured_collection_argument_value(node, ast)
+          return value
+        end
         if value = macro_structured_expression_argument_value(node, ast)
           return value
         end
@@ -856,6 +859,42 @@ module Facet
         end
         metadata = MacroNodeMetadata.new(fields: name_fields, structure: structure)
         MacroSyntaxValue.captured(source, "Crystal::Call", metadata)
+      end
+
+      private def macro_structured_collection_argument_value(node : SyntaxNode, ast : AstFile) : MacroSyntaxValue?
+        fields = {} of String => MacroCapturedNode
+        collections = {} of String => Array(MacroCapturedNode)
+        kind = case node.kind
+               when NodeKind::Array
+                 return nil unless node.raw.flags == 1 && !node.children.empty?
+                 elements = node.children[0...-1]
+                 fields["of"] = macro_captured_syntax_node(node.children.last)
+                 fields["type"] = macro_captured_syntax_node(nil)
+                 collections["elements"] = elements.map { |element| macro_captured_syntax_node(element) }
+                 "Crystal::ArrayLiteral"
+               when NodeKind::Hash
+                 return nil unless node.raw.flags == 1 && node.children.size >= 2
+                 entries = node.children[0...-2]
+                 fields["of_key"] = macro_captured_syntax_node(node.children[-2])
+                 fields["of_value"] = macro_captured_syntax_node(node.children[-1])
+                 fields["type"] = macro_captured_syntax_node(nil)
+                 collections["entries"] = entries.map { |entry| macro_captured_hash_entry(entry, ast) }
+                 "Crystal::HashLiteral"
+               else
+                 return nil
+               end
+        structure = MacroCapturedNode.new(node.text, kind, fields, collections)
+        metadata_fields = fields.transform_values { |field| MacroCapturedField.new(field.source, field.kind) }
+        MacroSyntaxValue.captured(node.text, kind, MacroNodeMetadata.new(fields: metadata_fields, structure: structure))
+      end
+
+      private def macro_captured_hash_entry(node : SyntaxNode, ast : AstFile) : MacroCapturedNode
+        fields = {} of String => MacroCapturedNode
+        if node.kind == NodeKind::Binary && macro_operator?(node, ast, TokenKind::HashRocket)
+          fields["key"] = macro_captured_syntax_node(node.child(0))
+          fields["value"] = macro_captured_syntax_node(node.child(1))
+        end
+        MacroCapturedNode.new(node.text, "Crystal::HashLiteral::Entry", fields)
       end
 
       private def macro_structured_case_argument_value(node : SyntaxNode) : MacroSyntaxValue

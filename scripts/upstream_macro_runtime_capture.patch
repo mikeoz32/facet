@@ -10,7 +10,7 @@ index b2378cd..7248eac 100644
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,601 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,634 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -195,6 +195,10 @@ index b2378cd..7248eac 100644
 +    facet_macro_capture_range_literal(node)
 +  when Crystal::And, Crystal::Or
 +    facet_macro_capture_binary_op(node)
++  when Crystal::ArrayLiteral
++    facet_macro_capture_array_literal(node)
++  when Crystal::HashLiteral
++    facet_macro_capture_hash_literal(node)
 +  when Crystal::FunDef
 +    facet_macro_capture_fun_def(node)
 +  when Crystal::Macro
@@ -284,6 +288,35 @@ index b2378cd..7248eac 100644
 +    "right" => facet_macro_capture_node(node.right),
 +  }
 +  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_array_literal(node : Crystal::ArrayLiteral) : FacetMacroCapturedNode
++  fields = {
++    "of"   => facet_macro_capture_node(node.of),
++    "type" => facet_macro_capture_node(node.name),
++  }
++  collections = {
++    "elements" => node.elements.map { |element| facet_macro_capture_node(element) },
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
++end
++
++private def facet_macro_capture_hash_literal(node : Crystal::HashLiteral) : FacetMacroCapturedNode
++  fields = {
++    "of_key"   => facet_macro_capture_node(node.of.try(&.key)),
++    "of_value" => facet_macro_capture_node(node.of.try(&.value)),
++    "type"     => facet_macro_capture_node(node.name),
++  }
++  collections = {
++    "entries" => node.entries.map do |entry|
++      entry_fields = {
++        "key"   => facet_macro_capture_node(entry.key),
++        "value" => facet_macro_capture_node(entry.value),
++      }
++      FacetMacroCapturedNode.new(entry.to_s, "Crystal::HashLiteral::Entry", entry_fields)
++    end,
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
 +end
 +
 +private def facet_macro_capture_type_declaration(node : Crystal::TypeDeclaration) : FacetMacroCapturedNode
