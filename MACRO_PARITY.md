@@ -28,14 +28,14 @@ the original 371 self-contained contracts plus argument-bearing,
 compile-time-generated, environment/flag, captured-command, and structured
 program-type-context cases from the executing Crystal 1.21 specs.
 
-Facet also matches **127/147 (86.39%)** captured expansion events from all 133
+Facet also matches **147/147 (100%)** captured expansion events from all 133
 official semantic macro examples. The gate runs every event, including all 131
 successful expansions and 16 expansion errors, and never removes an unsupported
 event from the denominator. It accepts exact text or equivalent Facet semantic
-AST for successful output and exact diagnostic text for failures. The remaining
-20 events are reported as mismatches: 11 require richer generic/free-variable or
-type-member context, six require compile-time constant state and constant
-resolution, and three require nested/verbatim method-introspection control flow.
+AST for successful output and exact diagnostic text for failures. Generic and
+free-variable bindings, named-tuple key locations, type-member snapshots,
+compile-time constants, resolved paths and path errors are explicit fixture
+inputs that participate in the expansion-context fingerprint.
 
 The runtime corpus contains 1,042 contracts in total:
 
@@ -61,9 +61,10 @@ The earlier static extractor intentionally excludes 602 syntactic
 The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, actual AST
 arguments, and all 25 evaluator error assertions, then classifies the resulting
-1,042 executions directly. Neither 1,042/1,042, 371/371, nor 127/147 is a claim
+1,042 executions directly. Neither 1,042/1,042, 371/371, nor 147/147 is a claim
 of complete Crystal macro compatibility. The semantic event corpus makes the
-remaining compiler-context work explicit and regression-tested.
+dedicated official macro-suite behavior explicit and regression-tested without
+embedding Crystal compiler objects in Facet.
 
 Every portable direct AST-field, returned-collection, `env`/`flag?`,
 `parse_type`, and backtick contract is exact. Ambient environment values,
@@ -165,7 +166,7 @@ CRYSTAL_CACHE_DIR=/tmp/facet-semantic-spec-cache \
 
 ## Next coverage layers
 
-1. Capture explicit free-variable, type-member, and compile-time constant state
-   for the remaining 20 semantic expansion events.
-2. Implement the nested/verbatim method-introspection control expressions, then
-   drive the semantic event denominator from 127/147 to 147/147.
+1. Capture macro-expansion events used by the broader compiler semantic suite and
+   representative stdlib builds, beyond the dedicated macro spec files.
+2. Extend live require-aware provider and type-state construction so production
+   callers can supply the same explicit context without a Crystal runtime.

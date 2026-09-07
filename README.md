@@ -46,9 +46,8 @@ for future name resolution, type checking, and compilation stages.
   flags, captured command output, and 106 structured `TypeNode` snapshots are
   explicit expansion inputs, and Facet does not execute arbitrary shell
   commands. A second committed corpus runs all 147 expansion events emitted by
-  the 133 official semantic macro examples; 127/147 currently match exact text
-  or equivalent Facet semantic AST, with all 20 remaining events retained as
-  explicit mismatches. See [macro parity](MACRO_PARITY.md).
+  the 133 official semantic macro examples; all 147/147 match exact text or
+  equivalent Facet semantic AST. See [macro parity](MACRO_PARITY.md).
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
@@ -239,11 +238,10 @@ self-contained slice remains at 371/371. The static inventory still excludes
 capture resolves those executions into explicit arguments, type-state
 snapshots, output effects, and exact expected errors. All 25 `assert_macro_error`
 calls in the official evaluator suites are covered. Across the 133 semantic
-examples, Facet runs all 147 captured expansion events and matches 127/147;
-the other 20 remain visible and require generic/free-variable context,
-compile-time constant state, or nested method-introspection control flow.
-Unsupported non-output control expressions produce an explicit expansion
-diagnostic.
+examples, Facet runs all 147 captured expansion events and matches 147/147;
+generic/free-variable bindings, type-member snapshots, compile-time constants,
+resolved paths, and exact path errors are explicit inputs. Unsupported
+non-output control expressions produce an explicit expansion diagnostic.
 
 ## Architecture
 
@@ -388,8 +386,8 @@ Current Crystal 1.21.0 parity baseline:
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
 | Macro evaluator | 1,042 executed contracts | 1,042/1,042 exact expansions, diagnostics, and output effects |
-| Semantic macros | 133 examples; 147 expansion events | 127/147 exact-text or semantic-AST matches; all 20 mismatches retained |
-| Facet native suite | — | 9,002 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Semantic macros | 133 examples; 147 expansion events | 147/147 exact-text or semantic-AST matches; 0 skipped events |
+| Facet native suite | — | 9,024 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

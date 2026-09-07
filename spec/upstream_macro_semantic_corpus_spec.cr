@@ -23,7 +23,28 @@ describe "Crystal 1.21 semantic macro event corpus" do
     semantic_macro_header.error_count.should eq(16)
     semantic_macro_cases.size.should eq(semantic_macro_header.event_count)
     supported_semantic_macro_indices.should eq(supported_semantic_macro_indices.sort.uniq)
-    supported_semantic_macro_indices.size.should eq(127)
+    supported_semantic_macro_indices.size.should eq(147)
+  end
+
+  it "retains the semantic context requested by official macro expansions" do
+    named_tuple = semantic_macro_cases.find(&.invocation.includes?("T.keys.each")).not_nil!
+    key = named_tuple.free_vars["T"]["keys"].as_a.first
+    key["name"].as_s.should eq("foo")
+    key["line"].as_i.should eq(7)
+
+    instance_vars = semantic_macro_cases.find(&.invocation.includes?("@type.instance_vars")).not_nil!
+    instance_vars.instance_vars.should eq(["foo"])
+
+    generic = semantic_macro_cases.find do |fixture_case|
+      fixture_case.invocation == "{{ T }}" && fixture_case.expected == "Foo(Int32)"
+    end.not_nil!
+    generic.resolved_paths["T"]["source"].as_s.should eq("Foo(Int32)")
+
+    method_context = semantic_macro_cases.find(&.invocation.includes?("verbatim do")).not_nil!
+    method_context.scope_class_methods.map { |method| method["name"].as_s }.should contain("value")
+
+    undefined_constant = semantic_macro_cases.find(&.expected_error_message.try(&.includes?("Did you mean"))).not_nil!
+    undefined_constant.path_errors["Baz"].should eq("undefined constant Baz\nDid you mean 'Bar'?")
   end
 
   supported_semantic_macro_indices.each do |index|

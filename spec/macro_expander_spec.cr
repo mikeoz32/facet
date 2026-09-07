@@ -44,6 +44,25 @@ describe Facet::Compiler::MacroExpander do
     uncaptured.diagnostics.should be_empty
   end
 
+  it "isolates mutable semantic snapshots between top-level expansions" do
+    entries = [Facet::Compiler::MacroSemanticEntrySnapshot.new(%("foo"), "nil")]
+    snapshot = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      %({"foo" => nil} of String => String | ::Nil),
+      "Crystal::HashLiteral",
+      entries: entries
+    )
+    context = Facet::Compiler::MacroExpansionContext.new(
+      resolve_type_arguments: true,
+      semantic_paths: {"FOO" => snapshot}
+    )
+    expander = Facet::Compiler::MacroExpander.new(context: context)
+    arguments = {} of String => Facet::Compiler::MacroValue
+
+    expander.expand_template(%({% FOO["foo"] = "changed" %}), arguments).should be_empty
+    expander.expand_template(%({{ FOO["foo"] }}), arguments).should eq("nil")
+    expander.diagnostics.should be_empty
+  end
+
   it "validates parse_type and reports the official diagnostics" do
     arguments = {} of String => Facet::Compiler::MacroValue
     valid = Facet::Compiler::MacroExpander.new

@@ -7030,12 +7030,12 @@ module Facet
           if macro_control_start?
             kind = macro_control_kind(peek2)
             if {TokenKind::KeywordIf, TokenKind::KeywordUnless, TokenKind::KeywordFor,
-                TokenKind::KeywordBegin, TokenKind::KeywordVerbatim}.includes?(kind)
+                TokenKind::KeywordBegin, TokenKind::KeywordVerbatim}.includes?(kind) && !macro_tag_contains_end?
               depth += 1
             elsif kind == TokenKind::KeywordEnd
               depth -= 1
             end
-            _, _, span = parse_macro_tag
+            span = consume_macro_verbatim_tag
             if depth == 0
               body = @arena.add_node(NodeKind::MacroLiteral, Span.new(body_start, span.start))
               return {body, span}
@@ -7048,6 +7048,19 @@ module Facet
         span = current.span
         body = @arena.add_node(NodeKind::MacroLiteral, Span.new(body_start, span.start))
         {body, span}
+      end
+
+      private def consume_macro_verbatim_tag : Span
+        start = advance
+        until current.eof? || macro_control_end?
+          advance
+        end
+        finish = current.span.finish
+        if macro_control_end?
+          advance
+          finish = advance.span.finish
+        end
+        Span.new(start.span.start, finish)
       end
 
       private def parse_macro_for_header : NodeId

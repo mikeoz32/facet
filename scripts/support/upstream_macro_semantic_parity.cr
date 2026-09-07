@@ -22,6 +22,11 @@ record UpstreamSemanticMacroCase,
   definition : String,
   macro_name : String?,
   scope : String,
+  free_vars : Hash(String, JSON::Any),
+  instance_vars : Array(String),
+  resolved_paths : Hash(String, JSON::Any),
+  scope_class_methods : Array(JSON::Any),
+  path_errors : Hash(String, String),
   expected : String?,
   expected_error_type : String?,
   expected_error_message : String? do
@@ -105,7 +110,7 @@ module UpstreamSemanticMacroParity
     return UpstreamSemanticMacroResult.new(nil, diagnostics) unless diagnostics.empty?
 
     program_index = Facet::Compiler::Indexer.index_macros([definition])
-    context = Facet::Compiler::MacroExpansionContext.new(resolve_type_arguments: true)
+    context = semantic_context(fixture_case)
     expander = Facet::Compiler::MacroExpander.new(program_index, context: context)
     expanded = expander.expand(call, program_index)
     diagnostics.concat(expander.diagnostics.map(&.message))
@@ -113,7 +118,7 @@ module UpstreamSemanticMacroParity
   end
 
   private def expand_inline(fixture_case : UpstreamSemanticMacroCase, index : Int32) : UpstreamSemanticMacroResult
-    expander = Facet::Compiler::MacroExpander.new
+    expander = Facet::Compiler::MacroExpander.new(context: semantic_context(fixture_case))
     scope = fixture_case.scope.rchop("+")
     type = Facet::Compiler::MacroTypeValue.new(scope, Facet::Compiler::MacroTypeKind::Class)
     actual = expander.expand_template(
@@ -136,5 +141,63 @@ module UpstreamSemanticMacroParity
     receiver = fixture_case.invocation.byte_slice(0, marker_index).strip
     return fixture_case.invocation unless receiver.matches?(/\A::?[A-Z]/) || receiver.matches?(/\A[A-Z]/)
     fixture_case.invocation.byte_slice(marker_index + 1..)
+  end
+
+  private def semantic_context(fixture_case : UpstreamSemanticMacroCase) : Facet::Compiler::MacroExpansionContext
+    paths = {} of String => Facet::Compiler::MacroSemanticPathSnapshot
+    type_methods = {} of String => Array(Facet::Compiler::MacroSemanticMethodSnapshot)
+    fixture_case.resolved_paths.each do |name, raw_path|
+      keys = fixture_case.free_vars[name]?.try do |raw_variable|
+        raw_variable["keys"].as_a.map do |raw_key|
+          Facet::Compiler::MacroSemanticKeySnapshot.new(
+            raw_key["name"].as_s,
+            raw_key["line"]?.try(&.as_i?).try(&.to_i),
+            raw_key["column"]?.try(&.as_i?).try(&.to_i)
+          )
+        end
+      end || [] of Facet::Compiler::MacroSemanticKeySnapshot
+      entries = raw_path["entries"].as_a.map do |raw_entry|
+        Facet::Compiler::MacroSemanticEntrySnapshot.new(
+          raw_entry["key"].as_s,
+          raw_entry["value"].as_s
+        )
+      end
+      paths[name] = Facet::Compiler::MacroSemanticPathSnapshot.new(
+        source: raw_path["source"].as_s,
+        kind: raw_path["kind"].as_s,
+        type_kind: raw_path["type_kind"]?.try(&.as_s?),
+        module_type: raw_path["module"]?.try(&.as_bool?) || false,
+        class_type: raw_path["class"]?.try(&.as_bool?) || false,
+        struct_type: raw_path["struct"]?.try(&.as_bool?) || false,
+        keys: keys,
+        entries: entries
+      )
+      if raw_methods = raw_path["class_methods"]?.try(&.as_a?)
+        unless raw_methods.empty?
+          type_methods["#{raw_path["source"].as_s}.class"] = semantic_methods(raw_methods)
+        end
+      end
+    end
+    type_name = fixture_case.scope.rchop("+")
+    unless fixture_case.scope_class_methods.empty?
+      type_methods["#{type_name}.class"] = semantic_methods(fixture_case.scope_class_methods)
+    end
+    instance_vars = fixture_case.instance_vars.empty? ? ({} of String => Array(String)) : {type_name => fixture_case.instance_vars}
+    Facet::Compiler::MacroExpansionContext.new(
+      resolve_type_arguments: true,
+      semantic_paths: paths,
+      semantic_path_errors: fixture_case.path_errors,
+      type_instance_vars: instance_vars,
+      type_methods: type_methods
+    )
+  end
+
+  private def semantic_methods(raw_methods : Array(JSON::Any)) : Array(Facet::Compiler::MacroSemanticMethodSnapshot)
+    raw_methods.map do |raw_method|
+      Facet::Compiler::MacroSemanticMethodSnapshot.new(
+        raw_method["name"].as_s,
+        raw_method["source"].as_s
+      )
+    end
   end
 end

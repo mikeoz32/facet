@@ -18,6 +18,25 @@ module Facet
 
     record MacroSourceLocation, filename : String, line_number : Int32, column_number : Int32
 
+    record MacroSemanticKeySnapshot,
+      name : String,
+      line_number : Int32? = nil,
+      column_number : Int32? = nil
+
+    record MacroSemanticEntrySnapshot, key : String, value : String
+
+    record MacroSemanticMethodSnapshot, name : String, source : String
+
+    record MacroSemanticPathSnapshot,
+      source : String,
+      kind : String,
+      type_kind : String? = nil,
+      module_type : Bool = false,
+      class_type : Bool = false,
+      struct_type : Bool = false,
+      keys : Array(MacroSemanticKeySnapshot) = [] of MacroSemanticKeySnapshot,
+      entries : Array(MacroSemanticEntrySnapshot) = [] of MacroSemanticEntrySnapshot
+
     record MacroCapturedField, source : String, kind : String
 
     class MacroCapturedNode
@@ -51,16 +70,28 @@ module Facet
     class MacroExpansionContext
       getter fingerprint : UInt64
       getter resolve_type_arguments : Bool
+      getter semantic_paths : Hash(String, MacroSemanticPathSnapshot)
+      getter semantic_path_errors : Hash(String, String)
+      getter type_instance_vars : Hash(String, Array(String))
+      getter type_methods : Hash(String, Array(MacroSemanticMethodSnapshot))
 
       def initialize(
         environment : Hash(String, String?) = {} of String => String?,
         flags : Array(String) = [] of String,
         command_outputs : Hash(String, String) = {} of String => String,
         @resolve_type_arguments : Bool = false,
+        semantic_paths : Hash(String, MacroSemanticPathSnapshot) = {} of String => MacroSemanticPathSnapshot,
+        semantic_path_errors : Hash(String, String) = {} of String => String,
+        type_instance_vars : Hash(String, Array(String)) = {} of String => Array(String),
+        type_methods : Hash(String, Array(MacroSemanticMethodSnapshot)) = {} of String => Array(MacroSemanticMethodSnapshot),
       )
         @environment = environment.dup
         @flags = flags.dup
         @command_outputs = command_outputs.dup
+        @semantic_paths = semantic_paths.dup
+        @semantic_path_errors = semantic_path_errors.dup
+        @type_instance_vars = type_instance_vars.transform_values(&.dup)
+        @type_methods = type_methods.transform_values(&.dup)
         payload = String.build do |io|
           @environment.keys.sort.each do |key|
             io << "env:" << key << '=' << (@environment[key] || "<nil>") << '\n'
@@ -70,6 +101,20 @@ module Facet
             io << "command:" << command << '=' << @command_outputs[command] << '\n'
           end
           io << "resolve-type-arguments:" << @resolve_type_arguments << '\n'
+          @semantic_paths.keys.sort.each do |name|
+            snapshot = @semantic_paths[name]
+            io << "semantic-path:" << name << '=' << snapshot.to_s << '\n'
+          end
+          @semantic_path_errors.keys.sort.each do |name|
+            io << "semantic-path-error:" << name << '=' << @semantic_path_errors[name] << '\n'
+          end
+          @type_instance_vars.keys.sort.each do |name|
+            io << "type-instance-vars:" << name << '=' << @type_instance_vars[name].join(',') << '\n'
+          end
+          @type_methods.keys.sort.each do |name|
+            methods = @type_methods[name].map { |method| "#{method.name}:#{method.source}" }.join(',')
+            io << "type-methods:" << name << '=' << methods << '\n'
+          end
         end
         @fingerprint = payload.hash
       end
@@ -180,7 +225,10 @@ module Facet
       Builtin
     end
 
-    record MacroTypeValue, name : String, kind : MacroTypeKind
+    record MacroTypeValue,
+      name : String,
+      kind : MacroTypeKind,
+      keys : Array(MacroSyntaxValue) = [] of MacroSyntaxValue
     record MacroAnnotationValue,
       name : String,
       positional_sources : Array(String),
@@ -280,6 +328,7 @@ module Facet
         @macro_body_depth = 0
         @env_stack = [] of Hash(String, MacroValue)
         @root_env = {} of String => MacroValue
+        @semantic_env = {} of String => MacroValue
         @macro_var_stack = [] of Hash(String, String)
         @root_macro_vars = {} of String => String
         @cache = {} of String => String
@@ -290,6 +339,7 @@ module Facet
         @last_footprint = nil
         @active_index = nil.as(ProgramIndex?)
         @active_footprint = nil.as(MacroFootprint?)
+        reset_semantic_environment
       end
 
       def expand_all(asts : Array(AstFile), index : ProgramIndex? = nil) : Array(AstFile)
@@ -313,6 +363,7 @@ module Facet
         end
         @root_macro_vars.clear
         @root_env.clear
+        reset_semantic_environment
         passes = 0
         seen_texts = Set(String).new
         footprint ||= MacroFootprint.new
@@ -370,6 +421,7 @@ module Facet
       ) : String
         @root_macro_vars.clear
         @root_env.clear
+        reset_semantic_environment
         macro_name = "__facet_template"
         params = arguments.keys.join(", ")
         parser = Parser.new(Source.new("macro #{macro_name}(#{params});#{body};end", filename, SourceKind::Virtual))
@@ -881,6 +933,9 @@ module Facet
         if value = macro_structured_argument_value(node_id, ast)
           if @context.resolve_type_arguments
             if structure = value.metadata.try(&.structure)
+              if structure.kind == "Crystal::HashLiteral"
+                return macro_semantic_captured_hash_value(structure)
+              end
               if macro_captured_resolvable_type_syntax?(structure)
                 if resolved = macro_resolve_captured_type_syntax(structure)
                   return resolved
@@ -2107,7 +2162,8 @@ module Facet
         params_id = ref.ast.children(ref.node_id)[1]?
         body_id = ref.ast.children(ref.node_id)[3]?
         return "" unless body_id && params_id
-        env = build_param_env(params_id, ref.ast, args)
+        env = @semantic_env.dup
+        env.merge!(build_param_env(params_id, ref.ast, args))
         env["@caller"] = MacroArrayValue.new([caller.as(MacroValue)]) if caller
         unless call_scope.empty?
           if type = macro_type_value(call_scope, index, absolute: true)
@@ -2241,7 +2297,8 @@ module Facet
         when MacroNumberValue
           "number(#{value.kind}:#{value.source})"
         when MacroTypeValue
-          "type(#{value.kind}:#{value.name})"
+          keys = value.keys.map { |key| fingerprint_value(key) }.join(',')
+          "type(#{value.kind}:#{value.name}:#{keys})"
         when MacroAnnotationValue
           positional = value.positional_sources.join(",")
           named = value.named_sources.keys.sort.map { |key| "#{key}=#{value.named_sources[key]}" }.join(",")
@@ -2496,6 +2553,9 @@ module Facet
           name = ast.arena.symbols[node.payload_index]
           env = current_macro_env
           return MacroEvaluation.new(env[name]) if env.has_key?(name)
+          if message = @context.semantic_path_errors[name]?
+            return macro_diagnostic(node.span, message)
+          end
           if name == "flag?"
             return macro_diagnostic(
               node.span,
@@ -2509,6 +2569,10 @@ module Facet
           end
         when NodeKind::Const, NodeKind::Path, NodeKind::TypeApply
           source = ast.node_string(node_id)
+          return MacroEvaluation.new(current_macro_env[source]) if current_macro_env.has_key?(source)
+          if message = @context.semantic_path_errors[source]?
+            return macro_diagnostic(node.span, message)
+          end
           MacroEvaluation.new(MacroSyntaxValue.code(source))
         when NodeKind::InstanceVar
           name = ast.arena.symbols[node.payload_index]
@@ -3613,12 +3677,16 @@ module Facet
           case name
           when "name"
             return MacroEvaluation.new(MacroSyntaxValue.identifier(receiver.name))
+          when "class"
+            return MacroEvaluation.new(MacroTypeValue.new("#{receiver.name}.class", MacroTypeKind::Class))
           when "methods"
             methods = macro_methods(receiver).map(&.as(MacroValue))
             return MacroEvaluation.new(methods)
           when "instance_vars"
             variables = macro_instance_vars(receiver).map(&.as(MacroValue))
             return MacroEvaluation.new(variables)
+          when "keys"
+            return MacroEvaluation.new(receiver.keys.map(&.as(MacroValue))) unless receiver.keys.empty?
           when "constants"
             constants = macro_constants(receiver).map(&.as(MacroValue))
             return MacroEvaluation.new(constants)
@@ -3741,6 +3809,73 @@ module Facet
         return MacroSyntaxValue.code(source) unless expression
         evaluation = eval_value(expression, ast)
         evaluation ? evaluation.value : MacroSyntaxValue.code(source)
+      end
+
+      private def macro_semantic_snapshot_value(snapshot : MacroSemanticPathSnapshot) : MacroValue
+        case snapshot.kind
+        when "Crystal::TypeNode"
+          kind = if snapshot.module_type
+                   MacroTypeKind::Module
+                 elsif snapshot.struct_type
+                   MacroTypeKind::Struct
+                 else
+                   MacroTypeKind::Class
+                 end
+          keys = snapshot.keys.map do |key|
+            location = if line = key.line_number
+                         MacroSourceLocation.new("", line, key.column_number || 1)
+                       end
+            metadata = MacroNodeMetadata.new(location: location)
+            MacroSyntaxValue.captured(key.name, "Crystal::MacroId", metadata)
+          end
+          MacroTypeValue.new(snapshot.source, kind, keys)
+        when "Crystal::HashLiteral"
+          entries = snapshot.entries.map do |entry|
+            MacroHashEntry.new(
+              macro_semantic_literal_value(entry.key),
+              macro_semantic_literal_value(entry.value)
+            )
+          end
+          MacroHashValue.new(entries)
+        else
+          macro_semantic_literal_value(snapshot.source, snapshot.kind)
+        end
+      end
+
+      private def reset_semantic_environment : Nil
+        @semantic_env.clear
+        @context.semantic_paths.each do |name, snapshot|
+          @semantic_env[name] = macro_semantic_snapshot_value(snapshot)
+        end
+      end
+
+      private def macro_semantic_captured_hash_value(structure : MacroCapturedNode) : MacroHashValue
+        entries = (structure.collections["entries"]? || [] of MacroCapturedNode).compact_map do |entry|
+          key = entry.fields["key"]?
+          value = entry.fields["value"]?
+          next unless key && value
+          MacroHashEntry.new(
+            macro_semantic_literal_value(key.source, key.kind),
+            macro_semantic_literal_value(value.source, value.kind)
+          )
+        end
+        MacroHashValue.new(entries)
+      end
+
+      private def macro_semantic_literal_value(source : String, kind : String? = nil) : MacroValue
+        parser = Parser.new(Source.new(source, "macro-semantic-value.cr", SourceKind::Virtual))
+        ast = parser.parse_file
+        unless parser.diagnostics.empty?
+          return kind ? MacroSyntaxValue.captured(source, kind, MacroNodeMetadata.new) : MacroSyntaxValue.code(source)
+        end
+        expressions = ast.children(ast.root).first?
+        expression = expressions.try { |node_id| ast.children(node_id).first? }
+        if expression
+          if evaluation = eval_value(expression, ast)
+            return evaluation.value
+          end
+        end
+        kind ? MacroSyntaxValue.captured(source, kind, MacroNodeMetadata.new) : MacroSyntaxValue.code(source)
       end
 
       private def macro_type_value(
@@ -3945,6 +4080,18 @@ module Facet
       end
 
       private def macro_methods(type : MacroTypeValue) : Array(MacroMethodValue)
+        if snapshots = @context.type_methods[type.name]?
+          return snapshots.map do |snapshot|
+            MacroMethodValue.new(
+              snapshot.name,
+              [] of MacroMetaVarValue,
+              nil,
+              nil,
+              snapshot.source,
+              [] of MacroAnnotationValue
+            )
+          end
+        end
         index = @active_index
         return [] of MacroMethodValue unless index
         index.methods_for(type.name).compact_map do |ref|
@@ -3964,6 +4111,11 @@ module Facet
       end
 
       private def macro_instance_vars(type : MacroTypeValue) : Array(MacroMetaVarValue)
+        if names = @context.type_instance_vars[type.name]?
+          return names.map do |name|
+            MacroMetaVarValue.new(name, nil, nil, [] of MacroAnnotationValue)
+          end
+        end
         index = @active_index
         return [] of MacroMetaVarValue unless index
         seen = Set(String).new
@@ -5481,6 +5633,8 @@ module Facet
           end
         when Int64, Bool, Nil, MacroNumberValue, MacroTypeValue
           val_to_string(value)
+        when MacroMetaVarValue
+          value.name
         else
           nil
         end

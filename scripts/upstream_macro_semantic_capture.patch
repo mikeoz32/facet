@@ -4,16 +4,16 @@ index b2378cd..30833f3 100644
 +++ b/spec/spec_helper.cr
 @@ -3,6 +3,7 @@
  Crystal::Config.path = "#{__DIR__}/../src"
- 
+
  require "spec"
 +require "json"
- 
+
  require "compiler/requires"
  require "./support/syntax"
 @@ -40,6 +41,28 @@ record SemanticResult,
    program : Program,
    node : ASTNode
- 
+
 +private def record_semantic_macro_fixture(
 +  input : String,
 +  expanded : String?,
@@ -41,7 +41,7 @@ index b2378cd..30833f3 100644
    program = result.program
 @@ -73,13 +96,21 @@ private def inject_primitives(node : ASTNode)
  end
- 
+
  def semantic(node : ASTNode, *, warnings = nil, wants_doc = false, flags = nil)
 -  program = new_program
 -  program.warnings = warnings if warnings
@@ -66,11 +66,11 @@ index b2378cd..30833f3 100644
 +    raise ex
 +  end
  end
- 
+
  def top_level_semantic(code : String, wants_doc = false, inject_primitives = false)
 @@ -89,11 +120,19 @@ def top_level_semantic(code : String, wants_doc = false, inject_primitives = fal
  end
- 
+
  def top_level_semantic(node : ASTNode, wants_doc = false)
 -  program = new_program
 -  program.wants_doc = wants_doc
@@ -91,35 +91,79 @@ index b2378cd..30833f3 100644
 +    raise ex
 +  end
  end
- 
+
  def assert_normalize(from, to, flags = nil, *, filename = nil, file = __FILE__, line = __LINE__)
 @@ -312,6 +351,8 @@ def run(code, filename : String? = nil, inject_primitives = true, debug = Crysta
      code = %(require "primitives"\n#{code})
    end
- 
+
 +  semantic(code) if ENV["FACET_SEMANTIC_MACRO_CAPTURE"]?
 +
    # Code that requires the prelude doesn't run in LLVM's MCJIT
    # because of missing linked functions (which are available
    # in the current executable!), so instead we compile
+diff --git a/src/compiler/crystal/macros/interpreter.cr b/src/compiler/crystal/macros/interpreter.cr
+index c5a7fe7..f0d66c6 100644
+--- a/src/compiler/crystal/macros/interpreter.cr
++++ b/src/compiler/crystal/macros/interpreter.cr
+@@ -2,6 +2,8 @@ module Crystal
+   class MacroInterpreter < Visitor
+     getter last : ASTNode
+     property free_vars : Hash(String, TypeVar)?
++    getter facet_resolved_paths = {} of String => ASTNode
++    getter facet_path_errors = {} of String => String
+     property macro_expansion_pragmas : Hash(Int32, Array(Lexer::LocPragma))? = nil
+
+     def self.new(program, scope : Type, path_lookup : Type, a_macro : Macro, call, a_def : Def? = nil, in_macro = false)
+@@ -500,16 +502,26 @@ module Crystal
+       self.interpreted_hook node
+
+       @last = resolve(node)
++      @facet_resolved_paths[node.to_s] = @last
+       false
+     end
+
+     def visit(node : Generic)
+       @last = resolve(node)
++      @facet_resolved_paths[node.to_s] = @last
+       false
+     end
+
+     def resolve(node : Path)
+-      resolve?(node) || node.raise_undefined_constant(@path_lookup)
++      if resolved = resolve?(node)
++        return resolved
++      end
++      begin
++        node.raise_undefined_constant(@path_lookup)
++      rescue ex
++        @facet_path_errors[node.to_s] = ex.message.to_s
++        raise ex
++      end
+     end
+
+     def resolve?(node : Path)
 diff --git a/src/compiler/crystal/macros/macros.cr b/src/compiler/crystal/macros/macros.cr
-index 8d48be6..2122f37 100644
+index 8d48be6..1fcb50b 100644
 --- a/src/compiler/crystal/macros/macros.cr
 +++ b/src/compiler/crystal/macros/macros.cr
-@@ -19,13 +19,57 @@ class Crystal::Program
+@@ -19,13 +19,167 @@ class Crystal::Program
    property macro_expanded_hook : Proc(Nil)? = nil
    property macro_expansion_error_hook : Proc(::Exception?, Nil)? = nil
- 
+
 +  private def record_facet_semantic_macro_event(
 +    kind : String,
 +    invocation : String,
 +    definition : String,
 +    macro_name : String?,
-+    scope : String,
++    scope : Type,
 +    invocation_location : Location?,
 +    definition_location : Location?,
 +    expanded : String?,
 +    error : ::Exception? = nil,
++    free_vars : Hash(String, TypeVar)? = nil,
++    resolved_paths : Hash(String, ASTNode) = {} of String => ASTNode,
++    path_errors : Hash(String, String) = {} of String => String,
 +  )
 +    path = ENV["FACET_SEMANTIC_MACRO_EVENT_CAPTURE"]?
 +    return unless path
@@ -131,7 +175,110 @@ index 8d48be6..2122f37 100644
 +          json.field "invocation", invocation
 +          json.field "definition", definition
 +          json.field "macro_name", macro_name
-+          json.field "scope", scope
++          json.field "scope", scope.to_s
++          json.field "free_vars" do
++            json.object do
++              free_vars.try &.each do |name, value|
++                json.field name do
++                  json.object do
++                    json.field "source", value.to_s
++                    json.field "kind", value.class.name
++                    json.field "keys" do
++                      json.array do
++                        case value
++                        when NamedTupleInstanceType
++                          value.entries.each do |entry|
++                            json.object do
++                              json.field "name", entry.name
++                              json.field "line", entry.loc.try(&.line_number)
++                              json.field "column", entry.loc.try(&.column_number)
++                            end
++                          end
++                        when NamedTupleLiteral
++                          value.entries.each do |entry|
++                            json.object do
++                              json.field "name", entry.key
++                              json.field "line", entry.value.location.try(&.line_number)
++                              json.field "column", entry.value.location.try(&.column_number)
++                            end
++                          end
++                        end
++                      end
++                    end
++                  end
++                end
++              end
++            end
++          end
++          json.field "instance_vars" do
++            json.array do
++              instance_type = scope.instance_type
++              if instance_type.is_a?(InstanceVarContainer)
++                instance_type.all_instance_vars.each_key do |name|
++                  json.string name.lchop('@')
++                end
++              end
++            end
++          end
++          json.field "resolved_paths" do
++            json.object do
++              resolved_paths.each do |name, value|
++                json.field name do
++                  json.object do
++                    json.field "source", value.to_s
++                    json.field "kind", value.class.name
++                    if value.is_a?(TypeNode)
++                      json.field "type_kind", value.type.class.name
++                      json.field "module", value.type.module?
++                      json.field "class", value.type.class?
++                      json.field "struct", value.type.struct?
++                      json.field "class_methods" do
++                        json.array do
++                          if invocation.includes?(".methods") || definition.includes?(".methods")
++                            TypeNode.methods(value.type.metaclass).elements.each do |method|
++                              if method.is_a?(Def)
++                                json.object do
++                                  json.field "name", method.name
++                                  json.field "source", method.to_s
++                                end
++                              end
++                            end
++                          end
++                        end
++                      end
++                    end
++                    json.field "entries" do
++                      json.array do
++                        if value.is_a?(HashLiteral)
++                          value.entries.each do |entry|
++                            json.object do
++                              json.field "key", entry.key.to_s
++                              json.field "value", entry.value.to_s
++                            end
++                          end
++                        end
++                      end
++                    end
++                  end
++                end
++              end
++            end
++          end
++          json.field "scope_class_methods" do
++            json.array do
++              if invocation.includes?(".methods")
++                TypeNode.methods(scope.metaclass).elements.each do |method|
++                  if method.is_a?(Def)
++                    json.object do
++                      json.field "name", method.name
++                      json.field "source", method.to_s
++                    end
++                  end
++                end
++              end
++            end
++          end
++          json.field "path_errors", path_errors
 +          json.field "invocation_file", invocation_location.try(&.filename).try(&.to_s)
 +          json.field "invocation_line", invocation_location.try(&.line_number)
 +          json.field "definition_file", definition_location.try(&.filename).try(&.to_s)
@@ -147,40 +294,50 @@ index 8d48be6..2122f37 100644
 +
    def expand_macro(a_macro : Macro, call : Call, scope : Type, path_lookup : Type? = nil, a_def : Def? = nil)
      check_call_to_deprecated_macro a_macro, call
- 
+
      interpreter = MacroInterpreter.new self, scope, path_lookup || scope, a_macro, call, a_def, in_macro: true
      a_macro.body.accept interpreter
 -    {interpreter.to_s, interpreter.macro_expansion_pragmas}
 +    expanded = interpreter.to_s
 +    record_facet_semantic_macro_event(
-+      "call", call.to_s, a_macro.to_s, a_macro.name, scope.to_s,
-+      call.location, a_macro.location, expanded
++      "call", call.to_s, a_macro.to_s, a_macro.name, scope,
++      call.location, a_macro.location, expanded,
++      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
 +    )
 +    {expanded, interpreter.macro_expansion_pragmas}
    rescue ex
 +    record_facet_semantic_macro_event(
-+      "call", call.to_s, a_macro.to_s, a_macro.name, scope.to_s,
-+      call.location, a_macro.location, nil, ex
++      "call", call.to_s, a_macro.to_s, a_macro.name, scope,
++      call.location, a_macro.location, nil, ex,
++      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
 +    )
      raise ex if @program.macro_expansion_error_hook.nil?
- 
+
      # See SkipMacroCodeCoverageException's definition for more information.
-@@ -38,8 +82,17 @@ class Crystal::Program
+@@ -38,8 +192,23 @@ class Crystal::Program
      interpreter = MacroInterpreter.new self, scope, path_lookup || scope, node.location, def: a_def, in_macro: false
      interpreter.free_vars = free_vars
      node.accept interpreter
 -    {interpreter.to_s, interpreter.macro_expansion_pragmas}
 +    expanded = interpreter.to_s
 +    record_facet_semantic_macro_event(
-+      "inline", node.to_s, node.to_s, nil, scope.to_s,
-+      node.location, node.location, expanded
++      "inline", node.to_s, node.to_s, nil, scope,
++      node.location, node.location, expanded,
++      free_vars: free_vars,
++      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
 +    )
 +    {expanded, interpreter.macro_expansion_pragmas}
    rescue ex
 +    record_facet_semantic_macro_event(
-+      "inline", node.to_s, node.to_s, nil, scope.to_s,
-+      node.location, node.location, nil, ex
++      "inline", node.to_s, node.to_s, nil, scope,
++      node.location, node.location, nil, ex,
++      free_vars: free_vars,
++      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
 +    )
      raise ex if @program.macro_expansion_error_hook.nil?
- 
+
      # See SkipMacroCodeCoverageException's definition for more information.

@@ -11,15 +11,20 @@
   `assert_macro_error` calls and all four nested `parse_type` failures.
 - Added a captured event corpus for all 133 official semantic macro examples:
   147 expansion events (69 user-macro calls and 78 inline expansions), including
-  131 successful outputs and 16 errors. Facet currently matches 127/147 by exact
-  text or equivalent Facet semantic AST with no skipped events; all 20 remaining
-  compiler-context mismatches stay in the denominator and are reported by the
-  parity runner.
+  131 successful outputs and 16 errors. Facet matches 147/147 by exact text or
+  equivalent Facet semantic AST with no skipped events. Generic/free-variable
+  bindings, named-tuple key locations, type-member snapshots, compile-time
+  constants, resolved paths, and exact path errors are explicit captured inputs.
 - Added structured `@caller`, yielded-argument binding, `skip_file`, exact macro
   `raise` and undefined-variable diagnostics, semantic `TypeNode` argument
   resolution, tuple splat binding, and macro-control multi-assignment/bare-yield
   parsing. Caller AST numeric literals now participate in numeric operations and
   equality without losing their captured AST identity.
+- Added snapshot-backed semantic macro context for generic substitution,
+  named-tuple keys and locations, type instance variables/class methods,
+  compile-time hash constants, and exact unresolved-path diagnostics. Verbatim
+  macro bodies now scan nested raw tags without parsing or discarding their
+  deferred macro code.
 - Added explicit macro expansion inputs for environment values, compiler flags,
   and captured command output, including cache fingerprinting. `env`, `flag?`,
   safe backtick replay, and `parse_type` validation close the final 23 portable
