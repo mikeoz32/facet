@@ -7,15 +7,21 @@ Facet pins its macro contract corpus to Crystal 1.21.0 revision
 - `spec/compiler/macro/macro_methods_spec.cr`
 - `spec/compiler/semantic/macro_spec.cr`
 - `spec/compiler/semantic/macro_overload_spec.cr`
+- the complete `spec/compiler/semantic` suite
 
 The first two source suites contain 731 declared examples, 973 syntactic
 `assert_macro` calls, and 25 `assert_macro_error` calls. Compile-time loops
 expand the successful assertions into 1,017 executions; together with the 25
 error assertions they form 1,042 runtime contracts. The semantic suites add 133
 examples which execute 147 distinct macro-expansion events: 69 user-macro calls
-and 78 inline expansions. The committed fixtures retain both the static
-inventory and every executed evaluator or semantic input, so an unsupported
-contract cannot disappear from the denominator.
+and 78 inline expansions. The full semantic suite executes 3,288 examples (nine
+upstream pending) and emits 150,926 macro events while repeatedly constructing
+programs and loading the standard library. After removing only the 1,832 events
+whose invocation source is `src/primitives.cr`, exact duplicates are collapsed
+by invocation, definition, scope, target flags, semantic snapshots, and oracle.
+That leaves 2,731 distinct expansion contexts. The committed fixtures retain
+both the static inventory and every distinct executed evaluator or semantic
+input, so an unsupported contract cannot disappear from the denominator.
 
 ## Current result
 
@@ -36,6 +42,14 @@ AST for successful output and exact diagnostic text for failures. Generic and
 free-variable bindings, named-tuple key locations, type-member snapshots,
 compile-time constants, resolved paths and path errors are explicit fixture
 inputs that participate in the expansion-context fingerprint.
+
+Across the complete official semantic suite, Facet currently matches
+**2,027/2,731 (74.22%)** distinct expansion contexts. All 2,691 successful
+expansions and 40 expansion errors remain in the corpus; all 704 mismatches stay
+in the denominator. This broader gate covers target-flag branches plus stdlib
+and bootstrap macros which the dedicated macro examples never execute. It
+compares one Facet `expand_once` compiler pass to one upstream macro expansion;
+the normal `expand` API continues iterating to a fixed point.
 
 The runtime corpus contains 1,042 contracts in total:
 
@@ -61,10 +75,11 @@ The earlier static extractor intentionally excludes 602 syntactic
 The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, actual AST
 arguments, and all 25 evaluator error assertions, then classifies the resulting
-1,042 executions directly. Neither 1,042/1,042, 371/371, nor 147/147 is a claim
-of complete Crystal macro compatibility. The semantic event corpus makes the
-dedicated official macro-suite behavior explicit and regression-tested without
-embedding Crystal compiler objects in Facet.
+1,042 executions directly. Neither 1,042/1,042, 371/371, 147/147, nor
+2,027/2,731 is a claim of complete Crystal macro compatibility. The semantic
+event corpora make both the dedicated macro-suite behavior and the broader
+compiler/stdlib surface explicit and regression-tested without embedding
+Crystal compiler objects in Facet.
 
 Every portable direct AST-field, returned-collection, `env`/`flag?`,
 `parse_type`, and backtick contract is exact. Ambient environment values,
@@ -149,7 +164,7 @@ FACET_SEMANTIC_MACRO_EVENT_CAPTURE=/tmp/crystal-macro-semantic-events.jsonl \
 CRYSTAL_CACHE_DIR=/tmp/facet-semantic-fixture-cache \
   crystal run scripts/normalize_upstream_macro_semantic_capture.cr -- \
   /tmp/crystal-macro-semantic-events.jsonl /path/to/crystal \
-  spec/fixtures/crystal_1_21_macro_semantic_events.jsonl
+  spec/fixtures/crystal_1_21_macro_semantic_events.jsonl focused
 ```
 
 Run all 147 semantic events and refresh their no-regression baseline:
@@ -164,9 +179,30 @@ CRYSTAL_CACHE_DIR=/tmp/facet-semantic-spec-cache \
   crystal spec spec/upstream_macro_semantic_corpus_spec.cr
 ```
 
+Capture and deduplicate the broader full-semantic corpus:
+
+```bash
+FACET_SEMANTIC_MACRO_EVENT_CAPTURE=/tmp/crystal-full-semantic-events.jsonl \
+  /path/to/crystal/bin/crystal spec \
+  /path/to/crystal/spec/compiler/semantic
+
+CRYSTAL_CACHE_DIR=/tmp/facet-semantic-fixture-cache \
+  crystal run scripts/normalize_upstream_macro_semantic_capture.cr -- \
+  /tmp/crystal-full-semantic-events.jsonl /path/to/crystal \
+  spec/fixtures/crystal_1_21_macro_semantic_full_events.jsonl full
+
+CRYSTAL_CACHE_DIR=/tmp/facet-semantic-parity-cache \
+  crystal run scripts/check_upstream_macro_semantic_parity.cr -- \
+  spec/fixtures/crystal_1_21_macro_semantic_full_events.jsonl \
+  spec/fixtures/crystal_1_21_macro_semantic_full_events_supported.txt
+
+CRYSTAL_CACHE_DIR=/tmp/facet-semantic-spec-cache \
+  crystal spec spec/upstream_macro_semantic_full_corpus_spec.cr
+```
+
 ## Next coverage layers
 
-1. Capture macro-expansion events used by the broader compiler semantic suite and
-   representative stdlib builds, beyond the dedicated macro spec files.
+1. Drive the full-semantic corpus from 2,027/2,731 to complete parity, starting
+   with stdlib type-syntax parsing and nested macro-definition rendering.
 2. Extend live require-aware provider and type-state construction so production
    callers can supply the same explicit context without a Crystal runtime.

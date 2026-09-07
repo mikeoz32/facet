@@ -1722,6 +1722,139 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "binds a missing optional macro block to nil" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro wrap(&block)
+        {% if block %}present{% else %}missing{% end %}
+      end
+
+      wrap
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should match(/\bmissing\s*\z/)
+    expander.diagnostics.should be_empty
+  end
+
+  it "binds the internal name of an externally named macro parameter" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro declare(__name name)
+        class {{ name.id }}
+        end
+      end
+
+      declare(Example)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("class Example")
+    expander.diagnostics.should be_empty
+  end
+
+  it "expands elsif branches in macro control flow" do
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand_template(
+      "{% if false %}first{% elsif true %}second{% else %}third{% end %}",
+      {} of String => Facet::Compiler::MacroValue
+    )
+
+    expanded.should eq("second")
+    expander.diagnostics.should be_empty
+  end
+
+  it "can leave generated macro calls for the next expansion pass" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro outer
+        inner(1)
+      end
+
+      macro inner(value)
+        puts {{ value }}
+      end
+
+      outer
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+
+    once = expander.expand_once(ast, index)
+    once.source.text.should contain("inner(1)")
+    once.source.text.should_not contain("puts 1")
+
+    fully_expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+    fully_expanded.source.text.should contain("puts 1")
+    expander.diagnostics.should be_empty
+  end
+
+  it "defers ordinary macro calls emitted through yield to the next pass" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro outer(&block)
+        {{ yield }}
+      end
+
+      macro inner
+        generated
+      end
+
+      outer do
+        inner
+      end
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+
+    once = Facet::Compiler::MacroExpander.new(index).expand_once(ast, index)
+    once.source.text.should match(/begin\s+inner\s+end/)
+
+    fully_expanded = Facet::Compiler::MacroExpander.new(index).expand(ast, index)
+    fully_expanded.source.text.should contain("generated")
+  end
+
+  it "treats yield without an optional block as an empty expansion" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro optional
+        before
+        {{ yield }}
+        after
+      end
+
+      optional
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain("before")
+    expanded.source.text.should contain("after")
+    expanded.source.text.should_not contain("nil")
+    expander.diagnostics.should be_empty
+  end
+
+  it "exposes a missing type-declaration default as a nil-like Nop" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro default_kind(value)
+        {% if value.value.nil? %}missing{% else %}present{% end %}
+      end
+
+      default_kind(example : Int32)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should match(/\bmissing\s*\z/)
+    expander.diagnostics.should be_empty
+  end
+
   it "passes macro yield arguments into caller block parameters" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro wrap(value)
@@ -1773,6 +1906,16 @@ describe Facet::Compiler::MacroExpander do
     )
     skipped_expander.skipped_file.should be_true
     skipped_again.should eq(skipped)
+
+    inline_skip = Facet::Compiler::MacroExpander.new(
+      context: Facet::Compiler::MacroExpansionContext.new(flags: ["x86_64"])
+    )
+    inline_skip.expand_template(
+      "{% unless flag?(:aarch64)\n  skip_file\nend %}",
+      {} of String => Facet::Compiler::MacroValue
+    )
+    inline_skip.skipped_file.should be_true
+    inline_skip.diagnostics.should be_empty
 
     undefined_source = Facet::Compiler::Source.new("macro fail(x)\n  {{ y }}\nend\nfail(1)")
     undefined_ast = Facet::Compiler::Parser.new(undefined_source).parse_file

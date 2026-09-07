@@ -15,6 +15,15 @@
   equivalent Facet semantic AST with no skipped events. Generic/free-variable
   bindings, named-tuple key locations, type-member snapshots, compile-time
   constants, resolved paths, and exact path errors are explicit captured inputs.
+- Added a deduplicated full-semantic macro corpus from all 3,288 official
+  `spec/compiler/semantic` examples (nine upstream pending). It retains 2,731
+  distinct invocation/definition/scope/target-flag/semantic-context contracts
+  from 150,926 raw events and currently matches 2,027/2,731, with all 704
+  mismatches kept in the denominator.
+- Added target flags to semantic expansion snapshots and cache fingerprints,
+  single-pass `MacroExpander#expand_once`, `elsif` execution, nil optional block
+  binding, external/internal macro parameter binding, nested `skip_file`, and
+  nil-like `Nop` behavior for absent defaults and optional `yield` bodies.
 - Added structured `@caller`, yielded-argument binding, `skip_file`, exact macro
   `raise` and undefined-variable diagnostics, semantic `TypeNode` argument
   resolution, tuple splat binding, and macro-control multi-assignment/bare-yield

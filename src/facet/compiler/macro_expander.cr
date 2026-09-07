@@ -350,6 +350,42 @@ module Facet
         asts.map { |file| expand(file, idx) }
       end
 
+      # Expands the macro calls present in *ast* exactly once. Generated macro
+      # calls remain in the returned AST for the next compiler pass.
+      def expand_once(ast : AstFile, index : ProgramIndex? = nil, footprint : MacroFootprint? = nil) : AstFile
+        idx = index || @index
+        @skipped_file = false
+        @root_macro_vars.clear
+        @root_env.clear
+        reset_semantic_environment
+        footprint ||= MacroFootprint.new
+        previous_index = @active_index
+        previous_footprint = @active_footprint
+        @active_index = idx
+        @active_footprint = footprint
+        result = ast
+
+        begin
+          macros = [] of NodeId
+          collect_macros(ast.root, ast, macros, idx, footprint: footprint)
+          unless macros.empty?
+            expanded_text = expand_text(ast, macros, idx, nil, footprint)
+            site = ExpansionSite.new(ast.source, Span.new(0, ast.source.size))
+            new_source = Source.new(expanded_text, ast.source.filename, SourceKind::Virtual, site)
+            parser = Parser.new(new_source)
+            result = parser.parse_file
+            parser.diagnostics.each { |diagnostic| @diagnostics << diagnostic }
+          end
+        ensure
+          @active_index = previous_index
+          @active_footprint = previous_footprint
+        end
+
+        footprint.merge_macro_uses
+        @last_footprint = footprint
+        result
+      end
+
       def expand(ast : AstFile, index : ProgramIndex? = nil, footprint : MacroFootprint? = nil) : AstFile
         idx = index || @index
         current_ast = ast
@@ -521,7 +557,7 @@ module Facet
           end
         end
         ast.children(node_id).each_with_index do |child, child_index|
-          child_allows_ordinary_call = !(member_access?(node, ast) && child_index == 1)
+          child_allows_ordinary_call = ordinary_call_allowed && !(member_access?(node, ast) && child_index == 1)
           collect_macros(child, ast, acc, index, child_allows_ordinary_call, footprint)
         end
       end
@@ -2225,15 +2261,15 @@ module Facet
           param = ast.node(param_id)
           case param.kind
           when NodeKind::Param
-            name_node = ast.children(param_id)[0]
-            name = ast.arena.symbols[ast.node(name_node).payload_index]
+            parameter = syntax_tree(ast).node(param_id)
+            name = parameter.name || ast.arena.symbols[param.payload_index]
             if positional_index < positional_args.size
               env[name] = positional_args[positional_index]
               positional_index += 1
             elsif trailing_named.has_key?(name)
               env[name] = trailing_named.delete(name)
             else
-              default_node = ast.children(param_id)[2]?
+              default_node = ast.children(param_id).last?
               if default_node && ast.node(default_node).kind != NodeKind::Nop
                 env[name] = macro_argument_value(default_node, ast)
               else
@@ -2253,7 +2289,7 @@ module Facet
             end
           when NodeKind::BlockParam
             name = splat_name(param_id, ast)
-            env[name] = block if name && block
+            env[name] = block if name
           end
         end
 
@@ -2349,7 +2385,7 @@ module Facet
         tag = ast.macro_control_tag(node_id)
         children = ast.children(node_id)
         case tag
-        when TokenKind::KeywordIf, TokenKind::KeywordUnless
+        when TokenKind::KeywordIf, TokenKind::KeywordUnless, TokenKind::KeywordElsif
           header = children[0]
           then_body = children[1]
           else_body = children.size > 2 ? children[2] : nil
@@ -2553,6 +2589,10 @@ module Facet
           name = ast.arena.symbols[node.payload_index]
           env = current_macro_env
           return MacroEvaluation.new(env[name]) if env.has_key?(name)
+          if name == "skip_file"
+            @skipped_file = true
+            return MacroEvaluation.new(nil)
+          end
           if message = @context.semantic_path_errors[name]?
             return macro_diagnostic(node.span, message)
           end
@@ -2594,8 +2634,8 @@ module Facet
             return nil unless block.is_a?(MacroBlockValue)
             eval_macro_yield(node_id, ast, block)
           else
-            @diagnostics << Diagnostic.new(node.span, "can't use macro yield without a block")
-            MacroEvaluation.new(nil)
+            nop = MacroSyntaxValue.captured("", "Crystal::Nop", MacroNodeMetadata.new)
+            MacroEvaluation.new(nop)
           end
         when NodeKind::Binary
           left_id, right_id = ast.children(node_id)
@@ -3524,7 +3564,8 @@ module Facet
           MacroEvaluation.new(receiver.parameters.map(&.as(MacroValue)))
         when "nil?"
           return nil unless args.empty?
-          MacroEvaluation.new(receiver.nil?)
+          nil_like = receiver.nil? || (receiver.is_a?(MacroSyntaxValue) && receiver.crystal_kind == "Crystal::Nop")
+          MacroEvaluation.new(nil_like)
         when "is_a?"
           return nil unless args.size == 1
           type_name = macro_scalar_text(args[0])
@@ -4789,7 +4830,14 @@ module Facet
         end
         expanded = expand_with_env(env) do
           macros = [] of NodeId
-          collect_macros(body_ast.root, body_ast, macros, @active_index, footprint: @active_footprint)
+          collect_macros(
+            body_ast.root,
+            body_ast,
+            macros,
+            @active_index,
+            ordinary_call_allowed: false,
+            footprint: @active_footprint
+          )
           macros.empty? ? body_ast.source.text : expand_text(body_ast, macros, @active_index, footprint: @active_footprint)
         end
         MacroEvaluation.new(MacroSyntaxValue.code("begin\n#{expanded} end"))

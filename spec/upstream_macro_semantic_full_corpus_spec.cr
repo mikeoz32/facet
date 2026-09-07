@@ -1,0 +1,50 @@
+require "./spec_helper"
+require "../scripts/support/upstream_macro_semantic_parity"
+
+fixture_path = File.expand_path("fixtures/crystal_1_21_macro_semantic_full_events.jsonl", __DIR__)
+baseline_path = File.expand_path("fixtures/crystal_1_21_macro_semantic_full_events_supported.txt", __DIR__)
+full_semantic_header, full_semantic_cases = UpstreamSemanticMacroParity.load(fixture_path)
+supported_full_semantic_indices = File.read_lines(baseline_path).map(&.to_i)
+
+describe "Crystal 1.21 full semantic macro event corpus" do
+  it "loads every unique expansion context from the official semantic suite" do
+    full_semantic_header.kind.should eq("facet-upstream-macro-semantic-full-events")
+    full_semantic_header.crystal_version.should eq("1.21.0")
+    full_semantic_header.crystal_revision.should eq("57cf7da5094db6c5d3c058c6d054a757b5ced19e")
+    full_semantic_header.suites.should eq(["spec/compiler/semantic"])
+    full_semantic_header.semantic_example_count.should eq(3288)
+    full_semantic_header.pending_count.should eq(9)
+    full_semantic_header.raw_event_count.should eq(150_926)
+    full_semantic_header.filtered_event_count.should eq(149_094)
+    full_semantic_header.duplicate_event_count.should eq(146_363)
+    full_semantic_header.event_count.should eq(2731)
+    full_semantic_header.call_count.should eq(1077)
+    full_semantic_header.inline_count.should eq(1654)
+    full_semantic_header.success_count.should eq(2691)
+    full_semantic_header.error_count.should eq(40)
+    (full_semantic_header.filtered_event_count.not_nil! - full_semantic_header.duplicate_event_count.not_nil!).should eq(
+      full_semantic_header.event_count
+    )
+    full_semantic_cases.size.should eq(full_semantic_header.event_count)
+    supported_full_semantic_indices.should eq(supported_full_semantic_indices.sort.uniq)
+    supported_full_semantic_indices.size.should eq(2027)
+  end
+
+  supported_full_semantic_indices.each do |index|
+    fixture_case = full_semantic_cases[index]
+    preview = fixture_case.invocation.lines.first?.to_s.strip
+    preview = preview[0, Math.min(preview.size, 60)]
+
+    it "matches full semantic macro event #{index}: #{preview.dump}" do
+      result = UpstreamSemanticMacroParity.expand(fixture_case, index)
+      result.matches?(fixture_case).should be_true
+    end
+  end
+
+  it "does not regress aggregate full semantic event parity" do
+    exact = full_semantic_cases.each_with_index.count do |fixture_case, index|
+      UpstreamSemanticMacroParity.expand(fixture_case, index).matches?(fixture_case)
+    end
+    exact.should be >= supported_full_semantic_indices.size
+  end
+end

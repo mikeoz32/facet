@@ -12,7 +12,11 @@ record UpstreamSemanticMacroHeader,
   call_count : Int32,
   inline_count : Int32,
   success_count : Int32,
-  error_count : Int32 do
+  error_count : Int32,
+  raw_event_count : Int32? = nil,
+  filtered_event_count : Int32? = nil,
+  duplicate_event_count : Int32? = nil,
+  pending_count : Int32? = nil do
   include JSON::Serializable
 end
 
@@ -22,6 +26,7 @@ record UpstreamSemanticMacroCase,
   definition : String,
   macro_name : String?,
   scope : String,
+  flags : Array(String),
   free_vars : Hash(String, JSON::Any),
   instance_vars : Array(String),
   resolved_paths : Hash(String, JSON::Any),
@@ -112,7 +117,7 @@ module UpstreamSemanticMacroParity
     program_index = Facet::Compiler::Indexer.index_macros([definition])
     context = semantic_context(fixture_case)
     expander = Facet::Compiler::MacroExpander.new(program_index, context: context)
-    expanded = expander.expand(call, program_index)
+    expanded = expander.expand_once(call, program_index)
     diagnostics.concat(expander.diagnostics.map(&.message))
     UpstreamSemanticMacroResult.new(expanded.source.text, diagnostics, expander.skipped_file)
   end
@@ -184,6 +189,7 @@ module UpstreamSemanticMacroParity
     end
     instance_vars = fixture_case.instance_vars.empty? ? ({} of String => Array(String)) : {type_name => fixture_case.instance_vars}
     Facet::Compiler::MacroExpansionContext.new(
+      flags: fixture_case.flags,
       resolve_type_arguments: true,
       semantic_paths: paths,
       semantic_path_errors: fixture_case.path_errors,

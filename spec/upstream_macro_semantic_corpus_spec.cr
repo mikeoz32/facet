@@ -21,12 +21,18 @@ describe "Crystal 1.21 semantic macro event corpus" do
     semantic_macro_header.inline_count.should eq(78)
     semantic_macro_header.success_count.should eq(131)
     semantic_macro_header.error_count.should eq(16)
+    semantic_macro_header.raw_event_count.should eq(175)
+    semantic_macro_header.filtered_event_count.should eq(147)
+    semantic_macro_header.duplicate_event_count.should eq(0)
+    semantic_macro_header.pending_count.should eq(0)
     semantic_macro_cases.size.should eq(semantic_macro_header.event_count)
     supported_semantic_macro_indices.should eq(supported_semantic_macro_indices.sort.uniq)
     supported_semantic_macro_indices.size.should eq(147)
   end
 
   it "retains the semantic context requested by official macro expansions" do
+    semantic_macro_cases.all? { |fixture_case| fixture_case.flags.includes?("bits64") }.should be_true
+
     named_tuple = semantic_macro_cases.find(&.invocation.includes?("T.keys.each")).not_nil!
     key = named_tuple.free_vars["T"]["keys"].as_a.first
     key["name"].as_s.should eq("foo")

@@ -144,10 +144,10 @@ index c5a7fe7..f0d66c6 100644
 
      def resolve?(node : Path)
 diff --git a/src/compiler/crystal/macros/macros.cr b/src/compiler/crystal/macros/macros.cr
-index 8d48be6..1fcb50b 100644
+index 8d48be6..32f7002 100644
 --- a/src/compiler/crystal/macros/macros.cr
 +++ b/src/compiler/crystal/macros/macros.cr
-@@ -19,13 +19,167 @@ class Crystal::Program
+@@ -19,13 +19,168 @@ class Crystal::Program
    property macro_expanded_hook : Proc(Nil)? = nil
    property macro_expansion_error_hook : Proc(::Exception?, Nil)? = nil
 
@@ -176,6 +176,7 @@ index 8d48be6..1fcb50b 100644
 +          json.field "definition", definition
 +          json.field "macro_name", macro_name
 +          json.field "scope", scope.to_s
++          json.field "flags", flags.to_a
 +          json.field "free_vars" do
 +            json.object do
 +              free_vars.try &.each do |name, value|
@@ -316,7 +317,7 @@ index 8d48be6..1fcb50b 100644
      raise ex if @program.macro_expansion_error_hook.nil?
 
      # See SkipMacroCodeCoverageException's definition for more information.
-@@ -38,8 +192,23 @@ class Crystal::Program
+@@ -38,8 +193,23 @@ class Crystal::Program
      interpreter = MacroInterpreter.new self, scope, path_lookup || scope, node.location, def: a_def, in_macro: false
      interpreter.free_vars = free_vars
      node.accept interpreter
