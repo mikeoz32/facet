@@ -10,7 +10,7 @@ index b2378cd..7248eac 100644
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,804 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,849 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -149,6 +149,8 @@ index b2378cd..7248eac 100644
 +    FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
 +  when Crystal::Rescue
 +    facet_macro_capture_rescue(node)
++  when Crystal::When
++    facet_macro_capture_when(node)
 +  when Crystal::ClassDef
 +    facet_macro_capture_class_def(node)
 +  when Crystal::ModuleDef
@@ -199,6 +201,16 @@ index b2378cd..7248eac 100644
 +    facet_macro_capture_array_literal(node)
 +  when Crystal::HashLiteral
 +    facet_macro_capture_hash_literal(node)
++  when Crystal::Annotation
++    facet_macro_capture_annotation(node)
++  when Crystal::StringInterpolation
++    facet_macro_capture_string_interpolation(node)
++  when Crystal::ReadInstanceVar
++    facet_macro_capture_read_instance_var(node)
++  when Crystal::TypeDef
++    facet_macro_capture_type_def(node)
++  when Crystal::ExternalVar
++    facet_macro_capture_external_var(node)
 +  when Crystal::Block
 +    facet_macro_capture_block(node)
 +  when Crystal::Expressions
@@ -353,6 +365,39 @@ index b2378cd..7248eac 100644
 +    end,
 +  }
 +  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
++end
++
++private def facet_macro_capture_annotation(node : Crystal::Annotation) : FacetMacroCapturedNode
++  collections = {
++    "args"       => node.args.map { |argument| facet_macro_capture_node(argument) },
++    "named_args" => (node.named_args || [] of Crystal::NamedArgument).map { |argument| facet_macro_capture_named_argument(argument) },
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, collections: collections)
++end
++
++private def facet_macro_capture_string_interpolation(node : Crystal::StringInterpolation) : FacetMacroCapturedNode
++  collections = {
++    "expressions" => node.expressions.map { |expression| facet_macro_capture_node(expression) },
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, collections: collections)
++end
++
++private def facet_macro_capture_read_instance_var(node : Crystal::ReadInstanceVar) : FacetMacroCapturedNode
++  fields = {"obj" => facet_macro_capture_node(node.obj)}
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_type_def(node : Crystal::TypeDef) : FacetMacroCapturedNode
++  fields = {"type" => facet_macro_capture_node(node.type_spec)}
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_external_var(node : Crystal::ExternalVar) : FacetMacroCapturedNode
++  fields = {
++    "real_name" => node.real_name ? FacetMacroCapturedNode.new(node.real_name.not_nil!.inspect, "Crystal::StringLiteral") : facet_macro_capture_node(nil),
++    "type"      => facet_macro_capture_node(node.type_spec),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
 +end
 +
 +private def facet_macro_capture_block(node : Crystal::Block) : FacetMacroCapturedNode

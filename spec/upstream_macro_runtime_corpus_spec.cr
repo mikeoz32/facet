@@ -28,10 +28,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_collection_argument_count.should eq(12)
     runtime_macro_header.structured_misc_argument_count.should eq(36)
     runtime_macro_header.structured_block_control_argument_count.should eq(19)
+    runtime_macro_header.structured_value_argument_count.should eq(19)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(864)
+    supported_runtime_macro_indices.size.should eq(877)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -525,6 +526,60 @@ describe "Crystal 1.21 runtime macro corpus" do
       fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3285
     end.not_nil!
     scoped_yield_contract.arguments.first.structure.not_nil!.fields["scope"].source.should eq("1")
+  end
+
+  it "retains authoritative metadata and remaining value-node structure" do
+    read_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3384
+    end.not_nil!
+    read_instance_var = read_contract.arguments.first.structure.not_nil!
+    read_instance_var.kind.should eq("Crystal::ReadInstanceVar")
+    read_instance_var.fields["obj"].source.should eq("obj")
+
+    positional_annotation_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3528
+    end.not_nil!
+    positional_annotation = positional_annotation_contract.arguments.first.structure.not_nil!
+    positional_annotation.kind.should eq("Crystal::Annotation")
+    positional_annotation.collections["args"].map(&.source).should eq(["42"])
+
+    named_annotation_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3535
+    end.not_nil!
+    named_annotation = named_annotation_contract.arguments.first.structure.not_nil!
+    named_entry = named_annotation.collections["named_args"].first
+    named_entry.fields["name"].source.should eq("foo")
+    named_entry.fields["value"].source.should eq("42")
+
+    type_def_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3795
+    end.not_nil!
+    type_def = type_def_contract.arguments.first.structure.not_nil!
+    type_def.kind.should eq("Crystal::TypeDef")
+    type_def.fields["type"].source.should eq("::Bar::Baz")
+
+    external_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3810
+    end.not_nil!
+    external = external_contract.arguments.first.structure.not_nil!
+    external.kind.should eq("Crystal::ExternalVar")
+    external.fields["real_name"].source.should eq(%("y.z"))
+    external.fields["type"].source.should eq("::Pointer(Char)")
+
+    interpolation_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 4252
+    end.not_nil!
+    interpolation = interpolation_contract.arguments.first.structure.not_nil!
+    interpolation.kind.should eq("Crystal::StringInterpolation")
+    interpolation.collections["expressions"].map(&.source).should eq([%("fo"), "1", %("o")])
+
+    when_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 4262
+    end.not_nil!
+    when_structure = when_contract.arguments.first.structure.not_nil!
+    when_structure.kind.should eq("Crystal::When")
+    when_structure.collections["conds"].map(&.source).should eq(["2", "3"])
+    when_structure.fields["body"].source.should eq("4")
   end
 
   it "retains upstream AST location and documentation metadata" do

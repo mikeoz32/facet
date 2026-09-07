@@ -755,6 +755,13 @@ describe Facet::Compiler::MacroExpander do
         yield_scope = {{x.scope.stringify}}
       end
 
+      macro describe_string_interpolation(x)
+        interpolation_class_name = {{x.class_name}}
+        interpolation_expressions_size = {{x.expressions.size}}
+        interpolation_first_class_name = {{x.expressions[0].class_name}}
+        interpolation_immutable_size = {{(x.expressions << "a"; x.expressions.size)}}
+      end
+
       describe_proc_literal(->(z : Int32) : String { z })
       describe_proc_pointer(->some_object.method(SomeType, OtherType))
       describe_proc_pointer(->method)
@@ -777,6 +784,7 @@ describe Facet::Compiler::MacroExpander do
       describe_while((while 1; 2; end))
       describe_yield_ast((yield 1, 2))
       describe_yield_ast((with 3 yield 4))
+      describe_string_interpolation("fo\#{1}o")
     CR
     parser = Facet::Compiler::Parser.new(source)
     ast = parser.parse_file
@@ -851,6 +859,10 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.should contain(%(yield_expressions = "[4]"))
     expanded.source.text.should contain(%(yield_scope = ""))
     expanded.source.text.should contain(%(yield_scope = "3"))
+    expanded.source.text.should contain(%(interpolation_class_name = "StringInterpolation"))
+    expanded.source.text.should contain("interpolation_expressions_size = 3")
+    expanded.source.text.should contain(%(interpolation_first_class_name = "StringLiteral"))
+    expanded.source.text.should contain("interpolation_immutable_size = 3")
     expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end
@@ -902,6 +914,12 @@ describe Facet::Compiler::MacroExpander do
         path_types = {{x.types.stringify}}
       end
 
+      macro describe_type_def(x)
+        type_def_class_name = {{x.class_name}}
+        type_def_name = {{x.name.stringify}}
+        type_def_type = {{x.type.stringify}}
+      end
+
       describe_type_declaration((some_name : SomeType = 1))
       describe_type_declaration((@some_name : SomeType))
       describe_generic((Foo(T, U)))
@@ -911,6 +929,7 @@ describe Facet::Compiler::MacroExpander do
       describe_union((choice : Int32 | String))
       describe_path((::Foo::Bar))
       describe_path((String))
+      describe_type_def((type AliasName = ::Foo::Bar))
     CR
     parser = Facet::Compiler::Parser.new(source)
     ast = parser.parse_file
@@ -948,6 +967,9 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.should contain(%(path_deprecated_global = "false"))
     expanded.source.text.should contain(%(path_types = "[::Foo::Bar]"))
     expanded.source.text.should contain(%(path_types = "[String]"))
+    expanded.source.text.should contain(%(type_def_class_name = "TypeDef"))
+    expanded.source.text.should contain(%(type_def_name = "AliasName"))
+    expanded.source.text.should contain(%(type_def_type = "::Foo::Bar"))
     expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end

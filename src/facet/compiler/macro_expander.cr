@@ -817,7 +817,9 @@ module Facet
           end
           return macro_structured_inline_ensure_argument_value(node) if node.kind == NodeKind::Ensure && node.children.size == 2
           return macro_structured_alias_argument_value(node) if node.kind == NodeKind::Alias
+          return macro_structured_type_def_argument_value(node) if node.kind == NodeKind::TypeDef
           return macro_structured_require_argument_value(node) if node.kind == NodeKind::Require
+          return macro_structured_when_argument_value(node) if node.kind == NodeKind::When
           if {NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun}.includes?(node.kind)
             return macro_structured_declaration_argument_value(node)
           end
@@ -1053,6 +1055,8 @@ module Facet
           macro_proc_literal_node?(node) ? macro_captured_proc_literal(node) : macro_captured_block(node)
         when NodeKind::Expressions
           macro_captured_expressions(node)
+        when NodeKind::StringInterpolation
+          macro_captured_string_interpolation(node)
         when NodeKind::Unary
           if macro_proc_pointer_node?(node, ast)
             macro_captured_proc_pointer(node)
@@ -1252,6 +1256,13 @@ module Facet
         MacroCapturedNode.new(node.text.strip, "Crystal::Expressions", collections: collections)
       end
 
+      private def macro_captured_string_interpolation(node : SyntaxNode) : MacroCapturedNode
+        collections = {
+          "expressions" => node.children.map { |expression| macro_captured_syntax_node(expression) },
+        }
+        MacroCapturedNode.new(node.text, "Crystal::StringInterpolation", collections: collections)
+      end
+
       private def macro_captured_while(node : SyntaxNode) : MacroCapturedNode
         fields = {
           "cond" => macro_captured_syntax_node(node.condition),
@@ -1293,6 +1304,23 @@ module Facet
           structure: structure
         )
         MacroSyntaxValue.captured(node.text, "Crystal::Alias", metadata)
+      end
+
+      private def macro_structured_type_def_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        fields = {
+          "type" => macro_captured_syntax_node(node.child(1)),
+        }
+        structure = MacroCapturedNode.new(node.text, "Crystal::TypeDef", fields)
+        metadata = MacroNodeMetadata.new(
+          fields: {"name" => MacroCapturedField.new(node.name || "", "identifier")},
+          structure: structure
+        )
+        MacroSyntaxValue.captured(node.text, "Crystal::TypeDef", metadata)
+      end
+
+      private def macro_structured_when_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        structure = macro_captured_when(node, node.semantic_flag?(SemanticFlag::Exhaustive))
+        MacroSyntaxValue.captured(node.text, "Crystal::When", MacroNodeMetadata.new(structure: structure))
       end
 
       private def macro_structured_require_argument_value(node : SyntaxNode) : MacroSyntaxValue
@@ -4293,6 +4321,9 @@ module Facet
         when String
           eval_macro_text_index(receiver, index, syntax: false)
         when MacroSyntaxValue
+          if evaluation = eval_captured_annotation_index(receiver, index)
+            return evaluation
+          end
           eval_macro_text_index(receiver.value, index, syntax: true)
         when MacroHashValue
           entry = receiver.entries.find { |candidate| candidate.key == index }
@@ -4312,6 +4343,41 @@ module Facet
           MacroEvaluation.new(source ? eval_annotation_source(source) : nil)
         else
           nil
+        end
+      end
+
+      private def eval_captured_annotation_index(receiver : MacroSyntaxValue, index : MacroValue) : MacroEvaluation?
+        structure = receiver.metadata.try(&.structure)
+        return nil unless structure && structure.kind == "Crystal::Annotation"
+        node = if position = macro_integer_index(index) || macro_captured_integer_index(index)
+                 arguments = structure.collections["args"]? || [] of MacroCapturedNode
+                 normalized = position < 0 ? arguments.size.to_i64 + position : position
+                 normalized.in?(0_i64...arguments.size.to_i64) ? arguments[normalized.to_i] : nil
+               elsif key = macro_annotation_index_key(index)
+                 named_arguments = structure.collections["named_args"]? || [] of MacroCapturedNode
+                 named_arguments.find { |argument| argument.fields["name"]?.try(&.source) == key }.try(&.fields["value"]?)
+               end
+        MacroEvaluation.new(node ? macro_captured_node_value(node) : nil)
+      end
+
+      private def macro_captured_integer_index(value : MacroValue) : Int64?
+        return nil unless value.is_a?(MacroSyntaxValue) && value.crystal_kind == "Crystal::NumberLiteral"
+        value.source.to_i64?
+      end
+
+      private def macro_annotation_index_key(value : MacroValue) : String?
+        return macro_scalar_text(value) unless value.is_a?(MacroSyntaxValue)
+        case value.crystal_kind
+        when "Crystal::StringLiteral"
+          source = value.source
+          source.size >= 2 && source.starts_with?('"') && source.ends_with?('"') ? source[1...-1] : source
+        when "Crystal::SymbolLiteral"
+          source = value.source.lchop(':')
+          source.size >= 2 && source.starts_with?('"') && source.ends_with?('"') ? source[1...-1] : source
+        when "Crystal::MacroId"
+          value.source
+        else
+          macro_scalar_text(value)
         end
       end
 

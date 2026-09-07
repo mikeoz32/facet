@@ -4,7 +4,7 @@
 
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet
-  now matches exact output for 864/900 portable contracts executed by the
+  now matches exact output for 877/900 portable contracts executed by the
   official evaluator specs (including all 371/371 statically self-contained
   contracts); 117 program-context contracts and 133 semantic examples remain
   tracked explicitly for the next fixture layers.
@@ -70,6 +70,11 @@
   splat positions, control operands, yield expressions, and yield scope.
   Facet-native call blocks and representable control nodes expose the same AST
   contract, raising exact portable parity to 864/900.
+- Captured authoritative `ReadInstanceVar`, `Annotation`, `TypeDef`,
+  `ExternalVar`, `StringInterpolation`, and standalone `When` structure.
+  Annotation indexing preserves number/symbol/string/identifier keys, and
+  returned AST collections remain immutable. This closes every remaining
+  direct AST-field mismatch and raises exact portable parity to 877/900.
 - Added Crystal-compatible macro hash iteration indices, union type arguments
   for `is_a?`, and target-layout-neutral number values for `sizeof`/`alignof`
   introspection.
