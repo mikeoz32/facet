@@ -93,7 +93,8 @@ record UpstreamRuntimeMacroFixtureHeader,
   structured_declaration_argument_count : Int32,
   structured_type_declaration_argument_count : Int32,
   structured_asm_argument_count : Int32,
-  structured_type_syntax_argument_count : Int32 do
+  structured_type_syntax_argument_count : Int32,
+  structured_expression_argument_count : Int32 do
   include JSON::Serializable
 end
 
@@ -224,6 +225,10 @@ module UpstreamMacroParity
       if {"Crystal::ProcNotation", "Crystal::Metaclass", "Crystal::Generic", "Crystal::Union"}.includes?(structure.kind)
         return true if root_member_requested?(body, argument.name, "resolve") ||
                        root_member_requested?(body, argument.name, "resolve?")
+      end
+      if structure.kind == "Crystal::RangeLiteral"
+        return true if root_member_requested?(body, argument.name, "map") ||
+                       root_member_requested?(body, argument.name, "to_a")
       end
       members = structure.fields.keys + structure.collections.keys + structure.booleans.keys + structure.nil_fields
       return true if members.any? { |member| root_member_requested?(body, argument.name, member) }

@@ -409,7 +409,12 @@ module Facet
       end
 
       def return_type : SyntaxNode?
-        {NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun, NodeKind::Block}.includes?(kind) ? present_child(2) : nil
+        case kind
+        when NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun
+          present_child(2)
+        when NodeKind::Block
+          present_child(1)
+        end
       end
 
       def superclass : SyntaxNode?

@@ -557,6 +557,118 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "derives structured expression fields from Facet macro arguments" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_proc_literal(x)
+        proc_literal_class_name = {{x.class_name}}
+        proc_literal_body = {{x.body.stringify}}
+        proc_literal_args = {{x.args.stringify}}
+        proc_literal_return_type = {{x.return_type.stringify}}
+      end
+
+      macro describe_proc_pointer(x)
+        proc_pointer_class_name = {{x.class_name}}
+        proc_pointer_obj = {{x.obj.stringify}}
+        proc_pointer_name = {{x.name.stringify}}
+        proc_pointer_args = {{x.args.stringify}}
+        proc_pointer_global = {{x.global?.stringify}}
+        proc_pointer_args_size = {{(x.args << "Extra"; x.args.size)}}
+      end
+
+      macro describe_cast(x)
+        cast_class_name = {{x.class_name}}
+        cast_obj = {{x.obj.stringify}}
+        cast_to = {{x.to.stringify}}
+      end
+
+      macro describe_if(x)
+        if_class_name = {{x.class_name}}
+        if_cond = {{x.cond.stringify}}
+        if_then = {{x.then.stringify}}
+        if_else = {{x.else.stringify}}
+      end
+
+      macro describe_assign(x)
+        assign_class_name = {{x.class_name}}
+        assign_target = {{x.target.stringify}}
+        assign_value = {{x.value.stringify}}
+      end
+
+      macro describe_multi_assign(x)
+        multi_assign_class_name = {{x.class_name}}
+        multi_assign_targets = {{x.targets.stringify}}
+        multi_assign_values = {{x.values.stringify}}
+        multi_assign_targets_size = {{(x.targets << "Extra"; x.targets.size)}}
+      end
+
+      macro describe_range(x)
+        range_class_name = {{x.class_name}}
+        range_begin = {{x.begin}}
+        range_end = {{x.end}}
+        range_exclusive = {{x.excludes_end?}}
+        range_map = {{x.map(&.stringify)}}
+        range_values = {{x.to_a}}
+      end
+
+      describe_proc_literal(->(z : Int32) : String { z })
+      describe_proc_pointer(->some_object.method(SomeType, OtherType))
+      describe_proc_pointer(->method)
+      describe_proc_pointer(->::method)
+      describe_cast(value.as(Int32))
+      describe_cast(value.as?(String))
+      describe_if((if 1; 2; else; 3; end))
+      describe_if((if 1; 2; end))
+      describe_assign((foo = 2))
+      describe_multi_assign((foo, bar = 2, "a"))
+      describe_range((1...3))
+    CR
+    parser = Facet::Compiler::Parser.new(source)
+    ast = parser.parse_file
+    parser.diagnostics.should be_empty
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(proc_literal_class_name = "ProcLiteral"))
+    expanded.source.text.should contain(%(proc_literal_body = "z"))
+    expanded.source.text.should contain(%(proc_literal_args = "[z : Int32]"))
+    expanded.source.text.should contain(%(proc_literal_return_type = "String"))
+    expanded.source.text.should contain(%(proc_pointer_class_name = "ProcPointer"))
+    expanded.source.text.should contain(%(proc_pointer_obj = "some_object"))
+    expanded.source.text.should contain(%(proc_pointer_obj = "nil"))
+    expanded.source.text.should contain(%(proc_pointer_name = "method"))
+    expanded.source.text.should contain(%(proc_pointer_args = "[SomeType, OtherType]"))
+    expanded.source.text.should contain(%(proc_pointer_args = "[]"))
+    expanded.source.text.should contain(%(proc_pointer_global = "true"))
+    expanded.source.text.should contain(%(proc_pointer_global = "false"))
+    expanded.source.text.should contain("proc_pointer_args_size = 2")
+    expanded.source.text.should contain(%(cast_class_name = "Cast"))
+    expanded.source.text.should contain(%(cast_class_name = "NilableCast"))
+    expanded.source.text.should contain(%(cast_obj = "value"))
+    expanded.source.text.should contain(%(cast_to = "Int32"))
+    expanded.source.text.should contain(%(cast_to = "String"))
+    expanded.source.text.should contain(%(if_class_name = "If"))
+    expanded.source.text.should contain(%(if_cond = "1"))
+    expanded.source.text.should contain(%(if_then = "2"))
+    expanded.source.text.should contain(%(if_else = "3"))
+    expanded.source.text.should contain(%(if_else = ""))
+    expanded.source.text.should contain(%(assign_class_name = "Assign"))
+    expanded.source.text.should contain(%(assign_target = "foo"))
+    expanded.source.text.should contain(%(assign_value = "2"))
+    expanded.source.text.should contain(%(multi_assign_class_name = "MultiAssign"))
+    expanded.source.text.should contain(%(multi_assign_targets = "[foo, bar]"))
+    expanded.source.text.should contain(%(multi_assign_values = "[2, \\"a\\"]"))
+    expanded.source.text.should contain("multi_assign_targets_size = 2")
+    expanded.source.text.should contain(%(range_class_name = "RangeLiteral"))
+    expanded.source.text.should contain("range_begin = 1")
+    expanded.source.text.should contain("range_end = 3")
+    expanded.source.text.should contain("range_exclusive = true")
+    expanded.source.text.should contain(%(range_map = ["1", "2"]))
+    expanded.source.text.should contain("range_values = [1, 2]")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+  end
+
   it "derives structured type syntax fields from Facet macro arguments" do
     source = Facet::Compiler::Source.new(<<-CR)
       macro describe_type_declaration(x)
