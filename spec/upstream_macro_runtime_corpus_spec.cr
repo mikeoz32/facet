@@ -24,11 +24,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_type_declaration_argument_count.should eq(63)
     runtime_macro_header.structured_asm_argument_count.should eq(20)
     runtime_macro_header.structured_type_syntax_argument_count.should eq(46)
-    runtime_macro_header.structured_expression_argument_count.should eq(34)
+    runtime_macro_header.structured_expression_argument_count.should eq(38)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(788)
+    supported_runtime_macro_indices.size.should eq(810)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -334,6 +334,20 @@ describe "Crystal 1.21 runtime macro corpus" do
     range.fields["begin"].source.should eq("1")
     range.fields["end"].source.should eq("2")
     range.booleans["excludes_end?"].should be_true
+
+    and_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 748
+    end.not_nil!
+    conjunction = and_contract.arguments.first.structure.not_nil!
+    conjunction.kind.should eq("Crystal::And")
+    conjunction.fields.values_at("left", "right").map(&.source).to_a.should eq(["1", "2"])
+
+    or_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 758
+    end.not_nil!
+    disjunction = or_contract.arguments.first.structure.not_nil!
+    disjunction.kind.should eq("Crystal::Or")
+    disjunction.fields.values_at("left", "right").map(&.source).to_a.should eq(["1", "2"])
   end
 
   it "retains upstream AST location and documentation metadata" do

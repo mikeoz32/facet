@@ -16,7 +16,7 @@ so an unsupported contract cannot disappear from the denominator.
 
 ## Current result
 
-Facet matches Crystal's exact expansion text for **788/900 (87.56%)** portable
+Facet matches Crystal's exact expansion text for **810/900 (90.00%)** portable
 runtime contracts. This is the primary no-regression gate. It includes every
 one of the original 371 self-contained contracts plus argument-bearing and
 compile-time-generated cases captured from the executing Crystal 1.21 specs.
@@ -25,7 +25,7 @@ The runtime corpus contains 1,017 contracts in total:
 
 | Runtime slice | Count | Current status |
 | --- | ---: | --- |
-| Direct, source-replayable calls | 900 | 788 exact; 112 explicit mismatches |
+| Direct, source-replayable calls | 900 | 810 exact; 90 explicit mismatches |
 | Program-context calls | 117 | Captured, but not replayed until the fixture models compiler program mutations |
 | Calls carrying AST arguments | 578 | Included in the totals above; their exact AST kind and source rendering are retained |
 
@@ -44,7 +44,7 @@ Another 602 `assert_macro` calls remain outside this first executable slice:
 The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, and actual AST
 arguments, then classifies the resulting 1,017 executions directly. Neither
-788/900 nor 371/371 is a claim of complete Crystal macro compatibility. The 112
+810/900 nor 371/371 is a claim of complete Crystal macro compatibility. The 90
 direct mismatches, 117 program-context contracts, diagnostic/error assertions,
 and 133 semantic examples remain explicit backlog.
 

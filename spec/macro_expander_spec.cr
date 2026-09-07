@@ -105,6 +105,55 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "preserves string, symbol, and macro-id result kinds" do
+    source = Facet::Compiler::Source.new(<<-CR)
+      macro describe_id(x)
+        id_upcase = {{x.upcase}}
+        id_equals_string = {{x == "hello"}}
+        string_equals_id = {{"hello" == x}}
+        id_equals_symbol = {{x == :hello}}
+      end
+
+      string_symbol = {{"hello".symbolize}}
+      symbol_symbol = {{:hello.symbolize}}
+      number_id = {{1.id}}
+      chars = {{"123".chars}}
+      symbol_upcase = {{:hello.upcase}}
+      symbol_titleize = {{:"hello world".titleize}}
+      describe_id(hello)
+    CR
+    ast = Facet::Compiler::Parser.new(source).parse_file
+    index = Facet::Compiler::Indexer.index_macros(ast)
+    expander = Facet::Compiler::MacroExpander.new(index)
+    expanded = expander.expand(ast, index)
+
+    expanded.source.text.should contain(%(string_symbol = :"\\"hello\\""))
+    expanded.source.text.should contain(%(symbol_symbol = :":hello"))
+    expanded.source.text.should contain("number_id = 1")
+    expanded.source.text.should contain("chars = ['1', '2', '3'] of ::Char")
+    expanded.source.text.should contain("symbol_upcase = :HELLO")
+    expanded.source.text.should contain(%(symbol_titleize = :"Hello World"))
+    expanded.source.text.should contain("id_upcase = HELLO")
+    expanded.source.text.should contain("id_equals_string = true")
+    expanded.source.text.should contain("string_equals_id = true")
+    expanded.source.text.should contain("id_equals_symbol = true")
+    expanded.diagnostics.should be_empty
+    expander.diagnostics.should be_empty
+
+    captured_id = Facet::Compiler::MacroSyntaxValue.captured(
+      "hello world",
+      "Crystal::MacroId",
+      Facet::Compiler::MacroNodeMetadata.new
+    )
+    captured_expander = Facet::Compiler::MacroExpander.new
+    captured_output = captured_expander.expand_template(
+      "id_titleize = {{x.titleize}}",
+      {"x" => captured_id.as(Facet::Compiler::MacroValue)}
+    )
+    captured_output.should eq("id_titleize = Hello World")
+    captured_expander.diagnostics.should be_empty
+  end
+
   it "preserves captured AST source locations and documentation" do
     location = Facet::Compiler::MacroSourceLocation.new("sample.cr", 3, 7)
     metadata = Facet::Compiler::MacroNodeMetadata.new(
@@ -610,6 +659,12 @@ describe Facet::Compiler::MacroExpander do
         range_values = {{x.to_a}}
       end
 
+      macro describe_binary(x)
+        binary_class_name = {{x.class_name}}
+        binary_left = {{x.left}}
+        binary_right = {{x.right}}
+      end
+
       describe_proc_literal(->(z : Int32) : String { z })
       describe_proc_pointer(->some_object.method(SomeType, OtherType))
       describe_proc_pointer(->method)
@@ -621,6 +676,8 @@ describe Facet::Compiler::MacroExpander do
       describe_assign((foo = 2))
       describe_multi_assign((foo, bar = 2, "a"))
       describe_range((1...3))
+      describe_binary((1 && 2))
+      describe_binary((1 || 2))
     CR
     parser = Facet::Compiler::Parser.new(source)
     ast = parser.parse_file
@@ -665,6 +722,10 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.should contain("range_exclusive = true")
     expanded.source.text.should contain(%(range_map = ["1", "2"]))
     expanded.source.text.should contain("range_values = [1, 2]")
+    expanded.source.text.should contain(%(binary_class_name = "And"))
+    expanded.source.text.should contain(%(binary_class_name = "Or"))
+    expanded.source.text.should contain("binary_left = 1")
+    expanded.source.text.should contain("binary_right = 2")
     expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end

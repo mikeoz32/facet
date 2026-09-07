@@ -1013,7 +1013,7 @@ module Facet
         when NodeKind::Unary
           macro_proc_pointer_node?(node, ast) ? macro_captured_proc_pointer(node) : nil
         when NodeKind::Binary
-          macro_captured_cast(node, ast)
+          macro_captured_cast(node, ast) || macro_captured_boolean_binary(node, ast)
         when NodeKind::If
           macro_captured_if(node)
         when NodeKind::Assign
@@ -1077,6 +1077,21 @@ module Facet
           "to"  => macro_captured_syntax_node(target_type),
         }
         kind = name == "as?" ? "Crystal::NilableCast" : "Crystal::Cast"
+        MacroCapturedNode.new(node.text.strip, kind, fields)
+      end
+
+      private def macro_captured_boolean_binary(node : SyntaxNode, ast : AstFile) : MacroCapturedNode?
+        kind = if macro_operator?(node, ast, TokenKind::AndAnd)
+                 "Crystal::And"
+               elsif macro_operator?(node, ast, TokenKind::OrOr)
+                 "Crystal::Or"
+               else
+                 return nil
+               end
+        fields = {
+          "left"  => macro_captured_syntax_node(node.child(0)),
+          "right" => macro_captured_syntax_node(node.child(1)),
+        }
         MacroCapturedNode.new(node.text.strip, kind, fields)
       end
 
@@ -2617,7 +2632,7 @@ module Facet
           from = macro_scalar_text(args[0])
           to = macro_scalar_text(args[1])
           return nil unless text && from && to
-          MacroEvaluation.new(MacroSyntaxValue.string(text.tr(from, to)))
+          MacroEvaluation.new(macro_string_method_result(receiver, text.tr(from, to)))
         when "gsub"
           text = macro_scalar_text(receiver)
           return nil unless text
@@ -2641,13 +2656,13 @@ module Facet
               macro_scalar_text(evaluation.value) || val_to_string(evaluation.value)
             end
             return nil if failed
-            MacroEvaluation.new(MacroSyntaxValue.string(value))
+            MacroEvaluation.new(macro_string_method_result(receiver, value))
           else
             return nil unless args.size == 2
             pattern = macro_regex(args[0])
             replacement = macro_scalar_text(args[1])
             return nil unless pattern && replacement
-            MacroEvaluation.new(MacroSyntaxValue.string(text.gsub(pattern, replacement)))
+            MacroEvaluation.new(macro_string_method_result(receiver, text.gsub(pattern, replacement)))
           end
         when "match"
           return nil unless args.size == 1
@@ -2674,18 +2689,18 @@ module Facet
             return nil unless lower.is_a?(Bool)
             value = value[0]?.try(&.downcase).to_s + value.byte_slice(1..)
           end
-          MacroEvaluation.new(MacroSyntaxValue.string(value))
+          MacroEvaluation.new(macro_string_method_result(receiver, value))
         when "underscore"
           return nil unless args.empty?
           text = macro_scalar_text(receiver)
           return nil unless text
           value = text.gsub(/([a-z\d])([A-Z])/, "\\1_\\2").downcase
-          MacroEvaluation.new(MacroSyntaxValue.string(value))
+          MacroEvaluation.new(macro_string_method_result(receiver, value))
         when "titleize"
           return nil unless args.empty?
           text = macro_scalar_text(receiver)
           return nil unless text
-          MacroEvaluation.new(MacroSyntaxValue.string(text.split.map(&.capitalize).join(' ')))
+          MacroEvaluation.new(macro_string_method_result(receiver, text.split.map(&.capitalize).join(' ')))
         when "identify"
           return nil unless args.empty?
           text = macro_scalar_text(receiver)
@@ -3039,7 +3054,13 @@ module Facet
                   when "strip"      then text.strip
                   else                   text.chomp
                   end
-          MacroEvaluation.new(MacroSyntaxValue.string(value))
+          MacroEvaluation.new(macro_string_method_result(receiver, value))
+        when "chars"
+          return nil unless args.empty?
+          text = macro_scalar_text(receiver)
+          return nil unless text
+          values = text.chars.map { |char| MacroSyntaxValue.generated_char(char.to_s).as(MacroValue) }
+          MacroEvaluation.new(values)
         when "split"
           return nil unless args.size <= 1
           text = macro_scalar_text(receiver)
@@ -3077,15 +3098,14 @@ module Facet
           value ? MacroEvaluation.new(value) : nil
         when "id"
           return nil unless args.empty?
-          text = macro_scalar_text(receiver)
+          text = macro_id_text(receiver)
           text ? MacroEvaluation.new(MacroSyntaxValue.identifier(text)) : nil
         when "stringify"
           return nil unless args.empty?
           MacroEvaluation.new(MacroSyntaxValue.string(val_to_string(receiver)))
         when "symbolize"
           return nil unless args.empty?
-          text = macro_scalar_text(receiver)
-          text ? MacroEvaluation.new(MacroSyntaxValue.symbol(text)) : nil
+          MacroEvaluation.new(MacroSyntaxValue.symbol(val_to_string(receiver)))
         else
           nil
         end
@@ -4333,9 +4353,9 @@ module Facet
         when TokenKind::ShiftRight
           MacroEvaluation.new(left >> right) if left.is_a?(Int64) && right.is_a?(Int64)
         when TokenKind::EqualEqual
-          MacroEvaluation.new(left == right)
+          MacroEvaluation.new(macro_values_equal?(left, right))
         when TokenKind::BangEqual
-          MacroEvaluation.new(left != right)
+          MacroEvaluation.new(!macro_values_equal?(left, right))
         else
           nil
         end
@@ -4645,6 +4665,63 @@ module Facet
         else
           nil
         end
+      end
+
+      private def macro_string_method_result(receiver : MacroValue, value : String) : MacroSyntaxValue
+        return MacroSyntaxValue.string(value) unless receiver.is_a?(MacroSyntaxValue)
+        if macro_id_value?(receiver)
+          MacroSyntaxValue.identifier(value)
+        elsif macro_symbol_value?(receiver)
+          MacroSyntaxValue.symbol(value)
+        else
+          MacroSyntaxValue.string(value)
+        end
+      end
+
+      private def macro_id_text(value : MacroValue) : String?
+        case value
+        when MacroSyntaxValue
+          case value.kind
+          when MacroSyntaxKind::StringLiteral, MacroSyntaxKind::SymbolLiteral,
+               MacroSyntaxKind::CharLiteral, MacroSyntaxKind::GeneratedStringLiteral,
+               MacroSyntaxKind::GeneratedCharLiteral, MacroSyntaxKind::GeneratedSymbolLiteral,
+               MacroSyntaxKind::Identifier
+            value.value
+          else
+            value.source
+          end
+        when Int64, Bool, Nil, MacroNumberValue, MacroTypeValue
+          val_to_string(value)
+        else
+          nil
+        end
+      end
+
+      private def macro_values_equal?(left : MacroValue, right : MacroValue) : Bool
+        if left.is_a?(MacroSyntaxValue) && right.is_a?(MacroSyntaxValue)
+          if macro_id_value?(left) && macro_id_comparable_value?(right)
+            return left.value == right.value
+          end
+          if macro_id_value?(right) && macro_id_comparable_value?(left)
+            return left.value == right.value
+          end
+        end
+        left == right
+      end
+
+      private def macro_id_comparable_value?(value : MacroSyntaxValue) : Bool
+        macro_id_value?(value) || macro_symbol_value?(value) ||
+          {MacroSyntaxKind::StringLiteral, MacroSyntaxKind::GeneratedStringLiteral}.includes?(value.kind) ||
+          value.crystal_kind == "Crystal::StringLiteral"
+      end
+
+      private def macro_id_value?(value : MacroSyntaxValue) : Bool
+        value.kind == MacroSyntaxKind::Identifier || value.crystal_kind == "Crystal::MacroId"
+      end
+
+      private def macro_symbol_value?(value : MacroSyntaxValue) : Bool
+        {MacroSyntaxKind::SymbolLiteral, MacroSyntaxKind::GeneratedSymbolLiteral}.includes?(value.kind) ||
+          value.crystal_kind == "Crystal::SymbolLiteral"
       end
 
       private def slice_text(source : Source, span : Span) : String

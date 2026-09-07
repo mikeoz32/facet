@@ -218,6 +218,7 @@ module UpstreamMacroParity
   end
 
   private def captured_argument_required?(body : String, argument : UpstreamRuntimeMacroArgument) : Bool
+    return true if argument.kind == "Crystal::MacroId"
     return true if argument.filename || argument.end_filename || argument.doc
     return true if argument.name_source && root_member_requested?(body, argument.name, "name")
     if structure = argument.structure

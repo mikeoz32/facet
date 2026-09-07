@@ -10,7 +10,7 @@ index b2378cd..7248eac 100644
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,591 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,601 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -193,6 +193,8 @@ index b2378cd..7248eac 100644
 +    facet_macro_capture_multi_assign(node)
 +  when Crystal::RangeLiteral
 +    facet_macro_capture_range_literal(node)
++  when Crystal::And, Crystal::Or
++    facet_macro_capture_binary_op(node)
 +  when Crystal::FunDef
 +    facet_macro_capture_fun_def(node)
 +  when Crystal::Macro
@@ -274,6 +276,14 @@ index b2378cd..7248eac 100644
 +    "end"   => facet_macro_capture_node(node.to),
 +  }
 +  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, booleans: {"excludes_end?" => node.exclusive?})
++end
++
++private def facet_macro_capture_binary_op(node : Crystal::BinaryOp) : FacetMacroCapturedNode
++  fields = {
++    "left"  => facet_macro_capture_node(node.left),
++    "right" => facet_macro_capture_node(node.right),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
 +end
 +
 +private def facet_macro_capture_type_declaration(node : Crystal::TypeDeclaration) : FacetMacroCapturedNode

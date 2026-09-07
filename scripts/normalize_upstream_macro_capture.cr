@@ -149,7 +149,8 @@ header = RuntimeMacroFixtureHeader.new(
     fixture_case.arguments.count do |argument|
       argument.structure.try do |node|
         {"Crystal::ProcLiteral", "Crystal::ProcPointer", "Crystal::Cast", "Crystal::NilableCast",
-         "Crystal::If", "Crystal::Assign", "Crystal::MultiAssign", "Crystal::RangeLiteral"}.includes?(node.kind)
+         "Crystal::If", "Crystal::Assign", "Crystal::MultiAssign", "Crystal::RangeLiteral",
+         "Crystal::And", "Crystal::Or"}.includes?(node.kind)
       end || false
     end
   end,
