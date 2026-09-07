@@ -21,7 +21,10 @@ record RawSemanticMacroEvent,
   definition_file : String?,
   definition_line : Int32?,
   scope_abstract : Bool = false,
-  scope_constants : Array(JSON::Any) = [] of JSON::Any do
+  scope_constants : Array(JSON::Any) = [] of JSON::Any,
+  scope_annotations : Array(JSON::Any) = [] of JSON::Any,
+  scope_instance_vars : Array(JSON::Any) = [] of JSON::Any,
+  command_outputs : Hash(String, String) = {} of String => String do
   include JSON::Serializable
 end
 
@@ -59,7 +62,10 @@ record SemanticMacroFixtureCase,
   expected_error_type : String?,
   expected_error_message : String?,
   scope_abstract : Bool = false,
-  scope_constants : Array(JSON::Any) = [] of JSON::Any do
+  scope_constants : Array(JSON::Any) = [] of JSON::Any,
+  scope_annotations : Array(JSON::Any) = [] of JSON::Any,
+  scope_instance_vars : Array(JSON::Any) = [] of JSON::Any,
+  command_outputs : Hash(String, String) = {} of String => String do
   include JSON::Serializable
 end
 
@@ -102,6 +108,9 @@ File.open(capture_path) do |file|
       expected_error_message: event.error_message,
       scope_abstract: event.scope_abstract,
       scope_constants: event.scope_constants,
+      scope_annotations: event.scope_annotations,
+      scope_instance_vars: event.scope_instance_vars,
+      command_outputs: event.command_outputs,
     )
     if mode == "full"
       signature = fixture_case.to_json

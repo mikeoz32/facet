@@ -4,16 +4,16 @@ index b2378cd..30833f3 100644
 +++ b/spec/spec_helper.cr
 @@ -3,6 +3,7 @@
  Crystal::Config.path = "#{__DIR__}/../src"
-
+ 
  require "spec"
 +require "json"
-
+ 
  require "compiler/requires"
  require "./support/syntax"
 @@ -40,6 +41,28 @@ record SemanticResult,
    program : Program,
    node : ASTNode
-
+ 
 +private def record_semantic_macro_fixture(
 +  input : String,
 +  expanded : String?,
@@ -41,7 +41,7 @@ index b2378cd..30833f3 100644
    program = result.program
 @@ -73,13 +96,21 @@ private def inject_primitives(node : ASTNode)
  end
-
+ 
  def semantic(node : ASTNode, *, warnings = nil, wants_doc = false, flags = nil)
 -  program = new_program
 -  program.warnings = warnings if warnings
@@ -66,11 +66,11 @@ index b2378cd..30833f3 100644
 +    raise ex
 +  end
  end
-
+ 
  def top_level_semantic(code : String, wants_doc = false, inject_primitives = false)
 @@ -89,11 +120,19 @@ def top_level_semantic(code : String, wants_doc = false, inject_primitives = fal
  end
-
+ 
  def top_level_semantic(node : ASTNode, wants_doc = false)
 -  program = new_program
 -  program.wants_doc = wants_doc
@@ -91,44 +91,45 @@ index b2378cd..30833f3 100644
 +    raise ex
 +  end
  end
-
+ 
  def assert_normalize(from, to, flags = nil, *, filename = nil, file = __FILE__, line = __LINE__)
 @@ -312,6 +351,8 @@ def run(code, filename : String? = nil, inject_primitives = true, debug = Crysta
      code = %(require "primitives"\n#{code})
    end
-
+ 
 +  semantic(code) if ENV["FACET_SEMANTIC_MACRO_CAPTURE"]?
 +
    # Code that requires the prelude doesn't run in LLVM's MCJIT
    # because of missing linked functions (which are available
    # in the current executable!), so instead we compile
 diff --git a/src/compiler/crystal/macros/interpreter.cr b/src/compiler/crystal/macros/interpreter.cr
-index c5a7fe7..f0d66c6 100644
+index c5a7fe7..2c980bb 100644
 --- a/src/compiler/crystal/macros/interpreter.cr
 +++ b/src/compiler/crystal/macros/interpreter.cr
-@@ -2,6 +2,8 @@ module Crystal
+@@ -2,6 +2,9 @@ module Crystal
    class MacroInterpreter < Visitor
      getter last : ASTNode
      property free_vars : Hash(String, TypeVar)?
 +    getter facet_resolved_paths = {} of String => ASTNode
 +    getter facet_path_errors = {} of String => String
++    getter facet_command_outputs = {} of String => String
      property macro_expansion_pragmas : Hash(Int32, Array(Lexer::LocPragma))? = nil
-
+ 
      def self.new(program, scope : Type, path_lookup : Type, a_macro : Macro, call, a_def : Def? = nil, in_macro = false)
-@@ -500,16 +502,26 @@ module Crystal
+@@ -500,16 +503,26 @@ module Crystal
        self.interpreted_hook node
-
+ 
        @last = resolve(node)
 +      @facet_resolved_paths[node.to_s] = @last
        false
      end
-
+ 
      def visit(node : Generic)
        @last = resolve(node)
 +      @facet_resolved_paths[node.to_s] = @last
        false
      end
-
+ 
      def resolve(node : Path)
 -      resolve?(node) || node.raise_undefined_constant(@path_lookup)
 +      if resolved = resolve?(node)
@@ -141,16 +142,36 @@ index c5a7fe7..f0d66c6 100644
 +        raise ex
 +      end
      end
-
+ 
      def resolve?(node : Path)
 diff --git a/src/compiler/crystal/macros/macros.cr b/src/compiler/crystal/macros/macros.cr
-index 8d48be6..32f7002 100644
+index 8d48be6..a42b2df 100644
 --- a/src/compiler/crystal/macros/macros.cr
 +++ b/src/compiler/crystal/macros/macros.cr
-@@ -19,13 +19,206 @@ class Crystal::Program
+@@ -19,13 +19,284 @@ class Crystal::Program
    property macro_expanded_hook : Proc(Nil)? = nil
    property macro_expansion_error_hook : Proc(::Exception?, Nil)? = nil
-
+ 
++  private def record_facet_semantic_annotations(json, annotations : Array(Annotation)?)
++    json.array do
++      annotations.try &.each do |entry|
++        json.object do
++          json.field "name", entry.path.to_s
++          json.field "args" do
++            json.array { entry.args.each { |arg| json.string arg.to_s } }
++          end
++          json.field "named_args" do
++            json.object do
++              entry.named_args.try &.each do |argument|
++                json.field argument.name, argument.value.to_s
++              end
++            end
++          end
++        end
++      end
++    end
++  end
++
 +  private def record_facet_semantic_macro_event(
 +    kind : String,
 +    invocation : String,
@@ -164,6 +185,7 @@ index 8d48be6..32f7002 100644
 +    free_vars : Hash(String, TypeVar)? = nil,
 +    resolved_paths : Hash(String, ASTNode) = {} of String => ASTNode,
 +    path_errors : Hash(String, String) = {} of String => String,
++    command_outputs : Hash(String, String) = {} of String => String,
 +  )
 +    path = ENV["FACET_SEMANTIC_MACRO_EVENT_CAPTURE"]?
 +    return unless path
@@ -222,6 +244,26 @@ index 8d48be6..32f7002 100644
 +              end
 +            end
 +          end
++          json.field "scope_instance_vars" do
++            json.array do
++              target = scope == class_type ? scope : scope.instance_type
++              if target.is_a?(InstanceVarContainer) &&
++                 (invocation.includes?("instance_vars") || definition.includes?("instance_vars"))
++                target.all_instance_vars.each do |name, variable|
++                  json.object do
++                    json.field "name", name.lchop('@')
++                    json.field "annotations" do
++                      record_facet_semantic_annotations(json, variable.all_annotations)
++                    end
++                  end
++                end
++              end
++            end
++          end
++          json.field "scope_annotations" do
++            target = scope == class_type ? scope : scope.instance_type
++            record_facet_semantic_annotations(json, target.all_annotations)
++          end
 +          json.field "resolved_paths" do
 +            json.object do
 +              resolved_paths.each do |name, value|
@@ -234,6 +276,30 @@ index 8d48be6..32f7002 100644
 +                      json.field "module", value.type.module?
 +                      json.field "class", value.type.class?
 +                      json.field "struct", value.type.struct?
++                      json.field "annotations" do
++                        record_facet_semantic_annotations(json, value.type.all_annotations)
++                      end
++                      json.field "superclass" do
++                        superclass = value.type.superclass rescue nil
++                        if superclass
++                          json.object do
++                            json.field "source", superclass.to_s
++                            json.field "type_kind", superclass.class.name
++                            json.field "annotations" do
++                              record_facet_semantic_annotations(json, superclass.all_annotations)
++                            end
++                          end
++                        else
++                          json.null
++                        end
++                      end
++                      json.field "subclasses" do
++                        json.array do
++                          if invocation.includes?(".subclasses") || definition.includes?(".subclasses")
++                            value.type.devirtualize.subclasses.each { |subclass| json.string subclass.to_s }
++                          end
++                        end
++                      end
 +                      json.field "constants" do
 +                        json.array do
 +                          if invocation.includes?(".constants") || definition.includes?(".constants") ||
@@ -251,6 +317,9 @@ index 8d48be6..32f7002 100644
 +                                json.object do
 +                                  json.field "name", method.name
 +                                  json.field "source", method.to_s
++                                  json.field "annotations" do
++                                    record_facet_semantic_annotations(json, method.all_annotations)
++                                  end
 +                                end
 +                              end
 +                            end
@@ -265,6 +334,9 @@ index 8d48be6..32f7002 100644
 +                                json.object do
 +                                  json.field "name", method.name
 +                                  json.field "source", method.to_s
++                                  json.field "annotations" do
++                                    record_facet_semantic_annotations(json, method.all_annotations)
++                                  end
 +                                end
 +                              end
 +                            end
@@ -297,6 +369,9 @@ index 8d48be6..32f7002 100644
 +                    json.object do
 +                      json.field "name", method.name
 +                      json.field "source", method.to_s
++                      json.field "annotations" do
++                        record_facet_semantic_annotations(json, method.all_annotations)
++                      end
 +                    end
 +                  end
 +                end
@@ -307,8 +382,9 @@ index 8d48be6..32f7002 100644
 +            json.array do
 +              if invocation.includes?("@type.constants") || definition.includes?("@type.constants") ||
 +                 invocation.includes?("@type.constant(") || definition.includes?("@type.constant(")
-+                scope.types.each_key do |name|
-+                  value = TypeNode.constant(scope, name)
++                target = scope == class_type ? scope : scope.instance_type
++                target.types.each_key do |name|
++                  value = TypeNode.constant(target, name)
 +                  json.object do
 +                    json.field "name", name
 +                    json.field "source", value.to_s
@@ -317,6 +393,7 @@ index 8d48be6..32f7002 100644
 +              end
 +            end
 +          end
++          json.field "command_outputs", command_outputs
 +          json.field "path_errors", path_errors
 +          json.field "invocation_file", invocation_location.try(&.filename).try(&.to_s)
 +          json.field "invocation_line", invocation_location.try(&.line_number)
@@ -333,7 +410,7 @@ index 8d48be6..32f7002 100644
 +
    def expand_macro(a_macro : Macro, call : Call, scope : Type, path_lookup : Type? = nil, a_def : Def? = nil)
      check_call_to_deprecated_macro a_macro, call
-
+ 
      interpreter = MacroInterpreter.new self, scope, path_lookup || scope, a_macro, call, a_def, in_macro: true
      a_macro.body.accept interpreter
 -    {interpreter.to_s, interpreter.macro_expansion_pragmas}
@@ -342,7 +419,8 @@ index 8d48be6..32f7002 100644
 +      "call", call.to_s, a_macro.to_s, a_macro.name, scope,
 +      call.location, a_macro.location, expanded,
 +      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
-+      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String),
++      command_outputs: interpreter.try(&.facet_command_outputs) || ({} of String => String)
 +    )
 +    {expanded, interpreter.macro_expansion_pragmas}
    rescue ex
@@ -350,12 +428,13 @@ index 8d48be6..32f7002 100644
 +      "call", call.to_s, a_macro.to_s, a_macro.name, scope,
 +      call.location, a_macro.location, nil, ex,
 +      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
-+      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String),
++      command_outputs: interpreter.try(&.facet_command_outputs) || ({} of String => String)
 +    )
      raise ex if @program.macro_expansion_error_hook.nil?
-
+ 
      # See SkipMacroCodeCoverageException's definition for more information.
-@@ -38,8 +193,23 @@ class Crystal::Program
+@@ -38,8 +309,25 @@ class Crystal::Program
      interpreter = MacroInterpreter.new self, scope, path_lookup || scope, node.location, def: a_def, in_macro: false
      interpreter.free_vars = free_vars
      node.accept interpreter
@@ -366,7 +445,8 @@ index 8d48be6..32f7002 100644
 +      node.location, node.location, expanded,
 +      free_vars: free_vars,
 +      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
-+      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String),
++      command_outputs: interpreter.try(&.facet_command_outputs) || ({} of String => String)
 +    )
 +    {expanded, interpreter.macro_expansion_pragmas}
    rescue ex
@@ -375,8 +455,22 @@ index 8d48be6..32f7002 100644
 +      node.location, node.location, nil, ex,
 +      free_vars: free_vars,
 +      resolved_paths: interpreter.try(&.facet_resolved_paths) || ({} of String => ASTNode),
-+      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String)
++      path_errors: interpreter.try(&.facet_path_errors) || ({} of String => String),
++      command_outputs: interpreter.try(&.facet_command_outputs) || ({} of String => String)
 +    )
      raise ex if @program.macro_expansion_error_hook.nil?
-
+ 
      # See SkipMacroCodeCoverageException's definition for more information.
+diff --git a/src/compiler/crystal/macros/methods.cr b/src/compiler/crystal/macros/methods.cr
+index 7194c75..752254e 100644
+--- a/src/compiler/crystal/macros/methods.cr
++++ b/src/compiler/crystal/macros/methods.cr
+@@ -262,6 +262,8 @@ module Crystal
+         node.raise "error executing command: #{cmd}: #{exc.message}"
+       end
+ 
++      @facet_command_outputs[cmd] = result
++
+       if $?.success?
+         @last = MacroId.new(result)
+       elsif result.empty?

@@ -19,7 +19,7 @@ upstream pending) and emits 150,926 macro events while repeatedly constructing
 programs and loading the standard library. After removing only the 1,832 events
 whose invocation source is `src/primitives.cr`, exact duplicates are collapsed
 by invocation, definition, scope, target flags, semantic snapshots, and oracle.
-That leaves 2,731 distinct expansion contexts. The committed fixtures retain
+That leaves 2,736 distinct expansion contexts. The committed fixtures retain
 both the static inventory and every distinct executed evaluator or semantic
 input, so an unsupported contract cannot disappear from the denominator.
 
@@ -43,15 +43,15 @@ free-variable bindings, named-tuple key locations, type-member snapshots,
 compile-time constants, resolved paths and path errors are explicit fixture
 inputs that participate in the expansion-context fingerprint.
 
-Across the complete official semantic suite, Facet currently matches
-**2,376/2,731 (87.00%)** distinct expansion contexts. All 1,077 user-macro call
-events match; the remaining 355 mismatches are confined to the 1,654 inline
-expansions. All 2,691 successful expansions and 40 expansion errors remain in
-the corpus, and every mismatch stays in the denominator. This broader gate
-covers target-flag branches plus stdlib and bootstrap macros which the dedicated
-macro examples never execute. It compares one Facet `expand_once` compiler pass
-to one upstream macro expansion; the normal `expand` API continues iterating to
-a fixed point.
+Across the complete official semantic suite, Facet matches **2,736/2,736
+(100%)** distinct expansion contexts: all 1,077 user-macro call events and all
+1,659 inline expansions. All 2,696 successful expansions and 40 expansion
+errors remain in the corpus. This broader gate covers target-flag branches plus
+stdlib and bootstrap macros which the dedicated macro examples never execute.
+Successful results require equivalent semantic AST plus identical literal
+payloads; failures require exact diagnostic text. It compares one Facet
+`expand_once` compiler pass to one upstream macro expansion; the normal
+`expand` API continues iterating to a fixed point.
 
 The runtime corpus contains 1,042 contracts in total:
 
@@ -78,7 +78,8 @@ The static exclusions are not a second set of missing runtime contracts: the
 runtime capture resolves dynamic bodies, compile-time loops, actual AST
 arguments, and all 25 evaluator error assertions, then classifies the resulting
 1,042 executions directly. Neither 1,042/1,042, 371/371, 147/147, nor
-2,376/2,731 is a claim of complete Crystal macro compatibility. The semantic
+2,736/2,736 is by itself a claim of compatibility beyond the captured Crystal
+1.21 behavior. The semantic
 event corpora make both the dedicated macro-suite behavior and the broader
 compiler/stdlib surface explicit and regression-tested without embedding
 Crystal compiler objects in Facet.
@@ -204,7 +205,7 @@ CRYSTAL_CACHE_DIR=/tmp/facet-semantic-spec-cache \
 
 ## Next coverage layers
 
-1. Drive the full-semantic corpus from 2,027/2,731 to complete parity, starting
-   with stdlib type-syntax parsing and nested macro-definition rendering.
-2. Extend live require-aware provider and type-state construction so production
+1. Extend live require-aware provider and type-state construction so production
    callers can supply the same explicit context without a Crystal runtime.
+2. Add upstream captures for macro behavior not exercised by Crystal's semantic
+   suite while preserving the 2,736-event full-suite gate.

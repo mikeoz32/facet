@@ -25,6 +25,29 @@ describe "Crystal 1.21 full semantic macro event corpus" do
 
     UpstreamSemanticMacroParity.equivalent_output?(actual, expected).should be_true
     UpstreamSemanticMacroParity.equivalent_output?("other += 1\nother", expected).should be_false
+    UpstreamSemanticMacroParity.equivalent_output?(%(value = "other"), %(value = "expected")).should be_false
+    UpstreamSemanticMacroParity.equivalent_output?("value = 2", "value = 1").should be_false
+  end
+
+  it "models inline @type as the instance type of a metaclass scope" do
+    fixture_case = UpstreamSemanticMacroCase.new(
+      kind: "inline",
+      invocation: "{{ @type }}|{{ @type.class }}",
+      definition: "{{ @type }}|{{ @type.class }}",
+      macro_name: nil,
+      scope: "Foo+.class",
+      flags: [] of String,
+      free_vars: {} of String => JSON::Any,
+      instance_vars: [] of String,
+      resolved_paths: {} of String => JSON::Any,
+      scope_class_methods: [] of JSON::Any,
+      path_errors: {} of String => String,
+      expected: "Foo|Foo.class",
+      expected_error_type: nil,
+      expected_error_message: nil
+    )
+
+    UpstreamSemanticMacroParity.expand(fixture_case, 0).matches?(fixture_case).should be_true
   end
 
   it "loads every unique expansion context from the official semantic suite" do
@@ -36,18 +59,18 @@ describe "Crystal 1.21 full semantic macro event corpus" do
     full_semantic_header.pending_count.should eq(9)
     full_semantic_header.raw_event_count.should eq(150_926)
     full_semantic_header.filtered_event_count.should eq(149_094)
-    full_semantic_header.duplicate_event_count.should eq(146_363)
-    full_semantic_header.event_count.should eq(2731)
+    full_semantic_header.duplicate_event_count.should eq(146_358)
+    full_semantic_header.event_count.should eq(2736)
     full_semantic_header.call_count.should eq(1077)
-    full_semantic_header.inline_count.should eq(1654)
-    full_semantic_header.success_count.should eq(2691)
+    full_semantic_header.inline_count.should eq(1659)
+    full_semantic_header.success_count.should eq(2696)
     full_semantic_header.error_count.should eq(40)
     (full_semantic_header.filtered_event_count.not_nil! - full_semantic_header.duplicate_event_count.not_nil!).should eq(
       full_semantic_header.event_count
     )
     full_semantic_cases.size.should eq(full_semantic_header.event_count)
     supported_full_semantic_indices.should eq(supported_full_semantic_indices.sort.uniq)
-    supported_full_semantic_indices.size.should eq(2376)
+    supported_full_semantic_indices.size.should eq(2736)
   end
 
   supported_full_semantic_indices.each do |index|

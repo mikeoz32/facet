@@ -82,6 +82,43 @@ module FacetAstNormalizer
     normalize_hygienic_identifiers(normalize(ast), {} of String => String)
   end
 
+  # AST-shape parity intentionally ignores literal payloads because literal
+  # decoding has its own parser contract. Macro expansion parity cannot: two
+  # expansions with the same node kinds but different generated values are not
+  # equivalent compiler output.
+  def macro_literal_payloads(ast : Facet::Compiler::AstFile) : Array(String)
+    payloads = [] of String
+    collect_macro_literal_payloads(ast, ast.root, payloads)
+    payloads
+  end
+
+  private def collect_macro_literal_payloads(
+    ast : Facet::Compiler::AstFile,
+    node_id : Facet::Compiler::NodeId,
+    payloads : Array(String),
+  ) : Nil
+    node = ast.node(node_id)
+    case node.kind
+    when Facet::Compiler::NodeKind::LiteralString
+      payloads << "string:#{ast.decoded_literal_string(node_id)}"
+    when Facet::Compiler::NodeKind::LiteralSymbol
+      payloads << "symbol:#{ast.decoded_literal_string(node_id)}"
+    when Facet::Compiler::NodeKind::LiteralChar
+      payloads << "char:#{ast.decoded_literal_string(node_id)}"
+    when Facet::Compiler::NodeKind::LiteralRegex
+      payloads << "regex:#{ast.node_string(node_id)}"
+    when Facet::Compiler::NodeKind::LiteralNumber
+      payloads << "number:#{ast.node_string(node_id)}"
+    when Facet::Compiler::NodeKind::LiteralBool
+      payloads << "bool:#{node.flags == 1_u16}"
+    when Facet::Compiler::NodeKind::LiteralNil
+      payloads << "nil"
+    end
+    ast.children(node_id).each do |child_id|
+      collect_macro_literal_payloads(ast, child_id, payloads)
+    end
+  end
+
   private def normalize_hygienic_identifiers(
     node : SemanticAstNode,
     identifiers : Hash(String, String),

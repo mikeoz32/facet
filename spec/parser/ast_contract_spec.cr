@@ -197,6 +197,19 @@ describe "Facet AST contract" do
     ast.node_string(pointerof_args).should eq("(@value)")
   end
 
+  it "attaches postfix indexing to a parenthesized receiver" do
+    parser = Facet::Compiler::Parser.new(Facet::Compiler::Source.new("(value)[0]"))
+    ast = parser.parse_file
+    root = Facet::Compiler::SyntaxTree.new(ast).root
+    expression = root.children.first.children.first
+
+    expression.kind.should eq(Facet::Compiler::NodeKind::Index)
+    expression.children.first.kind.should eq(Facet::Compiler::NodeKind::Ident)
+    expression.children.first.name.should eq("value")
+    expression.children[1].kind.should eq(Facet::Compiler::NodeKind::LiteralNumber)
+    parser.diagnostics.should be_empty
+  end
+
   it "does not let Nop or container spans hide a significant token" do
     source = Facet::Compiler::Source.new("lost")
     arena = Facet::Compiler::AstArena.new

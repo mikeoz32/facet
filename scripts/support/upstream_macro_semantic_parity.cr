@@ -36,7 +36,10 @@ record UpstreamSemanticMacroCase,
   expected_error_type : String?,
   expected_error_message : String?,
   scope_abstract : Bool = false,
-  scope_constants : Array(JSON::Any) = [] of JSON::Any do
+  scope_constants : Array(JSON::Any) = [] of JSON::Any,
+  scope_annotations : Array(JSON::Any) = [] of JSON::Any,
+  scope_instance_vars : Array(JSON::Any) = [] of JSON::Any,
+  command_outputs : Hash(String, String) = {} of String => String do
   include JSON::Serializable
 end
 
@@ -97,7 +100,8 @@ module UpstreamSemanticMacroParity
     return false unless actual_context == expected_context
     return false unless actual_parser.diagnostics.all? { |diagnostic| caller_context_diagnostic?(diagnostic.message) }
     return false unless expected_parser.diagnostics.all? { |diagnostic| caller_context_diagnostic?(diagnostic.message) }
-    FacetAstNormalizer.normalize_macro_output(actual_ast) == FacetAstNormalizer.normalize_macro_output(expected_ast)
+    FacetAstNormalizer.normalize_macro_output(actual_ast) == FacetAstNormalizer.normalize_macro_output(expected_ast) &&
+      FacetAstNormalizer.macro_literal_payloads(actual_ast) == FacetAstNormalizer.macro_literal_payloads(expected_ast)
   end
 
   private def caller_context_diagnostic?(message : String) : Bool
@@ -135,7 +139,7 @@ module UpstreamSemanticMacroParity
 
   private def expand_inline(fixture_case : UpstreamSemanticMacroCase, index : Int32) : UpstreamSemanticMacroResult
     expander = Facet::Compiler::MacroExpander.new(context: semantic_context(fixture_case))
-    scope = fixture_case.scope.rchop("+")
+    scope = semantic_instance_scope(fixture_case.scope)
     type = Facet::Compiler::MacroTypeValue.new(
       scope,
       Facet::Compiler::MacroTypeKind::Class,
@@ -168,6 +172,10 @@ module UpstreamSemanticMacroParity
     type_methods = {} of String => Array(Facet::Compiler::MacroSemanticMethodSnapshot)
     type_constants = {} of String => Array(String)
     type_constant_values = {} of String => Hash(String, String)
+    type_annotations = {} of String => Array(Facet::Compiler::MacroSemanticAnnotationSnapshot)
+    type_superclasses = {} of String => String
+    type_superclass_annotations = {} of String => Array(Facet::Compiler::MacroSemanticAnnotationSnapshot)
+    type_subclasses = {} of String => Array(String)
     fixture_case.resolved_paths.each do |name, raw_path|
       keys = fixture_case.free_vars[name]?.try do |raw_variable|
         raw_variable["keys"].as_a.map do |raw_key|
@@ -184,6 +192,11 @@ module UpstreamSemanticMacroParity
           raw_entry["value"].as_s
         )
       end
+      annotations = semantic_annotations(raw_path["annotations"]?)
+      superclass = raw_path["superclass"]?.try(&.as_h?)
+      superclass_name = superclass.try(&.["source"]?).try(&.as_s?)
+      superclass_annotations = semantic_annotations(superclass.try(&.["annotations"]?))
+      subclass_names = raw_path["subclasses"]?.try(&.as_a?).try(&.map(&.as_s)) || [] of String
       paths[name] = Facet::Compiler::MacroSemanticPathSnapshot.new(
         source: raw_path["source"].as_s,
         kind: raw_path["kind"].as_s,
@@ -192,7 +205,11 @@ module UpstreamSemanticMacroParity
         class_type: raw_path["class"]?.try(&.as_bool?) || false,
         struct_type: raw_path["struct"]?.try(&.as_bool?) || false,
         keys: keys,
-        entries: entries
+        entries: entries,
+        annotations: annotations,
+        superclass_name: superclass_name,
+        superclass_annotations: superclass_annotations,
+        subclass_names: subclass_names
       )
       if raw_methods = raw_path["class_methods"]?.try(&.as_a?)
         unless raw_methods.empty?
@@ -212,7 +229,22 @@ module UpstreamSemanticMacroParity
         end
       end
     end
-    type_name = fixture_case.scope.rchop("+")
+    type_name = semantic_instance_scope(fixture_case.scope)
+    unless fixture_case.scope_annotations.empty?
+      type_annotations[type_name] = semantic_annotations(JSON::Any.new(fixture_case.scope_annotations))
+    end
+    unless fixture_case.scope_instance_vars.empty?
+      type_instance_var_snapshots = {
+        type_name => fixture_case.scope_instance_vars.map do |raw_variable|
+          Facet::Compiler::MacroSemanticInstanceVarSnapshot.new(
+            raw_variable["name"].as_s,
+            semantic_annotations(raw_variable["annotations"]?)
+          )
+        end,
+      }
+    else
+      type_instance_var_snapshots = {} of String => Array(Facet::Compiler::MacroSemanticInstanceVarSnapshot)
+    end
     unless fixture_case.scope_constants.empty?
       constants = {} of String => String
       fixture_case.scope_constants.each do |raw_constant|
@@ -227,23 +259,49 @@ module UpstreamSemanticMacroParity
     instance_vars = fixture_case.instance_vars.empty? ? ({} of String => Array(String)) : {type_name => fixture_case.instance_vars}
     Facet::Compiler::MacroExpansionContext.new(
       flags: fixture_case.flags,
+      command_outputs: fixture_case.command_outputs,
       resolve_type_arguments: true,
       lexical_scope: fixture_case.kind == "call" && type_name != "main" ? type_name : nil,
       semantic_paths: paths,
       semantic_path_errors: fixture_case.path_errors,
       type_instance_vars: instance_vars,
+      type_instance_var_snapshots: type_instance_var_snapshots,
       type_methods: type_methods,
       type_constants: type_constants,
       type_constant_values: type_constant_values,
-      type_abstractness: type_name == "main" ? ({} of String => Bool) : {type_name => fixture_case.scope_abstract}
+      type_abstractness: type_name == "main" ? ({} of String => Bool) : {type_name => fixture_case.scope_abstract},
+      type_annotations: type_annotations,
+      type_superclasses: type_superclasses,
+      type_superclass_annotations: type_superclass_annotations,
+      type_subclasses: type_subclasses
     )
+  end
+
+  private def semantic_instance_scope(scope : String) : String
+    scope.rchop(".class").rchop('+')
   end
 
   private def semantic_methods(raw_methods : Array(JSON::Any)) : Array(Facet::Compiler::MacroSemanticMethodSnapshot)
     raw_methods.map do |raw_method|
       Facet::Compiler::MacroSemanticMethodSnapshot.new(
         raw_method["name"].as_s,
-        raw_method["source"].as_s
+        raw_method["source"].as_s,
+        semantic_annotations(raw_method["annotations"]?)
+      )
+    end
+  end
+
+  private def semantic_annotations(raw_annotations : JSON::Any?) : Array(Facet::Compiler::MacroSemanticAnnotationSnapshot)
+    return [] of Facet::Compiler::MacroSemanticAnnotationSnapshot unless raw_annotations
+    raw_annotations.as_a.map do |raw_annotation|
+      named_sources = {} of String => String
+      raw_annotation["named_args"]?.try(&.as_h).try do |raw_named|
+        raw_named.each { |name, source| named_sources[name] = source.as_s }
+      end
+      Facet::Compiler::MacroSemanticAnnotationSnapshot.new(
+        raw_annotation["name"].as_s,
+        raw_annotation["args"]?.try(&.as_a).try(&.map(&.as_s)) || [] of String,
+        named_sources
       )
     end
   end

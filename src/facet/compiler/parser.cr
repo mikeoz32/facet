@@ -2477,7 +2477,7 @@ module Facet
           end
           case current.kind
           when TokenKind::LParen
-            break unless adjacent?(left, current)
+            break unless expression_finish(left) == current.span.start
             if allow_type_apply && const_like?(left) && adjacent?(left, current)
               args = parse_type_args_in_expr
               span = Span.new(node_span(left).start, node_span(args).finish)
@@ -2488,7 +2488,7 @@ module Facet
               left = @arena.add_node(NodeKind::Call, span, [left, args])
             end
           when TokenKind::LBracket
-            break unless adjacent?(left, current)
+            break unless expression_finish(left) == current.span.start
             start = advance
             indices = [] of NodeId
             if current.kind != TokenKind::RBracket

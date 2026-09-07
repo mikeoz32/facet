@@ -25,7 +25,19 @@ module Facet
 
     record MacroSemanticEntrySnapshot, key : String, value : String
 
-    record MacroSemanticMethodSnapshot, name : String, source : String
+    record MacroSemanticAnnotationSnapshot,
+      name : String,
+      positional_sources : Array(String) = [] of String,
+      named_sources : Hash(String, String) = {} of String => String
+
+    record MacroSemanticMethodSnapshot,
+      name : String,
+      source : String,
+      annotations : Array(MacroSemanticAnnotationSnapshot) = [] of MacroSemanticAnnotationSnapshot
+
+    record MacroSemanticInstanceVarSnapshot,
+      name : String,
+      annotations : Array(MacroSemanticAnnotationSnapshot) = [] of MacroSemanticAnnotationSnapshot
 
     record MacroSemanticPathSnapshot,
       source : String,
@@ -35,7 +47,11 @@ module Facet
       class_type : Bool = false,
       struct_type : Bool = false,
       keys : Array(MacroSemanticKeySnapshot) = [] of MacroSemanticKeySnapshot,
-      entries : Array(MacroSemanticEntrySnapshot) = [] of MacroSemanticEntrySnapshot
+      entries : Array(MacroSemanticEntrySnapshot) = [] of MacroSemanticEntrySnapshot,
+      annotations : Array(MacroSemanticAnnotationSnapshot) = [] of MacroSemanticAnnotationSnapshot,
+      superclass_name : String? = nil,
+      superclass_annotations : Array(MacroSemanticAnnotationSnapshot) = [] of MacroSemanticAnnotationSnapshot,
+      subclass_names : Array(String) = [] of String
 
     record MacroCapturedField, source : String, kind : String
 
@@ -74,10 +90,15 @@ module Facet
       getter semantic_paths : Hash(String, MacroSemanticPathSnapshot)
       getter semantic_path_errors : Hash(String, String)
       getter type_instance_vars : Hash(String, Array(String))
+      getter type_instance_var_snapshots : Hash(String, Array(MacroSemanticInstanceVarSnapshot))
       getter type_methods : Hash(String, Array(MacroSemanticMethodSnapshot))
       getter type_constants : Hash(String, Array(String))
       getter type_constant_values : Hash(String, Hash(String, String))
       getter type_abstractness : Hash(String, Bool)
+      getter type_annotations : Hash(String, Array(MacroSemanticAnnotationSnapshot))
+      getter type_superclasses : Hash(String, String)
+      getter type_superclass_annotations : Hash(String, Array(MacroSemanticAnnotationSnapshot))
+      getter type_subclasses : Hash(String, Array(String))
 
       def initialize(
         environment : Hash(String, String?) = {} of String => String?,
@@ -88,10 +109,15 @@ module Facet
         semantic_paths : Hash(String, MacroSemanticPathSnapshot) = {} of String => MacroSemanticPathSnapshot,
         semantic_path_errors : Hash(String, String) = {} of String => String,
         type_instance_vars : Hash(String, Array(String)) = {} of String => Array(String),
+        type_instance_var_snapshots : Hash(String, Array(MacroSemanticInstanceVarSnapshot)) = {} of String => Array(MacroSemanticInstanceVarSnapshot),
         type_methods : Hash(String, Array(MacroSemanticMethodSnapshot)) = {} of String => Array(MacroSemanticMethodSnapshot),
         type_constants : Hash(String, Array(String)) = {} of String => Array(String),
         type_constant_values : Hash(String, Hash(String, String)) = {} of String => Hash(String, String),
         type_abstractness : Hash(String, Bool) = {} of String => Bool,
+        type_annotations : Hash(String, Array(MacroSemanticAnnotationSnapshot)) = {} of String => Array(MacroSemanticAnnotationSnapshot),
+        type_superclasses : Hash(String, String) = {} of String => String,
+        type_superclass_annotations : Hash(String, Array(MacroSemanticAnnotationSnapshot)) = {} of String => Array(MacroSemanticAnnotationSnapshot),
+        type_subclasses : Hash(String, Array(String)) = {} of String => Array(String),
       )
         @environment = environment.dup
         @flags = flags.dup
@@ -99,10 +125,15 @@ module Facet
         @semantic_paths = semantic_paths.dup
         @semantic_path_errors = semantic_path_errors.dup
         @type_instance_vars = type_instance_vars.transform_values(&.dup)
+        @type_instance_var_snapshots = type_instance_var_snapshots.transform_values(&.dup)
         @type_methods = type_methods.transform_values(&.dup)
         @type_constants = type_constants.transform_values(&.dup)
         @type_constant_values = type_constant_values.transform_values(&.dup)
         @type_abstractness = type_abstractness.dup
+        @type_annotations = type_annotations.transform_values(&.dup)
+        @type_superclasses = type_superclasses.dup
+        @type_superclass_annotations = type_superclass_annotations.transform_values(&.dup)
+        @type_subclasses = type_subclasses.transform_values(&.dup)
         payload = String.build do |io|
           @environment.keys.sort.each do |key|
             io << "env:" << key << '=' << (@environment[key] || "<nil>") << '\n'
@@ -123,6 +154,9 @@ module Facet
           @type_instance_vars.keys.sort.each do |name|
             io << "type-instance-vars:" << name << '=' << @type_instance_vars[name].join(',') << '\n'
           end
+          @type_instance_var_snapshots.keys.sort.each do |name|
+            io << "type-instance-var-snapshots:" << name << '=' << @type_instance_var_snapshots[name].to_s << '\n'
+          end
           @type_methods.keys.sort.each do |name|
             methods = @type_methods[name].map { |method| "#{method.name}:#{method.source}" }.join(',')
             io << "type-methods:" << name << '=' << methods << '\n'
@@ -138,6 +172,18 @@ module Facet
           end
           @type_abstractness.keys.sort.each do |name|
             io << "type-abstract:" << name << '=' << @type_abstractness[name] << '\n'
+          end
+          @type_annotations.keys.sort.each do |name|
+            io << "type-annotations:" << name << '=' << @type_annotations[name].to_s << '\n'
+          end
+          @type_superclasses.keys.sort.each do |name|
+            io << "type-superclass:" << name << '=' << @type_superclasses[name] << '\n'
+          end
+          @type_superclass_annotations.keys.sort.each do |name|
+            io << "type-superclass-annotations:" << name << '=' << @type_superclass_annotations[name].to_s << '\n'
+          end
+          @type_subclasses.keys.sort.each do |name|
+            io << "type-subclasses:" << name << '=' << @type_subclasses[name].join(',') << '\n'
           end
         end
         @fingerprint = payload.hash
@@ -249,17 +295,22 @@ module Facet
       Builtin
     end
 
+    record MacroAnnotationValue,
+      name : String,
+      positional_sources : Array(String),
+      named_sources : Hash(String, String)
+
     record MacroTypeValue,
       name : String,
       kind : MacroTypeKind,
       keys : Array(MacroSyntaxValue) = [] of MacroSyntaxValue,
       abstract : Bool = false,
       size : Int32? = nil,
-      union_type_names : Array(String) = [] of String
-    record MacroAnnotationValue,
-      name : String,
-      positional_sources : Array(String),
-      named_sources : Hash(String, String)
+      union_type_names : Array(String) = [] of String,
+      annotations : Array(MacroAnnotationValue) = [] of MacroAnnotationValue,
+      superclass_name : String? = nil,
+      superclass_annotations : Array(MacroAnnotationValue) = [] of MacroAnnotationValue,
+      subclass_names : Array(String) = [] of String
     record MacroMetaVarValue,
       name : String,
       type_name : String?,
@@ -271,7 +322,9 @@ module Facet
       return_type : String?,
       body : String?,
       source : String,
-      annotations : Array(MacroAnnotationValue)
+      annotations : Array(MacroAnnotationValue),
+      double_splat : MacroMetaVarValue? = nil,
+      block_arg : MacroMetaVarValue? = nil
 
     class MacroTupleValue
     end
@@ -331,7 +384,11 @@ module Facet
         ast : AstFile,
         body_id : NodeId,
         parameters : Array(String),
-        implicit_method : String? = nil
+        implicit_call : MacroImplicitBlockCall? = nil
+
+      private record MacroImplicitBlockCall,
+        name : String,
+        argument_ids : Array(NodeId)
 
       private record BuiltinProperty,
         name : String,
@@ -572,7 +629,7 @@ module Facet
         return if node.kind == NodeKind::MacroDef
         if node.kind == NodeKind::MacroExpr || node.kind == NodeKind::MacroControl || node.kind == NodeKind::MacroVar ||
            (node.kind == NodeKind::MacroLiteral &&
-           (node.semantic_flag?(SemanticFlag::Escaped) || ast.node_string(node_id).includes?("{{")))
+           (node.semantic_flag?(SemanticFlag::Escaped) || ast.node_string(node_id).includes?("{{") || ast.node_string(node_id).includes?("{%")))
           acc << node_id
           return
         end
@@ -743,14 +800,65 @@ module Facet
         footprint : MacroFootprint?,
       ) : String
         text = ast.node_string(node_id)
+        expand_embedded_macro_template(text, index, footprint)
+      end
+
+      private def expand_embedded_macro_template(
+        text : String,
+        index : ProgramIndex?,
+        footprint : MacroFootprint?,
+      ) : String
         String.build do |io|
           cursor = 0
-          while start = text.index("{{", cursor)
+          while cursor < text.bytesize
+            expression_start = text.index("{{", cursor)
+            control_start = text.index("{%", cursor)
+            start = if expression_start && control_start
+                      Math.min(expression_start, control_start)
+                    else
+                      expression_start || control_start
+                    end
+            unless start
+              io << text.byte_slice(cursor, text.bytesize - cursor)
+              break
+            end
             io << text.byte_slice(cursor, start - cursor)
+
+            if control_start == start
+              suffix = text.byte_slice(start, text.bytesize - start)
+              parser = Parser.new(Source.new(suffix, "facet:embedded-macro-control", SourceKind::Virtual))
+              control_ast = parser.parse_file
+              controls = [] of NodeId
+              collect_macros(
+                control_ast.root,
+                control_ast,
+                controls,
+                index,
+                ordinary_call_allowed: false,
+                footprint: footprint
+              )
+              control_id = controls.find do |candidate_id|
+                candidate = control_ast.node(candidate_id)
+                candidate.kind == NodeKind::MacroControl && candidate.span.start == 0
+              end
+              if control_id
+                control = control_ast.node(control_id)
+                parser.diagnostics.each do |diagnostic|
+                  @diagnostics << diagnostic if diagnostic.span.start < control.span.finish
+                end
+                io << (expand_macro_control(control_id, control_ast, index, footprint) || "")
+                cursor = start + control.span.finish
+                next
+              end
+
+              io << "{%"
+              cursor = start + 2
+              next
+            end
+
             finish = text.index("}}", start + 2)
             unless finish
               io << text.byte_slice(start, text.bytesize - start)
-              cursor = text.bytesize
               break
             end
 
@@ -766,7 +874,6 @@ module Facet
             footprint.try(&.merge_requires(expression_ast.source))
             cursor = finish + 2
           end
-          io << text.byte_slice(cursor, text.bytesize - cursor) if cursor < text.bytesize
         end
       end
 
@@ -2733,6 +2840,10 @@ module Facet
               return MacroEvaluation.new(type)
             end
           end
+          if name == "@top_level"
+            mark_type_introspection
+            return MacroEvaluation.new(MacroTypeValue.new("main.class", MacroTypeKind::Class))
+          end
           MacroEvaluation.new(MacroSyntaxValue.identifier(name))
         when NodeKind::MacroVar
           value = expand_macro_var(node_id, ast)
@@ -2798,9 +2909,9 @@ module Facet
                 args = [] of MacroValue
                 block = nil.as(MacroEvalBlock?)
                 syntax_tree(ast).node(node_id).arguments.each do |argument|
-                  if implicit_method = macro_implicit_block_method(argument.id, ast)
+                  if implicit_call = macro_implicit_block_call(argument.id, ast)
                     return nil if block
-                    block = MacroEvalBlock.new(ast, argument.id, [] of String, implicit_method)
+                    block = MacroEvalBlock.new(ast, argument.id, [] of String, implicit_call)
                     next
                   end
                   evaluation = eval_value(argument.id, ast)
@@ -2831,11 +2942,14 @@ module Facet
             if name == "`"
               arguments = syntax_tree(ast).node(node_id).arguments
               return nil unless arguments.size == 1
-              command = eval_value(arguments.first.id, ast).try { |evaluation| macro_scalar_text(evaluation.value) }
+              command = eval_macro_command(arguments.first.id, ast)
               return nil unless command
               output = @context.command_output(command)
               return nil unless output
-              return MacroEvaluation.new(MacroSyntaxValue.code(output))
+              # Crystal's macro interpreter returns command output as MacroId,
+              # so chained MacroId methods such as `chomp.stringify` must retain
+              # identifier semantics instead of becoming a StringLiteral.
+              return MacroEvaluation.new(MacroSyntaxValue.identifier(output))
             end
             if name == "env"
               arguments = syntax_tree(ast).node(node_id).arguments
@@ -3028,6 +3142,11 @@ module Facet
           children.each do |cid|
             if evaluation = eval_value(cid, ast)
               values << evaluation.value
+            else
+              # A collection literal is still structurally complete when an
+              # element is syntax the lightweight evaluator cannot reduce.
+              # Keep that AST-backed value instead of silently dropping it.
+              values << MacroSyntaxValue.code(ast.node_string(cid))
             end
           end
           if node.kind == NodeKind::Tuple
@@ -3061,6 +3180,25 @@ module Facet
           MacroEvaluation.new(MacroHashValue.new(entries))
         else
           nil
+        end
+      end
+
+      private def eval_macro_command(node_id : NodeId, ast : AstFile) : String?
+        node = ast.node(node_id)
+        unless node.kind == NodeKind::StringInterpolation
+          return eval_value(node_id, ast).try { |evaluation| macro_scalar_text(evaluation.value) }
+        end
+
+        String.build do |io|
+          ast.children(node_id).each do |child_id|
+            evaluation = eval_value(child_id, ast)
+            return nil unless evaluation
+            if ast.node(child_id).kind == NodeKind::LiteralString
+              io << (macro_scalar_text(evaluation.value) || val_to_string(evaluation.value))
+            else
+              io << val_to_string(evaluation.value)
+            end
+          end
         end
       end
 
@@ -3139,9 +3277,9 @@ module Facet
           name = ast.arena.symbols[callee_node.payload_index]
           if args_id = call_children[1]?
             ast.children(args_id).each do |arg_id|
-              if implicit_method = macro_implicit_block_method(arg_id, ast)
+              if implicit_call = macro_implicit_block_call(arg_id, ast)
                 return nil if block
-                block = MacroEvalBlock.new(ast, arg_id, [] of String, implicit_method)
+                block = MacroEvalBlock.new(ast, arg_id, [] of String, implicit_call)
                 next
               end
               evaluation = eval_value(arg_id, ast)
@@ -3176,17 +3314,66 @@ module Facet
         apply_macro_method(receiver.value, name, args, block, ast.node(member_id).span)
       end
 
-      private def macro_implicit_block_method(node_id : NodeId, ast : AstFile) : String?
+      private def macro_implicit_block_call(node_id : NodeId, ast : AstFile) : MacroImplicitBlockCall?
         node = ast.node(node_id)
-        return nil unless node.kind == NodeKind::Unary
-        operator = node.payload_index
-        return nil unless operator.in?(0...ast.arena.operators.size)
-        return nil unless ast.arena.operator_kind(operator) == TokenKind::SafeNav
-        target_id = ast.children(node_id).first?
-        return nil unless target_id
-        target = ast.node(target_id)
-        return nil unless target.kind == NodeKind::Ident
-        ast.arena.symbols[target.payload_index]
+        if node.kind == NodeKind::Unary
+          operator = node.payload_index
+          return nil unless operator.in?(0...ast.arena.operators.size)
+          return nil unless ast.arena.operator_kind(operator) == TokenKind::SafeNav
+          target_id = ast.children(node_id).first?
+          return nil unless target_id
+          return macro_implicit_block_call_target(target_id, ast)
+        end
+
+        # `&.[](index)` is represented as a call whose callee is an index node
+        # rooted at the synthetic `&.` identifier, rather than as a unary node.
+        return nil unless node.kind == NodeKind::Call
+        call_children = ast.children(node_id)
+        callee_id = call_children.first?
+        return nil unless callee_id
+        callee = ast.node(callee_id)
+        return nil unless callee.kind == NodeKind::Index
+        receiver_id = ast.children(callee_id).first?
+        return nil unless receiver_id
+        receiver = ast.node(receiver_id)
+        return nil unless receiver.kind == NodeKind::Ident
+        return nil unless ast.arena.symbols[receiver.payload_index] == "&."
+        MacroImplicitBlockCall.new("[]", macro_call_argument_ids(call_children, ast))
+      end
+
+      private def macro_implicit_block_call_target(node_id : NodeId, ast : AstFile) : MacroImplicitBlockCall?
+        node = ast.node(node_id)
+        if node.kind == NodeKind::Ident
+          return MacroImplicitBlockCall.new(ast.arena.symbols[node.payload_index], [] of NodeId)
+        end
+        return nil unless node.kind == NodeKind::Call
+
+        call_children = ast.children(node_id)
+        callee_id = call_children.first?
+        return nil unless callee_id
+        callee = ast.node(callee_id)
+        name = case callee.kind
+               when NodeKind::Ident
+                 ast.arena.symbols[callee.payload_index]
+               when NodeKind::Index
+                 receiver_id = ast.children(callee_id).first?
+                 return nil unless receiver_id
+                 receiver = ast.node(receiver_id)
+                 return nil unless receiver.kind == NodeKind::Ident
+                 return nil unless ast.arena.symbols[receiver.payload_index] == "."
+                 "[]"
+               else
+                 return nil
+               end
+        MacroImplicitBlockCall.new(
+          name,
+          macro_call_argument_ids(call_children, ast)
+        )
+      end
+
+      private def macro_call_argument_ids(call_children : Slice(NodeId), ast : AstFile) : Array(NodeId)
+        args_id = call_children[1]?
+        args_id ? ast.children(args_id).to_a : [] of NodeId
       end
 
       private def apply_macro_method(
@@ -3777,7 +3964,9 @@ module Facet
           return nil unless args.empty?
           MacroEvaluation.new(MacroSyntaxValue.symbol(val_to_string(receiver)))
         else
-          nil
+          if receiver.is_a?(MacroSyntaxValue) && macro_id_value?(receiver)
+            macro_diagnostic(span, "undefined macro method 'MacroId##{name}'")
+          end
         end
       end
 
@@ -3818,6 +4007,17 @@ module Facet
           return MacroEvaluation.new(resolved) if resolved
           return MacroEvaluation.new(nil) if name == "resolve?"
         when MacroTypeValue
+          if args.size == 1 && {"<", "<=", ">", ">="}.includes?(name)
+            operator = case name
+                       when "<"  then TokenKind::Less
+                       when "<=" then TokenKind::LessEqual
+                       when ">"  then TokenKind::Greater
+                       else           TokenKind::GreaterEqual
+                       end
+            if evaluation = eval_binary(operator, receiver, args.first)
+              return evaluation
+            end
+          end
           if evaluation = apply_annotation_lookup(macro_type_annotations(receiver), name, args)
             return evaluation
           end
@@ -3840,11 +4040,18 @@ module Facet
             return MacroEvaluation.new(macro_semantic_literal_value(source)) if source
             return MacroEvaluation.new(nil)
           end
+          if name == "name"
+            return nil unless args.size <= 1
+            generic_args = args.empty? ? true : args.first
+            return nil unless generic_args.is_a?(Bool)
+            mark_type_introspection
+            display_name = receiver.name.rchop(".class").rchop('+')
+            display_name = display_name.split('(', 2).first unless generic_args
+            return MacroEvaluation.new(MacroSyntaxValue.identifier(display_name))
+          end
           return nil unless args.empty?
           mark_type_introspection
           case name
-          when "name"
-            return MacroEvaluation.new(MacroSyntaxValue.identifier(receiver.name))
           when "class"
             return MacroEvaluation.new(MacroTypeValue.new("#{receiver.name}.class", MacroTypeKind::Class))
           when "methods"
@@ -3860,6 +4067,13 @@ module Facet
             return MacroEvaluation.new(constants)
           when "size"
             return MacroEvaluation.new(receiver.size.not_nil!.to_i64) if receiver.size
+            type_source = receiver.name.rchop(".class").rchop('+')
+            type_name = type_source.split('(', 2).first
+            if {"Tuple", "NamedTuple"}.includes?(type_name)
+              if size = macro_type_argument_count(type_source)
+                return MacroEvaluation.new(size.to_i64)
+              end
+            end
           when "union_types"
             names = receiver.union_type_names.empty? ? [receiver.name] : receiver.union_type_names
             values = names.map do |type_name|
@@ -3871,6 +4085,13 @@ module Facet
             return MacroEvaluation.new(!receiver.union_type_names.empty?)
           when "superclass"
             return MacroEvaluation.new(macro_superclass(receiver))
+          when "subclasses", "all_subclasses"
+            names = receiver.subclass_names.empty? ? (@context.type_subclasses[receiver.name]? || [] of String) : receiver.subclass_names
+            values = names.map do |type_name|
+              (macro_type_value(type_name, @active_index, current_type_scope) ||
+                MacroTypeValue.new(type_name, MacroTypeKind::Class)).as(MacroValue)
+            end
+            return MacroEvaluation.new(values)
           when "ancestors"
             ancestors = macro_ancestors(receiver).map(&.as(MacroValue))
             return MacroEvaluation.new(ancestors)
@@ -3905,6 +4126,10 @@ module Facet
             return MacroEvaluation.new(value)
           when "source"
             return MacroEvaluation.new(MacroSyntaxValue.code(receiver.source))
+          when "double_splat"
+            return MacroEvaluation.new(receiver.double_splat)
+          when "block_arg"
+            return MacroEvaluation.new(receiver.block_arg)
           end
         when MacroMetaVarValue
           if evaluation = apply_annotation_lookup(receiver.annotations, name, args)
@@ -3924,13 +4149,17 @@ module Facet
             return MacroEvaluation.new(!receiver.default_value.nil?)
           end
         when MacroAnnotationValue
+          if name == "[]"
+            return nil unless args.size == 1
+            return eval_macro_index(receiver, args.first)
+          end
           return nil unless args.empty?
           case name
           when "name"
             return MacroEvaluation.new(MacroSyntaxValue.identifier(receiver.name))
           when "args"
             values = receiver.positional_sources.map { |source| eval_annotation_source(source).as(MacroValue) }
-            return MacroEvaluation.new(values)
+            return MacroEvaluation.new(MacroTupleValue.new(values))
           when "named_args"
             values = receiver.named_sources.transform_values { |source| eval_annotation_source(source).as(MacroValue) }
             return MacroEvaluation.new(values)
@@ -3974,6 +4203,10 @@ module Facet
       end
 
       private def macro_type_annotations(type : MacroTypeValue) : Array(MacroAnnotationValue)
+        return type.annotations unless type.annotations.empty?
+        if snapshots = @context.type_annotations[type.name]?
+          return macro_semantic_annotations(snapshots)
+        end
         index = @active_index
         return [] of MacroAnnotationValue unless index
         refs = index.types[type.name]? || [] of DeclRef
@@ -4023,7 +4256,17 @@ module Facet
                              else
                                [] of String
                              end
-          MacroTypeValue.new(snapshot.source, kind, keys, size: size, union_type_names: union_type_names)
+          MacroTypeValue.new(
+            snapshot.source,
+            kind,
+            keys,
+            size: size,
+            union_type_names: union_type_names,
+            annotations: macro_semantic_annotations(snapshot.annotations),
+            superclass_name: snapshot.superclass_name,
+            superclass_annotations: macro_semantic_annotations(snapshot.superclass_annotations),
+            subclass_names: snapshot.subclass_names
+          )
         when "Crystal::TupleLiteral"
           if snapshot.source == "::Tuple.new"
             MacroTupleValue.new([] of MacroValue)
@@ -4318,16 +4561,7 @@ module Facet
 
       private def macro_methods(type : MacroTypeValue) : Array(MacroMethodValue)
         if snapshots = @context.type_methods[type.name]?
-          return snapshots.map do |snapshot|
-            MacroMethodValue.new(
-              snapshot.name,
-              [] of MacroMetaVarValue,
-              nil,
-              nil,
-              snapshot.source,
-              [] of MacroAnnotationValue
-            )
-          end
+          return snapshots.map { |snapshot| macro_method_snapshot_value(snapshot) }
         end
         index = @active_index
         return [] of MacroMethodValue unless index
@@ -4347,7 +4581,54 @@ module Facet
         end
       end
 
+      private def macro_method_snapshot_value(snapshot : MacroSemanticMethodSnapshot) : MacroMethodValue
+        parser = Parser.new(Source.new(snapshot.source, "macro-semantic-method.cr", SourceKind::Virtual))
+        ast = parser.parse_file
+        unless parser.diagnostics.empty?
+          return MacroMethodValue.new(
+            snapshot.name,
+            [] of MacroMetaVarValue,
+            nil,
+            nil,
+            snapshot.source,
+            [] of MacroAnnotationValue
+          )
+        end
+        node = syntax_tree(ast).root.descendants.find { |candidate| candidate.kind == NodeKind::Def }
+        return MacroMethodValue.new(snapshot.name, [] of MacroMetaVarValue, nil, nil, snapshot.source, [] of MacroAnnotationValue) unless node
+        parameters = node.parameters
+        args = parameters.compact_map do |parameter|
+          kind = unannotated_node(parameter).kind
+          next if {NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(kind)
+          macro_meta_var(parameter)
+        end
+        double_splat = parameters.find { |parameter| unannotated_node(parameter).kind == NodeKind::DoubleSplat }
+          .try { |parameter| macro_meta_var(parameter) }
+        block_arg = parameters.find { |parameter| unannotated_node(parameter).kind == NodeKind::BlockParam }
+          .try { |parameter| macro_meta_var(parameter) }
+        MacroMethodValue.new(
+          snapshot.name,
+          args,
+          node.return_type.try(&.text),
+          node.body.try(&.text),
+          snapshot.source,
+          snapshot.annotations.empty? ? macro_annotations(node) : macro_semantic_annotations(snapshot.annotations),
+          double_splat,
+          block_arg
+        )
+      end
+
       private def macro_instance_vars(type : MacroTypeValue) : Array(MacroMetaVarValue)
+        if snapshots = @context.type_instance_var_snapshots[type.name]?
+          return snapshots.map do |snapshot|
+            MacroMetaVarValue.new(
+              snapshot.name,
+              nil,
+              nil,
+              macro_semantic_annotations(snapshot.annotations)
+            )
+          end
+        end
         if names = @context.type_instance_vars[type.name]?
           return names.map do |name|
             MacroMetaVarValue.new(name, nil, nil, [] of MacroAnnotationValue)
@@ -4392,11 +4673,28 @@ module Facet
       end
 
       private def macro_superclass(type : MacroTypeValue) : MacroTypeValue?
+        if name = type.superclass_name || @context.type_superclasses[type.name]?
+          annotation_snapshots = @context.type_superclass_annotations[type.name]? || [] of MacroSemanticAnnotationSnapshot
+          annotations = type.superclass_annotations.empty? ? macro_semantic_annotations(annotation_snapshots) : type.superclass_annotations
+          return MacroTypeValue.new(name, MacroTypeKind::Class, annotations: annotations)
+        end
         index = @active_index
         return nil unless index
         name = index.superclass_for(type.name)
         return nil unless name
         macro_type_value(name, index, type.name)
+      end
+
+      private def macro_semantic_annotations(
+        snapshots : Array(MacroSemanticAnnotationSnapshot),
+      ) : Array(MacroAnnotationValue)
+        snapshots.map do |snapshot|
+          MacroAnnotationValue.new(
+            snapshot.name,
+            snapshot.positional_sources,
+            snapshot.named_sources
+          )
+        end
       end
 
       private def macro_ancestors(type : MacroTypeValue) : Array(MacroTypeValue)
@@ -4975,12 +5273,14 @@ module Facet
           {"body", "args", "empty?"}.includes?(method_name)
         when MacroTypeValue
           {"name", "methods", "instance_vars", "constants", "superclass", "ancestors",
+           "subclasses", "all_subclasses", "union?",
            "class?", "module?", "struct?", "enum?", "lib?", "abstract?", "has_constant?", "has_method?",
            "constant", "annotation", "annotations", "size", "union_types"}.includes?(method_name)
         when MacroAnnotationValue
           {"name", "args", "named_args", "[]"}.includes?(method_name)
         when MacroMethodValue
-          {"name", "args", "return_type", "body", "source", "annotation", "annotations"}.includes?(method_name)
+          {"name", "args", "return_type", "body", "source", "double_splat", "block_arg",
+           "annotation", "annotations"}.includes?(method_name)
         when MacroMetaVarValue
           {"name", "type", "default_value", "has_default_value?", "annotation", "annotations"}.includes?(method_name)
         else
@@ -4989,10 +5289,16 @@ module Facet
       end
 
       private def eval_macro_eval_block(block : MacroEvalBlock, values : Array(MacroValue)) : MacroEvaluation?
-        if method = block.implicit_method
+        if call = block.implicit_call
           receiver = values.first?
           return nil unless receiver
-          return apply_macro_method(receiver, method, [] of MacroValue)
+          args = [] of MacroValue
+          call.argument_ids.each do |argument_id|
+            evaluation = eval_value(argument_id, block.ast)
+            return nil unless evaluation
+            args << evaluation.value
+          end
+          return apply_macro_method(receiver, call.name, args)
         end
         parent = current_macro_env
         env = parent.dup
@@ -5900,6 +6206,19 @@ module Facet
         if left.is_a?(MacroTypeValue) && right.is_a?(MacroTypeValue)
           return normalize_macro_type_name(left.name) == normalize_macro_type_name(right.name)
         end
+        if left.is_a?(MacroTupleValue) && right.is_a?(MacroTupleValue)
+          return macro_sequences_equal?(left.values, right.values)
+        end
+        if left.is_a?(MacroArrayValue) && right.is_a?(MacroArrayValue)
+          return macro_sequences_equal?(left.values, right.values)
+        end
+        if left.is_a?(Array(MacroValue)) && right.is_a?(Array(MacroValue))
+          return macro_sequences_equal?(left, right)
+        end
+        if left.is_a?(Hash(String, MacroValue)) && right.is_a?(Hash(String, MacroValue))
+          return false unless left.keys.to_set == right.keys.to_set
+          return left.all? { |key, value| macro_values_equal?(value, right[key]) }
+        end
         if left.is_a?(MacroSyntaxValue) && right.is_a?(MacroSyntaxValue)
           if macro_id_value?(left) && macro_id_comparable_value?(right)
             return left.value == right.value
@@ -5909,6 +6228,12 @@ module Facet
           end
         end
         left == right
+      end
+
+      private def macro_sequences_equal?(left : Array(MacroValue), right : Array(MacroValue)) : Bool
+        left.size == right.size && left.each_with_index.all? do |value, index|
+          macro_values_equal?(value, right[index])
+        end
       end
 
       private def macro_id_comparable_value?(value : MacroSyntaxValue) : Bool

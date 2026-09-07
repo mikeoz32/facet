@@ -28,15 +28,15 @@ describe Facet::Compiler::MacroExpander do
     context = Facet::Compiler::MacroExpansionContext.new(
       {"FOO" => "bar", "MISSING" => nil},
       ["foo", "target=x"],
-      {"true" => "", "echo facet" => "facet\n"}
+      {"true" => "", "echo facet" => "facet\n", "echo \"facet\"" => "quoted\n"}
     )
     expander = Facet::Compiler::MacroExpander.new(context: context)
     arguments = {} of String => Facet::Compiler::MacroValue
     output = expander.expand_template(<<-CR, arguments)
-      {{env("FOO")}}|{{env("MISSING")}}|{{flag?(:foo)}}|{{flag?(:target)}}|{{flag?("target=x")}}|{{ `true` }}|{{ `echo facet` }}
+      {% name = "facet" %}{{env("FOO")}}|{{env("MISSING")}}|{{flag?(:foo)}}|{{flag?(:target)}}|{{flag?("target=x")}}|{{ `true` }}|{{ `echo facet` }}|{{ `echo \#{name}` }}
     CR
 
-    output.lstrip.should eq(%("bar"|nil|true|"x"|true||facet\n))
+    output.lstrip.should eq(%("bar"|nil|true|"x"|true||facet\n|quoted\n))
     expander.diagnostics.should be_empty
 
     uncaptured = Facet::Compiler::MacroExpander.new
@@ -58,6 +58,38 @@ describe Facet::Compiler::MacroExpander do
 
     other_context = Facet::Compiler::MacroExpansionContext.new(lexical_scope: "IO::Error")
     context.fingerprint.should_not eq(other_context.fingerprint)
+  end
+
+  it "renders metaclass type names with Crystal generic-argument semantics" do
+    expander = Facet::Compiler::MacroExpander.new
+    type = Facet::Compiler::MacroTypeValue.new(
+      "Tuple(*T).class",
+      Facet::Compiler::MacroTypeKind::Class
+    )
+
+    expander.expand_template(
+      %({{ @type.name }}|{{ @type.name(generic_args: false) }}|{{ @type.size }}),
+      {"@type" => type.as(Facet::Compiler::MacroValue)}
+    ).should eq("Tuple(*T)|Tuple|1")
+    expander.diagnostics.should be_empty
+
+    abstract_type = Facet::Compiler::MacroTypeValue.new(
+      "IO::FileDescriptor+.class",
+      Facet::Compiler::MacroTypeKind::Class
+    )
+    expander.expand_template(
+      %({{ @type.name }}),
+      {"@type" => abstract_type.as(Facet::Compiler::MacroValue)}
+    ).should eq("IO::FileDescriptor")
+
+    concrete_tuple = Facet::Compiler::MacroTypeValue.new(
+      "Tuple(Int32, String)",
+      Facet::Compiler::MacroTypeKind::Struct
+    )
+    expander.expand_template(
+      %({{ @type.size }}),
+      {"@type" => concrete_tuple.as(Facet::Compiler::MacroValue)}
+    ).should eq("2")
   end
 
   it "isolates mutable semantic snapshots between top-level expansions" do
@@ -173,6 +205,79 @@ describe Facet::Compiler::MacroExpander do
     expander.diagnostics.should be_empty
   end
 
+  it "reconstructs method and argument annotations from semantic method snapshots" do
+    foo = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "Foo",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::AnnotationType"
+    )
+    moo = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "Moo",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::NonGenericClassType",
+      class_type: true,
+      annotations: [
+        Facet::Compiler::MacroSemanticAnnotationSnapshot.new("Foo", ["1"]),
+        Facet::Compiler::MacroSemanticAnnotationSnapshot.new("Foo", ["2"]),
+      ]
+    )
+    method = Facet::Compiler::MacroSemanticMethodSnapshot.new(
+      "bar",
+      "@[Foo(1)]\ndef bar(@[Foo(2)] value)\nend"
+    )
+    context = Facet::Compiler::MacroExpansionContext.new(
+      semantic_paths: {"Foo" => foo, "Moo" => moo},
+      type_methods: {"Moo" => [method]}
+    )
+    expander = Facet::Compiler::MacroExpander.new(context: context)
+
+    expander.expand_template(
+      "{{ Moo.methods.first.annotations.size }}|" \
+      "{{ Moo.methods.first.annotation(Foo)[0] }}|" \
+      "{{ Moo.methods.first.args.first.annotation(Foo)[0] }}|" \
+      "{{ Moo.annotation(Foo)[0] }}|" \
+      "{% if Moo.annotation(Foo)[0] == 2 %}equal{% end %}|" \
+      "{{ Moo.annotations.map(&.[](0)).join(\",\") }}",
+      {} of String => Facet::Compiler::MacroValue
+    ).should eq("1|1|2|2|equal|\"1,2\"")
+    expander.diagnostics.should be_empty
+  end
+
+  it "preserves unreduced syntax elements when evaluating macro tuples" do
+    expander = Facet::Compiler::MacroExpander.new
+
+    expander.expand_template(
+      %q({{ {Int32 | Nil, String | Nil}.size }}),
+      {} of String => Facet::Compiler::MacroValue
+    ).should eq("2")
+    expander.diagnostics.should be_empty
+  end
+
+  it "exposes snapshotted top-level methods through @top_level" do
+    ann = Facet::Compiler::MacroSemanticPathSnapshot.new(
+      "Ann",
+      "Crystal::TypeNode",
+      type_kind: "Crystal::AnnotationType"
+    )
+    method = Facet::Compiler::MacroSemanticMethodSnapshot.new(
+      "foo",
+      "def foo(@[Ann] value, @[Ann] **options, @[Ann] &block)\nend"
+    )
+    context = Facet::Compiler::MacroExpansionContext.new(
+      semantic_paths: {"Ann" => ann},
+      type_methods: {"main.class" => [method]}
+    )
+    expander = Facet::Compiler::MacroExpander.new(context: context)
+
+    expander.expand_template(
+      "{{ @top_level.methods.first.args.first.annotation(Ann).name }}|" \
+      "{{ @top_level.methods.first.double_splat.annotation(Ann).name }}|" \
+      "{{ @top_level.methods.first.block_arg.annotation(Ann).name }}",
+      {} of String => Facet::Compiler::MacroValue
+    ).should eq("Ann|Ann|Ann")
+    expander.diagnostics.should be_empty
+  end
+
   it "validates parse_type and reports the official diagnostics" do
     arguments = {} of String => Facet::Compiler::MacroValue
     valid = Facet::Compiler::MacroExpander.new
@@ -205,6 +310,7 @@ describe Facet::Compiler::MacroExpander do
       %({{"".starts_with?(other: "")}})     => "no parameter named 'other'",
       %({{"".camelcase(foo: "")}})          => "no parameter named 'foo'",
       %({{flag?}})                          => "wrong number of arguments for macro '::flag?' (given 0, expected 1)",
+      %({{"foo".id.unknown}})               => "undefined macro method 'MacroId#unknown'",
     }.each do |body, expected_diagnostic|
       expander = Facet::Compiler::MacroExpander.new
       expander.expand_template(body, arguments)
@@ -2247,6 +2353,17 @@ describe Facet::Compiler::MacroExpander do
 
     expanded.first.source.text.should contain("0")
     expanded.first.source.text.should_not contain("bad")
+    expander.diagnostics.should be_empty
+  end
+
+  it "expands nested macro controls embedded in macro literal text" do
+    expander = Facet::Compiler::MacroExpander.new
+    expanded = expander.expand_template(
+      %q(DIGIT_TABLE = "{% for i in 0..2 %}{{ i }}{% end %}"),
+      {} of String => Facet::Compiler::MacroValue
+    )
+
+    expanded.should eq(%(DIGIT_TABLE = "012"))
     expander.diagnostics.should be_empty
   end
 
