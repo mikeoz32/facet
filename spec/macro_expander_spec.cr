@@ -276,10 +276,24 @@ describe Facet::Compiler::MacroExpander do
     source = Facet::Compiler::Source.new(<<-CR)
       macro describe_block(x)
         call_block = {{x.block.stringify}}
+        block_class_name = {{x.block.class_name}}
+        block_body = {{x.block.body.stringify}}
+        block_args = {{x.block.args.stringify}}
+        block_splat_index = {{x.block.splat_index.stringify}}
+      end
+
+      macro describe_block_expressions(x)
+        block_first_expression = {{x.block.body.expressions[0].stringify}}
       end
 
       describe_block((1.some_call do
-        7
+        |value, *rest|
+        value
+      end))
+
+      describe_block_expressions((1.some_call do
+        first
+        second
       end))
     CR
     ast = Facet::Compiler::Parser.new(source).parse_file
@@ -287,7 +301,12 @@ describe Facet::Compiler::MacroExpander do
     expander = Facet::Compiler::MacroExpander.new(index)
     expanded = expander.expand(ast, index)
 
-    expanded.source.text.should contain(%(call_block = "do\\n    7\\n  end"))
+    expanded.source.text.should contain(%(call_block = "do\\n    |value, *rest|\\n    value\\n  end"))
+    expanded.source.text.should contain(%(block_class_name = "Block"))
+    expanded.source.text.should contain(%(block_body = "value"))
+    expanded.source.text.should contain(%(block_args = "[value, rest]"))
+    expanded.source.text.should contain(%(block_splat_index = "1"))
+    expanded.source.text.should contain(%(block_first_expression = "first"))
     expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end
@@ -724,6 +743,18 @@ describe Facet::Compiler::MacroExpander do
         builtin_is_unary = {{x.is_a?(UnaryExpression).stringify}}
       end
 
+      macro describe_while(x)
+        while_class_name = {{x.class_name}}
+        while_cond = {{x.cond.stringify}}
+        while_body = {{x.body.stringify}}
+      end
+
+      macro describe_yield_ast(x)
+        yield_class_name = {{x.class_name}}
+        yield_expressions = {{x.expressions.stringify}}
+        yield_scope = {{x.scope.stringify}}
+      end
+
       describe_proc_literal(->(z : Int32) : String { z })
       describe_proc_pointer(->some_object.method(SomeType, OtherType))
       describe_proc_pointer(->method)
@@ -743,6 +774,9 @@ describe Facet::Compiler::MacroExpander do
       describe_responds_to(value.responds_to?(:foo))
       describe_builtin(sizeof(Int32))
       describe_builtin(alignof(Int64))
+      describe_while((while 1; 2; end))
+      describe_yield_ast((yield 1, 2))
+      describe_yield_ast((with 3 yield 4))
     CR
     parser = Facet::Compiler::Parser.new(source)
     ast = parser.parse_file
@@ -809,6 +843,14 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.should contain(%(builtin_exp = "Int32"))
     expanded.source.text.should contain(%(builtin_exp = "Int64"))
     expanded.source.text.should contain(%(builtin_is_unary = "true"))
+    expanded.source.text.should contain(%(while_class_name = "While"))
+    expanded.source.text.should contain(%(while_cond = "1"))
+    expanded.source.text.should contain(%(while_body = "2"))
+    expanded.source.text.should contain(%(yield_class_name = "Yield"))
+    expanded.source.text.should contain(%(yield_expressions = "[1, 2]"))
+    expanded.source.text.should contain(%(yield_expressions = "[4]"))
+    expanded.source.text.should contain(%(yield_scope = ""))
+    expanded.source.text.should contain(%(yield_scope = "3"))
     expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end

@@ -10,7 +10,7 @@ index b2378cd..7248eac 100644
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,754 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +185,804 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
@@ -199,6 +199,16 @@ index b2378cd..7248eac 100644
 +    facet_macro_capture_array_literal(node)
 +  when Crystal::HashLiteral
 +    facet_macro_capture_hash_literal(node)
++  when Crystal::Block
++    facet_macro_capture_block(node)
++  when Crystal::Expressions
++    facet_macro_capture_expressions(node)
++  when Crystal::While
++    facet_macro_capture_while(node)
++  when Crystal::ControlExpression
++    facet_macro_capture_control_expression(node)
++  when Crystal::Yield
++    facet_macro_capture_yield(node)
 +  when Crystal::UninitializedVar
 +    facet_macro_capture_uninitialized_var(node)
 +  when Crystal::MacroExpression
@@ -341,6 +351,46 @@ index b2378cd..7248eac 100644
 +      }
 +      FacetMacroCapturedNode.new(entry.to_s, "Crystal::HashLiteral::Entry", entry_fields)
 +    end,
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
++end
++
++private def facet_macro_capture_block(node : Crystal::Block) : FacetMacroCapturedNode
++  body = node.body
++  fields = {
++    "body"        => facet_macro_capture_structure(body) || facet_macro_capture_node(body),
++    "splat_index" => node.splat_index ? FacetMacroCapturedNode.new(node.splat_index.to_s, "Crystal::NumberLiteral") : FacetMacroCapturedNode.new("nil", "Crystal::NilLiteral"),
++  }
++  collections = {
++    "args" => node.args.map { |argument| FacetMacroCapturedNode.new(argument.name, "Crystal::MacroId") },
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
++end
++
++private def facet_macro_capture_expressions(node : Crystal::Expressions) : FacetMacroCapturedNode
++  collections = {
++    "expressions" => node.expressions.map { |expression| facet_macro_capture_node(expression) },
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, collections: collections)
++end
++
++private def facet_macro_capture_while(node : Crystal::While) : FacetMacroCapturedNode
++  fields = {
++    "cond" => facet_macro_capture_node(node.cond),
++    "body" => facet_macro_capture_node(node.body),
++  }
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_control_expression(node : Crystal::ControlExpression) : FacetMacroCapturedNode
++  fields = {"exp" => facet_macro_capture_node(node.exp)}
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields)
++end
++
++private def facet_macro_capture_yield(node : Crystal::Yield) : FacetMacroCapturedNode
++  fields = {"scope" => facet_macro_capture_node(node.scope)}
++  collections = {
++    "expressions" => node.exps.map { |expression| facet_macro_capture_node(expression) },
 +  }
 +  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections)
 +end

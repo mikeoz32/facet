@@ -27,10 +27,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_expression_argument_count.should eq(38)
     runtime_macro_header.structured_collection_argument_count.should eq(12)
     runtime_macro_header.structured_misc_argument_count.should eq(36)
+    runtime_macro_header.structured_block_control_argument_count.should eq(19)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(845)
+    supported_runtime_macro_indices.size.should eq(864)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -474,6 +475,56 @@ describe "Crystal 1.21 runtime macro corpus" do
     require_structure.kind.should eq("Crystal::Require")
     require_structure.fields["path"].source.should eq(%("json"))
     require_structure.fields["path"].kind.should eq("Crystal::StringLiteral")
+  end
+
+  it "retains authoritative block and control-expression structure" do
+    block_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1667
+    end.not_nil!
+    block = block_contract.arguments.first.structure.not_nil!
+    block.kind.should eq("Crystal::Block")
+    block.collections["args"].map(&.source).should eq(["x", "y"])
+    block.collections["args"].map(&.kind).should eq(["Crystal::MacroId", "Crystal::MacroId"])
+    block.fields["splat_index"].kind.should eq("Crystal::NilLiteral")
+
+    expressions_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1678
+    end.not_nil!
+    expressions = expressions_contract.arguments.first.structure.not_nil!.fields["body"]
+    expressions.kind.should eq("Crystal::Expressions")
+    expressions.collections["expressions"].map(&.source).should eq(["some_call", "some_other_call"])
+
+    while_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3255
+    end.not_nil!
+    loop_structure = while_contract.arguments.first.structure.not_nil!
+    loop_structure.kind.should eq("Crystal::While")
+    loop_structure.fields.values_at("cond", "body").map(&.source).to_a.should eq(["1", "2"])
+
+    control_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3265
+    end.not_nil!
+    control = control_contract.arguments.first.structure.not_nil!
+    control.kind.should eq("Crystal::Break")
+    control.fields["exp"].source.should eq("1")
+
+    empty_control_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3271
+    end.not_nil!
+    empty_control_contract.arguments.first.structure.not_nil!.fields["exp"].kind.should eq("Crystal::Nop")
+
+    yield_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3281
+    end.not_nil!
+    yield_structure = yield_contract.arguments.first.structure.not_nil!
+    yield_structure.kind.should eq("Crystal::Yield")
+    yield_structure.collections["expressions"].map(&.source).should eq(["1", "2"])
+    yield_structure.fields["scope"].kind.should eq("Crystal::Nop")
+
+    scoped_yield_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3285
+    end.not_nil!
+    scoped_yield_contract.arguments.first.structure.not_nil!.fields["scope"].source.should eq("1")
   end
 
   it "retains upstream AST location and documentation metadata" do

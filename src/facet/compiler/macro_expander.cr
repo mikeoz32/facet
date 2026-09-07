@@ -1050,7 +1050,9 @@ module Facet
       private def macro_captured_expression_node(node : SyntaxNode, ast : AstFile) : MacroCapturedNode?
         case node.kind
         when NodeKind::Block
-          macro_proc_literal_node?(node) ? macro_captured_proc_literal(node) : nil
+          macro_proc_literal_node?(node) ? macro_captured_proc_literal(node) : macro_captured_block(node)
+        when NodeKind::Expressions
+          macro_captured_expressions(node)
         when NodeKind::Unary
           if macro_proc_pointer_node?(node, ast)
             macro_captured_proc_pointer(node)
@@ -1063,6 +1065,12 @@ module Facet
           macro_captured_builtin_expression_call(node)
         when NodeKind::If
           macro_captured_if(node)
+        when NodeKind::While
+          macro_captured_while(node)
+        when NodeKind::Break, NodeKind::Next, NodeKind::Return
+          macro_captured_control_expression(node)
+        when NodeKind::Yield
+          macro_captured_yield(node)
         when NodeKind::Assign
           if macro_uninitialized_var_node?(node)
             macro_captured_uninitialized_var(node)
@@ -1220,6 +1228,59 @@ module Facet
           "type" => macro_captured_syntax_node(declared_type),
         }
         MacroCapturedNode.new(node.text.strip, "Crystal::UninitializedVar", fields)
+      end
+
+      private def macro_captured_block(node : SyntaxNode, source : String? = nil) : MacroCapturedNode
+        parameters = node.parameters
+        splat_index = parameters.index(&.kind.==(NodeKind::Splat))
+        fields = {
+          "body"        => macro_captured_syntax_node(node.body),
+          "splat_index" => splat_index ? MacroCapturedNode.new(splat_index.to_s, "Crystal::NumberLiteral") : macro_captured_syntax_node(nil),
+        }
+        collections = {
+          "args" => parameters.map do |parameter|
+            MacroCapturedNode.new(parameter.name || parameter.text.lstrip.lchop('*'), "Crystal::MacroId")
+          end,
+        }
+        MacroCapturedNode.new(source || node.text.strip, "Crystal::Block", fields, collections)
+      end
+
+      private def macro_captured_expressions(node : SyntaxNode) : MacroCapturedNode
+        collections = {
+          "expressions" => node.children.map { |expression| macro_captured_syntax_node(expression) },
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::Expressions", collections: collections)
+      end
+
+      private def macro_captured_while(node : SyntaxNode) : MacroCapturedNode
+        fields = {
+          "cond" => macro_captured_syntax_node(node.condition),
+          "body" => macro_captured_syntax_node(node.body),
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::While", fields)
+      end
+
+      private def macro_captured_control_expression(node : SyntaxNode) : MacroCapturedNode
+        kind = case node.kind
+               when NodeKind::Break  then "Crystal::Break"
+               when NodeKind::Next   then "Crystal::Next"
+               when NodeKind::Return then "Crystal::Return"
+               else                       "Crystal::ControlExpression"
+               end
+        fields = {"exp" => macro_captured_syntax_node(node.child(0))}
+        MacroCapturedNode.new(node.text.strip, kind, fields)
+      end
+
+      private def macro_captured_yield(node : SyntaxNode) : MacroCapturedNode
+        scoped = (node.raw.flags & 1_u16) != 0
+        children = node.children
+        scope = scoped ? children.first? : nil
+        expressions = scoped ? children.skip(1) : children
+        fields = {"scope" => macro_captured_syntax_node(scope)}
+        collections = {
+          "expressions" => expressions.map { |expression| macro_captured_syntax_node(expression) },
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::Yield", fields, collections)
       end
 
       private def macro_structured_alias_argument_value(node : SyntaxNode) : MacroSyntaxValue
@@ -1838,7 +1899,7 @@ module Facet
         start = call.span.finish
         finish = block_call.span.finish
         source = start < finish ? ast.source.text.byte_slice(start, finish - start).strip : ""
-        MacroCapturedNode.new(source, "Crystal::Block")
+        macro_captured_block(block_call, source)
       end
 
       private def macro_captured_named_argument(node : SyntaxNode) : MacroCapturedNode
@@ -4071,6 +4132,9 @@ module Facet
             if normalized == "UnaryExpression"
               return {"Not", "PointerOf", "SizeOf", "InstanceSizeOf", "AlignOf",
                       "InstanceAlignOf", "Out", "Splat", "DoubleSplat"}.includes?(captured_kind)
+            end
+            if normalized == "ControlExpression"
+              return {"Break", "Next", "Return"}.includes?(captured_kind)
             end
             return false
           end
