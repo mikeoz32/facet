@@ -816,6 +816,8 @@ module Facet
             return macro_structured_inline_rescue_argument_value(node)
           end
           return macro_structured_inline_ensure_argument_value(node) if node.kind == NodeKind::Ensure && node.children.size == 2
+          return macro_structured_alias_argument_value(node) if node.kind == NodeKind::Alias
+          return macro_structured_require_argument_value(node) if node.kind == NodeKind::Require
           if {NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun}.includes?(node.kind)
             return macro_structured_declaration_argument_value(node)
           end
@@ -1050,13 +1052,25 @@ module Facet
         when NodeKind::Block
           macro_proc_literal_node?(node) ? macro_captured_proc_literal(node) : nil
         when NodeKind::Unary
-          macro_proc_pointer_node?(node, ast) ? macro_captured_proc_pointer(node) : nil
+          if macro_proc_pointer_node?(node, ast)
+            macro_captured_proc_pointer(node)
+          else
+            macro_captured_unary_expression(node, ast)
+          end
         when NodeKind::Binary
-          macro_captured_cast(node, ast) || macro_captured_boolean_binary(node, ast)
+          macro_captured_cast(node, ast) || macro_captured_predicate(node, ast) || macro_captured_boolean_binary(node, ast)
+        when NodeKind::Call
+          macro_captured_builtin_expression_call(node)
         when NodeKind::If
           macro_captured_if(node)
         when NodeKind::Assign
-          macro_multi_assign_node?(node) ? macro_captured_multi_assign(node) : macro_captured_assign(node)
+          if macro_uninitialized_var_node?(node)
+            macro_captured_uninitialized_var(node)
+          elsif macro_multi_assign_node?(node)
+            macro_captured_multi_assign(node)
+          else
+            macro_captured_assign(node)
+          end
         when NodeKind::Range
           macro_captured_range_literal(node)
         end
@@ -1132,6 +1146,102 @@ module Facet
           "right" => macro_captured_syntax_node(node.child(1)),
         }
         MacroCapturedNode.new(node.text.strip, kind, fields)
+      end
+
+      private def macro_captured_predicate(node : SyntaxNode, ast : AstFile) : MacroCapturedNode?
+        return nil unless macro_member_operator?(node, ast)
+        member = node.child(1)
+        return nil unless member && member.kind == NodeKind::Call
+        argument = member.arguments.first?
+        return nil unless argument
+        case member.call_name
+        when "is_a?"
+          fields = {
+            "receiver" => macro_captured_syntax_node(node.child(0)),
+            "arg"      => macro_captured_syntax_node(argument),
+          }
+          MacroCapturedNode.new(node.text.strip, "Crystal::IsA", fields)
+        when "responds_to?"
+          name = if argument.kind == NodeKind::LiteralSymbol
+                   argument.tree.ast.decoded_literal_string(argument.id)
+                 else
+                   argument.text
+                 end
+          fields = {
+            "receiver" => macro_captured_syntax_node(node.child(0)),
+            "name"     => MacroCapturedNode.new(name.inspect, "Crystal::StringLiteral"),
+          }
+          MacroCapturedNode.new(node.text.strip, "Crystal::RespondsTo", fields)
+        end
+      end
+
+      private def macro_captured_unary_expression(node : SyntaxNode, ast : AstFile) : MacroCapturedNode?
+        kind = if macro_operator?(node, ast, TokenKind::Bang)
+                 "Crystal::Not"
+               else
+                 return nil
+               end
+        fields = {"exp" => macro_captured_syntax_node(node.child(0))}
+        MacroCapturedNode.new(node.text.strip, kind, fields)
+      end
+
+      private def macro_captured_builtin_expression_call(node : SyntaxNode) : MacroCapturedNode?
+        name = node.call_name
+        arguments = node.arguments
+        return nil unless name && arguments.size == 1
+        kind = case name
+               when "pointerof"        then "Crystal::PointerOf"
+               when "sizeof"           then "Crystal::SizeOf"
+               when "instance_sizeof"  then "Crystal::InstanceSizeOf"
+               when "alignof"          then "Crystal::AlignOf"
+               when "instance_alignof" then "Crystal::InstanceAlignOf"
+               else                         return nil
+               end
+        fields = {"exp" => macro_captured_syntax_node(arguments.first)}
+        MacroCapturedNode.new(node.text.strip, kind, fields)
+      end
+
+      private def macro_uninitialized_var_node?(node : SyntaxNode) : Bool
+        value = node.value
+        value.try(&.kind) == NodeKind::Call && value.try(&.call_name) == "uninitialized"
+      end
+
+      private def macro_captured_uninitialized_var(node : SyntaxNode) : MacroCapturedNode
+        value = node.value.not_nil!
+        declared_type = value.arguments.first?
+        variable = node.target
+        captured_var = if variable && variable.kind == NodeKind::Ident
+                         MacroCapturedNode.new(variable.text, "Crystal::MacroId")
+                       else
+                         macro_captured_syntax_node(variable)
+                       end
+        fields = {
+          "var"  => captured_var,
+          "type" => macro_captured_syntax_node(declared_type),
+        }
+        MacroCapturedNode.new(node.text.strip, "Crystal::UninitializedVar", fields)
+      end
+
+      private def macro_structured_alias_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        fields = {
+          "type" => macro_captured_syntax_node(node.child(1)),
+        }
+        structure = MacroCapturedNode.new(node.text, "Crystal::Alias", fields)
+        metadata = MacroNodeMetadata.new(
+          fields: {"name" => MacroCapturedField.new(node.name || "", "identifier")},
+          structure: structure
+        )
+        MacroSyntaxValue.captured(node.text, "Crystal::Alias", metadata)
+      end
+
+      private def macro_structured_require_argument_value(node : SyntaxNode) : MacroSyntaxValue
+        path = node.child(0)
+        value = path ? path.tree.ast.decoded_literal_string(path.id) : ""
+        fields = {
+          "path" => MacroCapturedNode.new(value.inspect, "Crystal::StringLiteral"),
+        }
+        structure = MacroCapturedNode.new(node.text, "Crystal::Require", fields)
+        MacroSyntaxValue.captured(node.text, "Crystal::Require", MacroNodeMetadata.new(structure: structure))
       end
 
       private def macro_captured_if(node : SyntaxNode) : MacroCapturedNode
@@ -3924,6 +4034,7 @@ module Facet
         if collection = structure.collections[name]?
           values = collection.map { |node| macro_captured_node_value(node).as(MacroValue) }
           typed_collection = {"free_vars", "outputs", "inputs", "clobbers"}.includes?(name) ||
+                             (name == "expressions" && structure.kind == "Crystal::MacroVar") ||
                              (name == "type_vars" && {"Crystal::ClassDef", "Crystal::ModuleDef"}.includes?(structure.kind))
           value = typed_collection ? values.as(MacroValue) : MacroArrayValue.new(values).as(MacroValue)
           return MacroEvaluation.new(value)
@@ -3953,7 +4064,15 @@ module Facet
         case value
         when MacroSyntaxValue
           if crystal_kind = value.crystal_kind
-            return crystal_kind.lchop("Crystal::") == normalized
+            captured_kind = crystal_kind.lchop("Crystal::")
+            return true if captured_kind == normalized
+            return true if normalized == "Def" && captured_kind == "External"
+            return true if normalized == "MetaVar" && captured_kind == "MetaMacroVar"
+            if normalized == "UnaryExpression"
+              return {"Not", "PointerOf", "SizeOf", "InstanceSizeOf", "AlignOf",
+                      "InstanceAlignOf", "Out", "Splat", "DoubleSplat"}.includes?(captured_kind)
+            end
+            return false
           end
           case normalized
           when "StringLiteral"

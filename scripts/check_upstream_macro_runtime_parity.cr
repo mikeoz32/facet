@@ -23,7 +23,8 @@ if baseline_path
 end
 
 puts "crystal_version=#{header.crystal_version} runtime_cases=#{header.case_count} direct=#{cases.size} contextual=#{header.contextual_case_count} exact=#{matched.size} mismatches=#{mismatches.size} parity=#{(matched.size * 100.0 / cases.size).round(2)}%"
-mismatches.first(30).each do |index, fixture_case, result|
+display_limit = ENV["FACET_MACRO_MISMATCH_LIMIT"]?.try(&.to_i?) || 30
+mismatches.first(display_limit).each do |index, fixture_case, result|
   actual = result.actual || "<no expansion>"
   diagnostic = result.diagnostics.first?
   puts "MISMATCH #{index} #{fixture_case.source_file}:#{fixture_case.line} expected=#{fixture_case.expected.dump} actual=#{actual.dump}#{diagnostic ? " diagnostic=#{diagnostic.dump}" : ""}"

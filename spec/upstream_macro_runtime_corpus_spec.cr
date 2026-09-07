@@ -18,7 +18,7 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.argument_case_count.should eq(578)
     runtime_macro_header.metadata_argument_count.should eq(10)
     runtime_macro_header.structured_name_argument_count.should eq(198)
-    runtime_macro_header.structured_call_argument_count.should eq(21)
+    runtime_macro_header.structured_call_argument_count.should eq(25)
     runtime_macro_header.structured_control_flow_argument_count.should eq(28)
     runtime_macro_header.structured_declaration_argument_count.should eq(54)
     runtime_macro_header.structured_type_declaration_argument_count.should eq(63)
@@ -26,10 +26,11 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_type_syntax_argument_count.should eq(46)
     runtime_macro_header.structured_expression_argument_count.should eq(38)
     runtime_macro_header.structured_collection_argument_count.should eq(12)
+    runtime_macro_header.structured_misc_argument_count.should eq(36)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
     runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(815)
+    supported_runtime_macro_indices.size.should eq(845)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -376,6 +377,103 @@ describe "Crystal 1.21 runtime macro corpus" do
       fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1153
     end.not_nil!
     named_hash_contract.arguments.first.structure.not_nil!.fields["type"].source.should eq("Headers")
+  end
+
+  it "retains authoritative macro and miscellaneous AST structure" do
+    uninitialized_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2697
+    end.not_nil!
+    uninitialized = uninitialized_contract.arguments.first.structure.not_nil!
+    uninitialized.kind.should eq("Crystal::UninitializedVar")
+    uninitialized.fields["var"].source.should eq("some_name")
+    uninitialized.fields["var"].kind.should eq("Crystal::MacroId")
+    uninitialized.fields["type"].source.should eq("SomeType")
+
+    expression_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2894
+    end.not_nil!
+    expression = expression_contract.arguments.first.structure.not_nil!
+    expression.kind.should eq("Crystal::MacroExpression")
+    expression.fields["exp"].kind.should eq("Crystal::NilLiteral")
+    expression.booleans["output?"].should be_true
+
+    macro_if_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2909
+    end.not_nil!
+    macro_if = macro_if_contract.arguments.first.structure.not_nil!
+    macro_if.kind.should eq("Crystal::MacroIf")
+    macro_if.fields.values_at("cond", "then", "else").map(&.source).to_a.should eq(["true", %("test"), %("foo")])
+    macro_if.booleans["is_unless?"].should be_false
+
+    macro_for_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2924
+    end.not_nil!
+    macro_for = macro_for_contract.arguments.first.structure.not_nil!
+    macro_for.kind.should eq("Crystal::MacroFor")
+    macro_for.collections["vars"].map(&.source).should eq(["bar"])
+    macro_for.fields["exp"].source.should eq("foo")
+    macro_for.fields["body"].source.should eq("puts(bar)")
+
+    macro_literal_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2938
+    end.not_nil!
+    macro_literal = macro_literal_contract.arguments.first.structure.not_nil!
+    macro_literal.kind.should eq("Crystal::MacroLiteral")
+    macro_literal.fields["value"].source.should eq("foo(1)")
+    macro_literal.fields["value"].kind.should eq("Crystal::MacroId")
+
+    macro_var_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2949
+    end.not_nil!
+    macro_var = macro_var_contract.arguments.first.structure.not_nil!
+    macro_var.kind.should eq("Crystal::MacroVar")
+    macro_var.collections["expressions"].should be_empty
+
+    not_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2956
+    end.not_nil!
+    negation = not_contract.arguments.first.structure.not_nil!
+    negation.kind.should eq("Crystal::Not")
+    negation.fields["exp"].source.should eq("some_call")
+
+    offset_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2970
+    end.not_nil!
+    offset = offset_contract.arguments.first.structure.not_nil!
+    offset.kind.should eq("Crystal::OffsetOf")
+    offset.fields["type"].source.should eq("SomeType")
+    offset.fields["offset"].source.should eq("@some_ivar")
+
+    alias_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3006
+    end.not_nil!
+    alias_structure = alias_contract.arguments.first.structure.not_nil!
+    alias_structure.kind.should eq("Crystal::Alias")
+    alias_structure.fields["type"].source.should eq("::Bar::Baz(T)")
+
+    visibility_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3014
+    end.not_nil!
+    visibility = visibility_contract.arguments.first.structure.not_nil!
+    visibility.kind.should eq("Crystal::VisibilityModifier")
+    visibility.fields["visibility"].source.should eq(":protected")
+    visibility.fields["exp"].kind.should eq("Crystal::Def")
+
+    predicate_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3030
+    end.not_nil!
+    predicate = predicate_contract.arguments.first.structure.not_nil!
+    predicate.kind.should eq("Crystal::IsA")
+    predicate.fields["receiver"].source.should eq("var")
+    predicate.fields["arg"].source.should eq("Int32")
+
+    require_contract = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 3071
+    end.not_nil!
+    require_structure = require_contract.arguments.first.structure.not_nil!
+    require_structure.kind.should eq("Crystal::Require")
+    require_structure.fields["path"].source.should eq(%("json"))
+    require_structure.fields["path"].kind.should eq("Crystal::StringLiteral")
   end
 
   it "retains upstream AST location and documentation metadata" do

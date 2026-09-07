@@ -4,7 +4,7 @@
 
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet
-  now matches exact output for 815/900 portable contracts executed by the
+  now matches exact output for 845/900 portable contracts executed by the
   official evaluator specs (including all 371/371 statically self-contained
   contracts); 117 program-context contracts and 133 semantic examples remain
   tracked explicitly for the next fixture layers.
@@ -59,6 +59,12 @@
   literal `type` fields at the native Facet macro-argument boundary. This closes
   all five remaining collection-metadata contracts and raises exact portable
   parity to 815/900.
+- Captured authoritative macro-control and miscellaneous AST views for
+  `MacroExpression`, `MacroIf`, `MacroFor`, `MacroLiteral`, `MacroVar`,
+  `UninitializedVar`, unary expressions, `OffsetOf`, `Alias`,
+  `VisibilityModifier`, `IsA`, `RespondsTo`, and `Require`. Facet-native
+  arguments expose the representable unary, predicate, and uninitialized forms,
+  raising exact portable parity to 845/900.
 - Added Crystal-compatible macro hash iteration indices, union type arguments
   for `is_a?`, and target-layout-neutral number values for `sizeof`/`alignof`
   introspection.

@@ -693,6 +693,37 @@ describe Facet::Compiler::MacroExpander do
         binary_right = {{x.right}}
       end
 
+      macro describe_uninitialized(x)
+        uninitialized_class_name = {{x.class_name}}
+        uninitialized_var = {{x.var.stringify}}
+        uninitialized_var_class_name = {{x.var.class_name}}
+        uninitialized_type = {{x.type.stringify}}
+      end
+
+      macro describe_unary(x)
+        unary_class_name = {{x.class_name}}
+        unary_exp = {{x.exp.stringify}}
+        unary_is_expression = {{x.is_a?(UnaryExpression).stringify}}
+      end
+
+      macro describe_predicate(x)
+        predicate_class_name = {{x.class_name}}
+        predicate_receiver = {{x.receiver.stringify}}
+        predicate_argument = {{x.arg.stringify}}
+      end
+
+      macro describe_responds_to(x)
+        responds_class_name = {{x.class_name}}
+        responds_receiver = {{x.receiver.stringify}}
+        responds_name = {{x.name.stringify}}
+      end
+
+      macro describe_builtin(x)
+        builtin_class_name = {{x.class_name}}
+        builtin_exp = {{x.exp.stringify}}
+        builtin_is_unary = {{x.is_a?(UnaryExpression).stringify}}
+      end
+
       describe_proc_literal(->(z : Int32) : String { z })
       describe_proc_pointer(->some_object.method(SomeType, OtherType))
       describe_proc_pointer(->method)
@@ -706,6 +737,12 @@ describe Facet::Compiler::MacroExpander do
       describe_range((1...3))
       describe_binary((1 && 2))
       describe_binary((1 || 2))
+      describe_uninitialized((some_name = uninitialized SomeType))
+      describe_unary(!some_call)
+      describe_predicate(value.is_a?(Int32))
+      describe_responds_to(value.responds_to?(:foo))
+      describe_builtin(sizeof(Int32))
+      describe_builtin(alignof(Int64))
     CR
     parser = Facet::Compiler::Parser.new(source)
     ast = parser.parse_file
@@ -754,6 +791,24 @@ describe Facet::Compiler::MacroExpander do
     expanded.source.text.should contain(%(binary_class_name = "Or"))
     expanded.source.text.should contain("binary_left = 1")
     expanded.source.text.should contain("binary_right = 2")
+    expanded.source.text.should contain(%(uninitialized_class_name = "UninitializedVar"))
+    expanded.source.text.should contain(%(uninitialized_var = "some_name"))
+    expanded.source.text.should contain(%(uninitialized_var_class_name = "MacroId"))
+    expanded.source.text.should contain(%(uninitialized_type = "SomeType"))
+    expanded.source.text.should contain(%(unary_class_name = "Not"))
+    expanded.source.text.should contain(%(unary_exp = "some_call"))
+    expanded.source.text.should contain(%(unary_is_expression = "true"))
+    expanded.source.text.should contain(%(predicate_class_name = "IsA"))
+    expanded.source.text.should contain(%(predicate_receiver = "value"))
+    expanded.source.text.should contain(%(predicate_argument = "Int32"))
+    expanded.source.text.should contain(%(responds_class_name = "RespondsTo"))
+    expanded.source.text.should contain(%(responds_receiver = "value"))
+    expanded.source.text.should contain(%q(responds_name = "\"foo\""))
+    expanded.source.text.should contain(%(builtin_class_name = "SizeOf"))
+    expanded.source.text.should contain(%(builtin_class_name = "AlignOf"))
+    expanded.source.text.should contain(%(builtin_exp = "Int32"))
+    expanded.source.text.should contain(%(builtin_exp = "Int64"))
+    expanded.source.text.should contain(%(builtin_is_unary = "true"))
     expanded.diagnostics.should be_empty
     expander.diagnostics.should be_empty
   end
