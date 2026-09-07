@@ -5,19 +5,20 @@
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet
   now matches exact output, expected diagnostic text, and output side effects
-  for all 1,017/1,017 contracts executed by the official evaluator specs
-  (including all 900 portable and 117 program-context contracts, plus all
-  371/371 statically self-contained contracts); 133 semantic examples remain
-  tracked explicitly for the next fixture layer.
+  for all 1,042/1,042 contracts executed by the official evaluator specs
+  (including all 900 portable and 142 program-context contracts, plus all
+  371/371 statically self-contained contracts). This covers all 25 official
+  `assert_macro_error` calls and all four nested `parse_type` failures; 133
+  semantic examples remain tracked explicitly for the next fixture layer.
 - Added explicit macro expansion inputs for environment values, compiler flags,
   and captured command output, including cache fingerprinting. `env`, `flag?`,
   safe backtick replay, and `parse_type` validation close the final 23 portable
   runtime contracts. Facet does not execute arbitrary shell commands, and the
   four official `parse_type` failures require exact diagnostic parity.
-- Captured 105 official contextual `TypeNode` arguments as structured state,
+- Captured 106 official contextual `TypeNode` arguments as structured state,
   including generic names, type variables, methods and variables, ancestry,
   visibility, predicates, and type relationships. Contextual print-family
-  macros expose and verify exact side-effect output. This closes all 117
+  macros expose and verify exact side-effect output. This closes all 142
   program-context runtime contracts without retaining Crystal compiler objects
   inside Facet.
 - Preserved captured AST start/end locations and documentation through

@@ -2428,6 +2428,12 @@ module Facet
           name = ast.arena.symbols[node.payload_index]
           env = current_macro_env
           return MacroEvaluation.new(env[name]) if env.has_key?(name)
+          if name == "flag?"
+            return macro_diagnostic(
+              node.span,
+              "wrong number of arguments for macro '::flag?' (given 0, expected 1)"
+            )
+          end
           MacroEvaluation.new(MacroSyntaxValue.identifier(name))
         when NodeKind::Const, NodeKind::Path, NodeKind::TypeApply
           source = ast.node_string(node_id)
@@ -2515,13 +2521,16 @@ module Facet
                   evaluation = eval_value(argument.id, ast)
                   if evaluation
                     args << evaluation.value
+                    if message = macro_named_argument_error(receiver.value, name, argument, evaluation.value)
+                      return macro_diagnostic(node.span, message)
+                    end
                   elsif name == "is_a?"
                     args << MacroSyntaxValue.code(argument.text)
                   else
                     return nil
                   end
                 end
-                return apply_macro_method(receiver.value, name, args, block)
+                return apply_macro_method(receiver.value, name, args, block, node.span)
               end
             end
           end
@@ -2627,7 +2636,7 @@ module Facet
           return nil unless body
           block = MacroEvalBlock.new(ast, body.id, wrapper.parameters.compact_map(&.name))
           name = ast.arena.symbols[member.payload_index]
-          apply_macro_method(receiver.value, name, args, block)
+          apply_macro_method(receiver.value, name, args, block, node.span)
         when NodeKind::NamedArg
           value_id = ast.children(node_id).last?
           value_id ? eval_value(value_id, ast) : nil
@@ -2656,10 +2665,32 @@ module Facet
           end
         when NodeKind::Index
           children = ast.children(node_id)
-          return nil if children.size < 2
+          if children.size < 2
+            receiver = children.first?.try { |child_id| eval_value(child_id, ast) }
+            if receiver && macro_class_name(receiver.value) == "ArrayLiteral"
+              return macro_diagnostic(
+                node.span,
+                "wrong number of arguments for macro 'ArrayLiteral#[]' (given 0, expected 1..2)"
+              )
+            end
+            return nil
+          end
           receiver = eval_value(children[0], ast)
           index = eval_value(children[1], ast)
           return nil unless receiver && index
+          if macro_class_name(index.value) == "BoolLiteral"
+            if receiver.value.is_a?(Hash(String, MacroValue))
+              return macro_diagnostic(
+                node.span,
+                "argument to [] must be a symbol or string, not BoolLiteral:\n\n#{val_to_string(index.value)}"
+              )
+            elsif macro_class_name(receiver.value) == "Annotation"
+              return macro_diagnostic(
+                node.span,
+                "argument to [] must be a number, symbol or string, not BoolLiteral:\n\n#{val_to_string(index.value)}"
+              )
+            end
+          end
           if children.size == 3
             count = eval_value(children[2], ast)
             return nil unless count
@@ -2824,6 +2855,10 @@ module Facet
               evaluation = eval_value(arg_id, ast)
               if evaluation
                 args << evaluation.value
+                argument = syntax_tree(ast).node(arg_id)
+                if message = macro_named_argument_error(receiver.value, name, argument, evaluation.value)
+                  return macro_diagnostic(ast.node(member_id).span, message)
+                end
               elsif name == "is_a?"
                 args << MacroSyntaxValue.code(ast.node_string(arg_id))
               else
@@ -2846,7 +2881,7 @@ module Facet
           return nil
         end
         return nil unless name
-        apply_macro_method(receiver.value, name, args, block)
+        apply_macro_method(receiver.value, name, args, block, ast.node(member_id).span)
       end
 
       private def macro_implicit_block_method(node_id : NodeId, ast : AstFile) : String?
@@ -2867,8 +2902,13 @@ module Facet
         name : String,
         args : Array(MacroValue),
         block : MacroEvalBlock? = nil,
+        span : Span = Span.new(0, 0),
       ) : MacroEvaluation?
-        if evaluation = apply_type_aware_macro_method(receiver, name, args)
+        if diagnostic = macro_invocation_diagnostic(receiver, name, args.size, !block.nil?)
+          return macro_diagnostic(span, diagnostic)
+        end
+
+        if evaluation = apply_type_aware_macro_method(receiver, name, args, span)
           return evaluation
         end
 
@@ -3319,7 +3359,13 @@ module Facet
             MacroEvaluation.new(receiver.entries.any? { |entry| entry.key == args[0] })
           elsif receiver.is_a?(Hash(String, MacroValue))
             key = macro_scalar_text(args[0])
-            key ? MacroEvaluation.new(receiver.has_key?(key)) : nil
+            unless key
+              return macro_diagnostic(
+                span,
+                "expected 'NamedTupleLiteral#has_key?' first argument to be a SymbolLiteral, StringLiteral or MacroId, not #{macro_class_name(args[0])}"
+              )
+            end
+            MacroEvaluation.new(receiver.has_key?(key))
           end
         when "body"
           return nil unless receiver.is_a?(MacroBlockValue) && args.empty?
@@ -3441,6 +3487,7 @@ module Facet
         receiver : MacroValue,
         name : String,
         args : Array(MacroValue),
+        span : Span,
       ) : MacroEvaluation?
         case receiver
         when MacroSyntaxValue
@@ -3453,6 +3500,9 @@ module Facet
               if macro_captured_resolvable_type_syntax?(structure)
                 mark_type_introspection
                 return MacroEvaluation.new(nil) if name == "resolve?"
+                if unresolved = macro_unresolved_captured_type_name(structure)
+                  return macro_diagnostic(span, "undefined constant #{unresolved}")
+                end
                 return nil
               end
             end
@@ -3682,6 +3732,109 @@ module Facet
 
       private def macro_captured_resolvable_type_syntax?(node : MacroCapturedNode) : Bool
         {"Crystal::Path", "Crystal::Generic", "Crystal::Union", "Crystal::ProcNotation", "Crystal::Metaclass"}.includes?(node.kind)
+      end
+
+      private def macro_unresolved_captured_type_name(node : MacroCapturedNode) : String?
+        case node.kind
+        when "Crystal::Path", "Crystal::Var", "Crystal::MacroId"
+          return nil if macro_type_value(node.source, @active_index, current_type_scope)
+          normalize_macro_type_name(node.source)
+        when "Crystal::Generic"
+          if base = node.fields["name"]?
+            if unresolved = macro_unresolved_captured_type_name(base)
+              return unresolved
+            end
+          end
+          (node.collections["type_vars"]? || [] of MacroCapturedNode).each do |type_var|
+            if unresolved = macro_unresolved_captured_type_name(type_var)
+              return unresolved
+            end
+          end
+          nil
+        when "Crystal::Union"
+          (node.collections["types"]? || [] of MacroCapturedNode).each do |type|
+            if unresolved = macro_unresolved_captured_type_name(type)
+              return unresolved
+            end
+          end
+          nil
+        when "Crystal::ProcNotation"
+          (node.collections["inputs"]? || [] of MacroCapturedNode).each do |input|
+            if unresolved = macro_unresolved_captured_type_name(input)
+              return unresolved
+            end
+          end
+          if output = node.fields["output"]?
+            if output.kind != "Crystal::NilLiteral"
+              if unresolved = macro_unresolved_captured_type_name(output)
+                return unresolved
+              end
+            end
+          end
+          nil
+        when "Crystal::Metaclass"
+          node.fields["instance"]?.try { |instance| macro_unresolved_captured_type_name(instance) }
+        end
+      end
+
+      private def macro_named_argument_error(
+        receiver : MacroValue,
+        method_name : String,
+        argument : SyntaxNode,
+        value : MacroValue,
+      ) : String?
+        return nil unless argument.kind == NodeKind::NamedArg
+        argument_name = argument.name
+        return nil unless argument_name
+
+        case method_name
+        when "camelcase"
+          return "no parameter named '#{argument_name}'" unless argument_name == "lower"
+          unless value.is_a?(Bool)
+            return "named argument 'lower' to StringLiteral#camelcase must be a bool, not #{macro_class_name(value)}"
+          end
+        when "name"
+          return "no parameter named '#{argument_name}'" unless argument_name == "generic_args"
+          unless value.is_a?(Bool)
+            return "named argument 'generic_args' to #{macro_class_name(receiver)}#name must be a BoolLiteral, not #{macro_class_name(value)}"
+          end
+        when "starts_with?", "ends_with?"
+          return "no parameter named '#{argument_name}'"
+        end
+        nil
+      end
+
+      private def macro_invocation_diagnostic(
+        receiver : MacroValue,
+        method_name : String,
+        argument_count : Int32,
+        has_block : Bool,
+      ) : String?
+        receiver_name = macro_class_name(receiver)
+        if receiver_name == "ArrayLiteral"
+          case method_name
+          when "push"
+            if argument_count == 0
+              return "wrong number of arguments for macro 'ArrayLiteral#push' (given 0, expected 1)"
+            end
+          when "shuffle"
+            if has_block
+              return "macro 'ArrayLiteral#shuffle' is not expected to be invoked with a block, but a block was given"
+            end
+          when "reduce"
+            unless has_block
+              return "macro 'ArrayLiteral#reduce' is expected to be invoked with a block, but no block was given"
+            end
+          end
+        elsif receiver_name == "NumberLiteral" && method_name == "+" && argument_count > 1
+          return "wrong number of arguments for macro 'NumberLiteral#+' (given #{argument_count}, expected 0..1)"
+        end
+        nil
+      end
+
+      private def macro_diagnostic(span : Span, message : String) : MacroEvaluation
+        @diagnostics << Diagnostic.new(span, message)
+        MacroEvaluation.new(nil)
       end
 
       private def macro_metaclass_instance_name(name : String) : String

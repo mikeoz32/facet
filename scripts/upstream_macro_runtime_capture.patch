@@ -1,5 +1,5 @@
 diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
-index b2378cd..7248eac 100644
+index b2378cd..99a4526 100644
 --- a/spec/spec_helper.cr
 +++ b/spec/spec_helper.cr
 @@ -3,6 +3,8 @@
@@ -42,10 +42,10 @@ index b2378cd..7248eac 100644
  
  def assert_macro(macro_body, expected, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__, &)
    program, a_macro, call = prepare_macro_call(macro_body, flags) { |program| yield program }
-+  captured_output = facet_macro_capture_output(macro_body, program)
-+  begin
 -  result, result_pragmas = program.expand_macro(a_macro, call, program, program)
 -  result = result.chomp(';')
++  captured_output = facet_macro_capture_output(macro_body, program)
++  begin
 +    result, result_pragmas = program.expand_macro(a_macro, call, program, program)
 +    result = result.chomp(';')
 +  rescue ex
@@ -1050,4 +1050,22 @@ index b2378cd..7248eac 100644
 +
  def assert_macro_error(macro_body, message = nil, args = nil, *, flags = nil, file = __FILE__, line = __LINE__)
    assert_macro_error(macro_body, message, flags: flags, file: file, line: line) { args }
+ end
+@@ -202,6 +1223,16 @@ end
+ def assert_macro_error(macro_body, message = nil, *, flags = nil, file = __FILE__, line = __LINE__, &)
+   program, a_macro, call = prepare_macro_call(macro_body, flags) { |program| yield program }
+   expect_raises(Crystal::TypeException, message, file: file, line: line) do
+-    program.expand_macro(a_macro, call, program, program)
++    begin
++      program.expand_macro(a_macro, call, program, program)
++    rescue ex
++      record_macro_fixture(
++        macro_body, "", a_macro.args.map(&.name), call.args, flags, file, line,
++        contextual_program: true,
++        expected_error_type: ex.class.name,
++        expected_error_message: ex.message
++      )
++      raise ex
++    end
+   end
  end

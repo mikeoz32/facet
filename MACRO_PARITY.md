@@ -8,29 +8,32 @@ Facet pins its macro contract corpus to Crystal 1.21.0 revision
 - `spec/compiler/semantic/macro_spec.cr`
 - `spec/compiler/semantic/macro_overload_spec.cr`
 
-The first two source suites contain 731 declared examples and 973 syntactic
-`assert_macro` calls. Compile-time loops expand those into 1,017 executed
-contracts at runtime. The semantic suites add 133 examples. The committed
-fixtures retain both the static inventory and every executed evaluator input,
-so an unsupported contract cannot disappear from the denominator.
+The first two source suites contain 731 declared examples, 973 syntactic
+`assert_macro` calls, and 25 `assert_macro_error` calls. Compile-time loops
+expand the successful assertions into 1,017 executions; together with the 25
+error assertions they form 1,042 runtime contracts. The semantic suites add 133
+examples. The committed fixtures retain both the static inventory and every
+executed evaluator input, so an unsupported contract cannot disappear from the
+denominator.
 
 ## Current result
 
-Facet matches **1,017/1,017 (100%)** executed runtime contracts. This is the
+Facet matches **1,042/1,042 (100%)** executed runtime contracts. This is the
 primary no-regression gate. It checks exact expansion text for successful
-evaluations, exact diagnostic text for four expected `parse_type` failures, and
-exact output side effects for six print-family contracts. It includes every one
-of the original 371 self-contained contracts plus argument-bearing,
+evaluations, exact diagnostic text for all 29 expected failures (25
+`assert_macro_error` calls plus four nested `parse_type` failures), and exact
+output side effects for six print-family contracts. It includes every one of
+the original 371 self-contained contracts plus argument-bearing,
 compile-time-generated, environment/flag, captured-command, and structured
 program-type-context cases from the executing Crystal 1.21 specs.
 
-The runtime corpus contains 1,017 contracts in total:
+The runtime corpus contains 1,042 contracts in total:
 
 | Runtime slice | Count | Current status |
 | --- | ---: | --- |
 | Direct, source-replayable calls | 900 | 900 exact; full portable slice |
-| Program-context calls | 117 | 117 exact through captured structured type state and output effects |
-| Calls carrying AST arguments | 578 | Included in the totals above; their exact AST kind and source rendering are retained |
+| Program-context calls | 142 | 142 exact through captured structured type state, expected errors, and output effects |
+| Calls carrying AST arguments | 592 | Included in the totals above; their exact AST kind and source rendering are retained |
 
 The earlier static extractor remains useful as a minimal hermetic layer. Its
 371 self-contained evaluator contracts still match exactly: **371/371 (100%)**.
@@ -46,11 +49,11 @@ The earlier static extractor intentionally excludes 602 syntactic
 | `expected_exception` | 4 | The assertion is nested in `expect_raises`; runtime capture records its exact diagnostic. |
 
 The static exclusions are not a second set of missing runtime contracts: the
-runtime capture resolves dynamic bodies, compile-time loops, and actual AST
-arguments, then classifies the resulting 1,017 executions directly. Neither
-1,017/1,017 nor 371/371 is a claim of complete Crystal macro compatibility.
-Broader diagnostic/error assertions and 133 semantic examples remain explicit
-backlog.
+runtime capture resolves dynamic bodies, compile-time loops, actual AST
+arguments, and all 25 evaluator error assertions, then classifies the resulting
+1,042 executions directly. Neither 1,042/1,042 nor 371/371 is a claim of
+complete Crystal macro compatibility. The 133 semantic examples remain an
+explicit backlog.
 
 Every portable direct AST-field, returned-collection, `env`/`flag?`,
 `parse_type`, and backtick contract is exact. Ambient environment values,
@@ -59,7 +62,7 @@ inputs and participate in expansion cache fingerprints. Facet never executes
 an arbitrary shell command: a caller must provide its captured output, and an
 unknown command remains source-backed.
 
-The contextual slice snapshots 105 official `TypeNode` arguments with their
+The contextual slice snapshots 106 official `TypeNode` arguments with their
 requested names, type variables, members, ancestry, visibility, predicates,
 and relationships. Six print-family cases additionally compare captured stdout
 with `MacroExpander#side_effect_output`. This keeps compiler state explicit and
@@ -124,8 +127,5 @@ CRYSTAL_CACHE_DIR=/tmp/facet-spec-cache \
 
 ## Next coverage layers
 
-1. Add expected diagnostic and exception parity for the broader
-   `assert_macro_error` inventory. The four nested `parse_type`
-   `expect_raises` contracts are already in the runtime gate.
-2. Port the 133 semantic macro examples once name resolution and type semantics
+1. Port the 133 semantic macro examples once name resolution and type semantics
    can express their contracts without the Crystal compiler runtime.

@@ -39,12 +39,14 @@ for future name resolution, type checking, and compilation stages.
 - A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
 - A committed Crystal 1.21 macro contract corpus. Facet matches exact expansion,
-  expected diagnostic, and output-effect contracts for all 1,017/1,017 cases
+  expected diagnostic, and output-effect contracts for all 1,042/1,042 cases
   executed by the official evaluator specs; all 371 statically self-contained
-  contracts remain exact. Environment, flags, captured command output, and 105
-  structured `TypeNode` snapshots are explicit expansion inputs, and Facet does
-  not execute arbitrary shell commands. Another 133 semantic examples remain
-  explicit; see [macro parity](MACRO_PARITY.md).
+  contracts remain exact. The runtime gate includes all 25 official
+  `assert_macro_error` calls and four nested `parse_type` failures. Environment,
+  flags, captured command output, and 106 structured `TypeNode` snapshots are
+  explicit expansion inputs, and Facet does not execute arbitrary shell
+  commands. Another 133 semantic examples remain explicit; see
+  [macro parity](MACRO_PARITY.md).
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
@@ -227,14 +229,15 @@ that use `%name` or `gensym` bypass the text cache so cached output cannot
 reintroduce identifier collisions.
 
 This remains a partial macro interpreter, not Crystal's complete compiler macro
-engine. The executed runtime slice is at 1,017/1,017 and the earlier statically
+engine. The executed runtime slice is at 1,042/1,042 and the earlier statically
 self-contained slice remains at 371/371. The static inventory still excludes
 602 context-dependent or dynamically constructed assertions, while runtime
 capture resolves those executions into explicit arguments, type-state
-snapshots, and output effects. Broader error contracts and 133 semantic examples
-still require richer compiler behavior, generic/union type semantics, and
-broader name/type resolution. Unsupported non-output control expressions
-produce an explicit expansion diagnostic.
+snapshots, output effects, and exact expected errors. All 25 `assert_macro_error`
+calls in the official evaluator suites are covered; 133 semantic examples still
+require richer compiler behavior, generic/union type semantics, and broader
+name/type resolution. Unsupported non-output control expressions produce an
+explicit expansion diagnostic.
 
 ## Architecture
 
@@ -378,7 +381,7 @@ Current Crystal 1.21.0 parity baseline:
 | --- | ---: | --- |
 | Parser | 4,474 examples; 4,378 unique inputs | 4,378 acceptance decisions matched; 3,437/3,437 accepted inputs match the semantic AST projection; 941/941 rejected inputs match the exact first diagnostic message and line/column; 0 invariant failures; 0 uncovered significant tokens |
 | Lexer | 708 examples; 690 unique inputs | 690 fully consumed; 0 structural failures; 0 diagnostic mismatches across 687 source-reproducible inputs; 3 state-dependent cases reported separately |
-| Facet native suite | — | 7,370 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Facet native suite | — | 8,869 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

@@ -62,6 +62,59 @@ describe Facet::Compiler::MacroExpander do
     end
   end
 
+  it "reports the official macro invocation contract diagnostics" do
+    arguments = {} of String => Facet::Compiler::MacroValue
+    {
+      %({{"foo_bar".camelcase(lower: 99)}}) => "named argument 'lower' to StringLiteral#camelcase must be a bool, not NumberLiteral",
+      %({{{a: 1}[true]}})                   => "argument to [] must be a symbol or string, not BoolLiteral:\n\ntrue",
+      %({{{a: 1}.has_key?(true)}})          => "expected 'NamedTupleLiteral#has_key?' first argument to be a SymbolLiteral, StringLiteral or MacroId, not BoolLiteral",
+      %({{[1, 2, 3].push}})                 => "wrong number of arguments for macro 'ArrayLiteral#push' (given 0, expected 1)",
+      %({{1.+(2, 3)}})                      => "wrong number of arguments for macro 'NumberLiteral#+' (given 2, expected 0..1)",
+      %({{[1][]}})                          => "wrong number of arguments for macro 'ArrayLiteral#[]' (given 0, expected 1..2)",
+      %({{[1, 2, 3].shuffle { |x| }}})      => "macro 'ArrayLiteral#shuffle' is not expected to be invoked with a block, but a block was given",
+      %({{[1, 2, 3].reduce}})               => "macro 'ArrayLiteral#reduce' is expected to be invoked with a block, but no block was given",
+      %({{"".starts_with?(other: "")}})     => "no parameter named 'other'",
+      %({{"".camelcase(foo: "")}})          => "no parameter named 'foo'",
+      %({{flag?}})                          => "wrong number of arguments for macro '::flag?' (given 0, expected 1)",
+    }.each do |body, expected_diagnostic|
+      expander = Facet::Compiler::MacroExpander.new
+      expander.expand_template(body, arguments)
+      expander.diagnostics.map(&.message).should eq([expected_diagnostic])
+    end
+  end
+
+  it "reports official diagnostics for captured AST values" do
+    missing = Facet::Compiler::MacroCapturedNode.new("Missing", "Crystal::Path")
+    missing_metadata = Facet::Compiler::MacroNodeMetadata.new(structure: missing)
+    missing_value = Facet::Compiler::MacroSyntaxValue.captured("Missing", "Crystal::Path", missing_metadata)
+    resolve_expander = Facet::Compiler::MacroExpander.new
+    resolve_expander.expand_template(
+      %({{x.resolve}}),
+      {"x" => missing_value.as(Facet::Compiler::MacroValue)}
+    )
+    resolve_expander.diagnostics.map(&.message).should eq(["undefined constant Missing"])
+
+    captured_annotation = Facet::Compiler::MacroCapturedNode.new("@[Foo]", "Crystal::Annotation")
+    annotation_metadata = Facet::Compiler::MacroNodeMetadata.new(structure: captured_annotation)
+    annotation_value = Facet::Compiler::MacroSyntaxValue.captured("@[Foo]", "Crystal::Annotation", annotation_metadata)
+    bool_value = Facet::Compiler::MacroSyntaxValue.captured(
+      "true",
+      "Crystal::BoolLiteral",
+      Facet::Compiler::MacroNodeMetadata.new
+    )
+    index_expander = Facet::Compiler::MacroExpander.new
+    index_expander.expand_template(
+      %({{x[y]}}),
+      {
+        "x" => annotation_value.as(Facet::Compiler::MacroValue),
+        "y" => bool_value.as(Facet::Compiler::MacroValue),
+      }
+    )
+    index_expander.diagnostics.map(&.message).should eq([
+      "argument to [] must be a number, symbol or string, not BoolLiteral:\n\ntrue",
+    ])
+  end
+
   it "captures macro print side effects without emitting source" do
     value = Facet::Compiler::MacroSyntaxValue.string("bar")
     expander = Facet::Compiler::MacroExpander.new
