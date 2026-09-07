@@ -54,6 +54,7 @@ record CapturedMacroCase,
   commands : Hash(String, String),
   expected_error_type : String?,
   expected_error_message : String?,
+  side_effect_output : String?,
   contextual_program : Bool,
   arguments : Array(CapturedMacroArgument) do
   include JSON::Serializable
@@ -71,7 +72,9 @@ record RuntimeMacroFixtureHeader,
   flag_case_count : Int32,
   command_case_count : Int32,
   error_case_count : Int32,
+  side_effect_case_count : Int32,
   metadata_argument_count : Int32,
+  structured_type_node_argument_count : Int32,
   structured_name_argument_count : Int32,
   structured_call_argument_count : Int32,
   structured_control_flow_argument_count : Int32,
@@ -109,10 +112,14 @@ header = RuntimeMacroFixtureHeader.new(
   flag_case_count: cases.count { |fixture_case| !fixture_case.flags.raw.nil? },
   command_case_count: cases.count { |fixture_case| !fixture_case.commands.empty? },
   error_case_count: cases.count { |fixture_case| !fixture_case.expected_error_message.nil? },
+  side_effect_case_count: cases.count { |fixture_case| !fixture_case.side_effect_output.nil? },
   metadata_argument_count: cases.sum do |fixture_case|
     fixture_case.arguments.count do |argument|
       !argument.filename.nil? || !argument.end_filename.nil? || !argument.doc.nil?
     end
+  end,
+  structured_type_node_argument_count: cases.sum do |fixture_case|
+    fixture_case.arguments.count { |argument| argument.structure.try(&.kind) == "Crystal::TypeNode" }
   end,
   structured_name_argument_count: cases.sum do |fixture_case|
     fixture_case.arguments.count { |argument| !argument.name_source.nil? }

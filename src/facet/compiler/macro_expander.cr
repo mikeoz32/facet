@@ -261,6 +261,7 @@ module Facet
         default : String?
 
       getter diagnostics : Array(Diagnostic)
+      getter side_effect_output : String
       getter cache_hits : Int32
       getter last_footprint : MacroFootprint?
 
@@ -270,6 +271,7 @@ module Facet
         @context : MacroExpansionContext = MacroExpansionContext.new,
       )
         @diagnostics = [] of Diagnostic
+        @side_effect_output = ""
         @env_stack = [] of Hash(String, MacroValue)
         @root_env = {} of String => MacroValue
         @macro_var_stack = [] of Hash(String, String)
@@ -2503,7 +2505,13 @@ module Facet
                 return MacroEvaluation.new(nil) if operator == TokenKind::SafeNav && receiver.value.nil?
                 name = ast.arena.symbols[member.payload_index]
                 args = [] of MacroValue
+                block = nil.as(MacroEvalBlock?)
                 syntax_tree(ast).node(node_id).arguments.each do |argument|
+                  if implicit_method = macro_implicit_block_method(argument.id, ast)
+                    return nil if block
+                    block = MacroEvalBlock.new(ast, argument.id, [] of String, implicit_method)
+                    next
+                  end
                   evaluation = eval_value(argument.id, ast)
                   if evaluation
                     args << evaluation.value
@@ -2513,7 +2521,7 @@ module Facet
                     return nil
                   end
                 end
-                return apply_macro_method(receiver.value, name, args)
+                return apply_macro_method(receiver.value, name, args, block)
               end
             end
           end
@@ -2538,6 +2546,17 @@ module Facet
             end
             if name == "parse_type"
               return eval_macro_parse_type(node_id, ast)
+            end
+            if {"puts", "print", "p", "p!", "pp", "pp!"}.includes?(name)
+              arguments = syntax_tree(ast).node(node_id).arguments
+              values = [] of MacroValue
+              arguments.each do |argument|
+                evaluation = eval_value(argument.id, ast)
+                return nil unless evaluation
+                values << evaluation.value
+              end
+              append_macro_output(name, arguments, values)
+              return MacroEvaluation.new(nil)
             end
             if name == "gensym"
               args = ast.children(node_id)[1]?
@@ -4400,6 +4419,35 @@ module Facet
         )
       end
 
+      private def append_macro_output(
+        name : String,
+        arguments : Array(SyntaxNode),
+        values : Array(MacroValue),
+      ) : Nil
+        case name
+        when "puts"
+          if values.empty?
+            @side_effect_output += '\n'
+          else
+            values.each do |value|
+              @side_effect_output += macro_scalar_text(value) || val_to_string(value)
+              @side_effect_output += '\n'
+            end
+          end
+        when "print"
+          values.each { |value| @side_effect_output += macro_scalar_text(value) || val_to_string(value) }
+        when "p", "pp"
+          values.each do |value|
+            @side_effect_output += val_to_string(value)
+            @side_effect_output += '\n'
+          end
+        when "p!", "pp!"
+          arguments.zip(values).each do |argument, value|
+            @side_effect_output += "#{argument.text} # => #{val_to_string(value)}\n"
+          end
+        end
+      end
+
       private def eval_macro_index(receiver : MacroValue, index : MacroValue) : MacroEvaluation?
         case receiver
         when MacroTupleValue
@@ -4610,6 +4658,27 @@ module Facet
       end
 
       private def eval_binary(op : TokenKind, left : MacroValue, right : MacroValue) : MacroEvaluation?
+        if left_name = macro_captured_type_name(left)
+          if right_name = macro_type_comparison_name(right)
+            left_name = normalize_macro_type_name(left_name)
+            right_name = normalize_macro_type_name(right_name)
+            case op
+            when TokenKind::EqualEqual, TokenKind::BangEqual
+              equal = left_name == right_name
+              return MacroEvaluation.new(op == TokenKind::EqualEqual ? equal : !equal)
+            when TokenKind::Less, TokenKind::LessEqual, TokenKind::Greater, TokenKind::GreaterEqual
+              related = case op
+                        when TokenKind::Less, TokenKind::LessEqual
+                          macro_captured_type_relations(left, "ancestors").includes?(right_name)
+                        else
+                          macro_captured_type_relations(left, "all_subclasses").includes?(right_name)
+                        end
+              related ||= left_name == right_name if {TokenKind::LessEqual, TokenKind::GreaterEqual}.includes?(op)
+              return MacroEvaluation.new(related)
+            end
+          end
+        end
+
         if op == TokenKind::Less && left.is_a?(MacroTypeValue)
           right_type = case right
                        when MacroTypeValue
@@ -4760,6 +4829,36 @@ module Facet
         else
           nil
         end
+      end
+
+      private def macro_captured_type_name(value : MacroValue) : String?
+        return nil unless value.is_a?(MacroSyntaxValue)
+        structure = value.metadata.try(&.structure)
+        return nil unless structure && structure.kind == "Crystal::TypeNode"
+        structure.fields["name"]?.try(&.source) || value.source
+      end
+
+      private def macro_type_comparison_name(value : MacroValue) : String?
+        macro_captured_type_name(value) || begin
+          return value.name if value.is_a?(MacroTypeValue)
+          return nil unless value.is_a?(MacroSyntaxValue)
+          return nil unless {MacroSyntaxKind::Code, MacroSyntaxKind::Identifier}.includes?(value.kind)
+          value.value
+        end
+      end
+
+      private def macro_captured_type_relations(value : MacroValue, name : String) : Array(String)
+        return [] of String unless value.is_a?(MacroSyntaxValue)
+        structure = value.metadata.try(&.structure)
+        return [] of String unless structure
+        (structure.collections[name]? || [] of MacroCapturedNode).map do |entry|
+          nested_name = entry.fields["name"]?.try(&.source) || entry.source
+          normalize_macro_type_name(nested_name)
+        end
+      end
+
+      private def normalize_macro_type_name(name : String) : String
+        name.lchop("::")
       end
 
       private def eval_number_binary(

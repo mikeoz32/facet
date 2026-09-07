@@ -3,7 +3,7 @@ require "./support/upstream_macro_parity"
 fixture_path = ARGV[0]? || File.expand_path("../spec/fixtures/crystal_1_21_macro_runtime.jsonl", __DIR__)
 baseline_path = ARGV[1]?
 header, all_cases = UpstreamMacroParity.load_runtime(fixture_path)
-cases = all_cases.reject(&.contextual_program)
+cases = all_cases
 
 matched = [] of Int32
 mismatches = [] of {Int32, UpstreamRuntimeMacroFixtureCase, UpstreamMacroParityResult}
@@ -22,10 +22,12 @@ if baseline_path
   end
 end
 
-puts "crystal_version=#{header.crystal_version} runtime_cases=#{header.case_count} direct=#{cases.size} contextual=#{header.contextual_case_count} exact=#{matched.size} mismatches=#{mismatches.size} parity=#{(matched.size * 100.0 / cases.size).round(2)}%"
+puts "crystal_version=#{header.crystal_version} runtime_cases=#{header.case_count} direct=#{header.direct_case_count} contextual=#{header.contextual_case_count} exact=#{matched.size} mismatches=#{mismatches.size} parity=#{(matched.size * 100.0 / cases.size).round(2)}%"
 display_limit = ENV["FACET_MACRO_MISMATCH_LIMIT"]?.try(&.to_i?) || 30
 mismatches.first(display_limit).each do |index, fixture_case, result|
   actual = result.actual || "<no expansion>"
   diagnostic = result.diagnostics.first?
-  puts "MISMATCH #{index} #{fixture_case.source_file}:#{fixture_case.line} expected=#{fixture_case.expected.dump} actual=#{actual.dump}#{diagnostic ? " diagnostic=#{diagnostic.dump}" : ""}"
+  expected_effect = fixture_case.side_effect_output || ""
+  effect = result.side_effect_output == expected_effect ? "" : " side_effect_expected=#{expected_effect.dump} side_effect_actual=#{result.side_effect_output.dump}"
+  puts "MISMATCH #{index} #{fixture_case.source_file}:#{fixture_case.line} expected=#{fixture_case.expected.dump} actual=#{actual.dump}#{diagnostic ? " diagnostic=#{diagnostic.dump}" : ""}#{effect}"
 end

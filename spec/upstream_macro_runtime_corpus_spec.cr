@@ -4,7 +4,7 @@ require "../scripts/support/upstream_macro_parity"
 fixture_path = File.expand_path("fixtures/crystal_1_21_macro_runtime.jsonl", __DIR__)
 baseline_path = File.expand_path("fixtures/crystal_1_21_macro_runtime_supported.txt", __DIR__)
 runtime_macro_header, runtime_macro_all_cases = UpstreamMacroParity.load_runtime(fixture_path)
-runtime_macro_cases = runtime_macro_all_cases.reject(&.contextual_program)
+runtime_macro_cases = runtime_macro_all_cases
 supported_runtime_macro_indices = File.read_lines(baseline_path).map(&.to_i)
 
 describe "Crystal 1.21 runtime macro corpus" do
@@ -20,8 +20,10 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.flag_case_count.should eq(15)
     runtime_macro_header.command_case_count.should eq(2)
     runtime_macro_header.error_case_count.should eq(4)
+    runtime_macro_header.side_effect_case_count.should eq(6)
     runtime_macro_header.metadata_argument_count.should eq(10)
-    runtime_macro_header.structured_name_argument_count.should eq(198)
+    runtime_macro_header.structured_type_node_argument_count.should eq(105)
+    runtime_macro_header.structured_name_argument_count.should eq(303)
     runtime_macro_header.structured_call_argument_count.should eq(25)
     runtime_macro_header.structured_control_flow_argument_count.should eq(28)
     runtime_macro_header.structured_declaration_argument_count.should eq(54)
@@ -34,9 +36,9 @@ describe "Crystal 1.21 runtime macro corpus" do
     runtime_macro_header.structured_block_control_argument_count.should eq(19)
     runtime_macro_header.structured_value_argument_count.should eq(19)
     runtime_macro_all_cases.size.should eq(runtime_macro_header.case_count)
-    runtime_macro_cases.size.should eq(runtime_macro_header.direct_case_count)
+    runtime_macro_cases.size.should eq(runtime_macro_header.case_count)
     supported_runtime_macro_indices.should eq(supported_runtime_macro_indices.sort.uniq)
-    supported_runtime_macro_indices.size.should eq(900)
+    supported_runtime_macro_indices.size.should eq(1017)
   end
 
   it "retains authoritative structural names and generic variants" do
@@ -599,6 +601,29 @@ describe "Crystal 1.21 runtime macro corpus" do
       fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 243
     end.not_nil!
     doc_case.arguments.first.doc.should eq("Some docs")
+  end
+
+  it "retains contextual type state and macro output side effects" do
+    methods_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 1987
+    end.not_nil!
+    type_node = methods_case.arguments.first.structure.not_nil!
+    type_node.kind.should eq("Crystal::TypeNode")
+    type_node.collections["all_methods"].map { |method| method.fields["name"].source }.should eq([
+      "child_method",
+      "parent_method",
+      "mixin_method",
+    ])
+
+    subtype_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 2141
+    end.not_nil!
+    subtype_case.arguments.first.structure.not_nil!.collections["ancestors"].map(&.source).should contain("Reference")
+
+    puts_case = runtime_macro_cases.find do |fixture_case|
+      fixture_case.source_file.ends_with?("macro_methods_spec.cr") && fixture_case.line == 4032
+    end.not_nil!
+    puts_case.side_effect_output.should eq("bar\n")
   end
 
   supported_runtime_macro_indices.each do |index|

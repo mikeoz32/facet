@@ -38,14 +38,13 @@ for future name resolution, type checking, and compilation stages.
   inputs so deeper parity can be tightened without another Crystal checkout.
 - A clean parser baseline across all 1,625 files in the Crystal 1.21
   standard-library source tree.
-- A committed Crystal 1.21 macro contract corpus. Facet matches exact expansion
-  or expected diagnostic text for all 900/900 portable contracts captured from
-  the executing official evaluator specs; all 371 statically self-contained
-  contracts remain exact. Environment, flags, and captured command output are
-  explicit expansion inputs, and Facet does not execute arbitrary shell
-  commands. Another 117 runtime contracts requiring mutated compiler program
-  state and 133 semantic examples remain explicit; see
-  [macro parity](MACRO_PARITY.md).
+- A committed Crystal 1.21 macro contract corpus. Facet matches exact expansion,
+  expected diagnostic, and output-effect contracts for all 1,017/1,017 cases
+  executed by the official evaluator specs; all 371 statically self-contained
+  contracts remain exact. Environment, flags, captured command output, and 105
+  structured `TypeNode` snapshots are explicit expansion inputs, and Facet does
+  not execute arbitrary shell commands. Another 133 semantic examples remain
+  explicit; see [macro parity](MACRO_PARITY.md).
 
 Not implemented yet: complete compiler semantics, name and overload resolution,
 type inference/checking, require graph resolution, lowering, code generation, and
@@ -228,12 +227,12 @@ that use `%name` or `gensym` bypass the text cache so cached output cannot
 reintroduce identifier collisions.
 
 This remains a partial macro interpreter, not Crystal's complete compiler macro
-engine. The portable runtime slice is at 900/900 and the earlier statically
+engine. The executed runtime slice is at 1,017/1,017 and the earlier statically
 self-contained slice remains at 371/371. The static inventory still excludes
 602 context-dependent or dynamically constructed assertions, while runtime
-capture resolves many of those into the portable gate. The remaining 117
-program-context runtime contracts, broader error contracts, and 133 semantic
-examples require richer compiler state, generic/union type semantics, and
+capture resolves those executions into explicit arguments, type-state
+snapshots, and output effects. Broader error contracts and 133 semantic examples
+still require richer compiler behavior, generic/union type semantics, and
 broader name/type resolution. Unsupported non-output control expressions
 produce an explicit expansion diagnostic.
 

@@ -2,20 +2,22 @@ diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
 index b2378cd..7248eac 100644
 --- a/spec/spec_helper.cr
 +++ b/spec/spec_helper.cr
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,8 @@
  Crystal::Config.path = "#{__DIR__}/../src"
  
  require "spec"
 +require "json"
++require "io/multi_writer"
  
  require "compiler/requires"
  require "./support/syntax"
-@@ -184,17 +185,893 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
+@@ -184,17 +186,1036 @@ def assert_no_warning(code, *, file = __FILE__, line = __LINE__)
  end
  
  def assert_macro(macro_body, expected, args = nil, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__)
 -  assert_macro(macro_body, expected, expected_pragmas: expected_pragmas, flags: flags, file: file, line: line) { args }
 +  program, a_macro, call = prepare_macro_call(macro_body, flags) { args }
++  captured_output = facet_macro_capture_output(macro_body, program)
 +  begin
 +    result, result_pragmas = program.expand_macro(a_macro, call, program, program)
 +    result = result.chomp(';')
@@ -24,17 +26,23 @@ index b2378cd..7248eac 100644
 +      macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line,
 +      contextual_program: false,
 +      expected_error_type: ex.class.name,
-+      expected_error_message: ex.message
++      expected_error_message: ex.message,
++      side_effect_output: captured_output.try(&.to_s)
 +    )
 +    raise ex
 +  end
-+  record_macro_fixture(macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line, contextual_program: false)
++  record_macro_fixture(
++    macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line,
++    contextual_program: false,
++    side_effect_output: captured_output.try(&.to_s)
++  )
 +  result.should eq(expected), file: file, line: line
 +  result_pragmas.should eq(expected_pragmas), file: file, line: line if expected_pragmas
  end
  
  def assert_macro(macro_body, expected, *, expected_pragmas = nil, flags = nil, file = __FILE__, line = __LINE__, &)
    program, a_macro, call = prepare_macro_call(macro_body, flags) { |program| yield program }
++  captured_output = facet_macro_capture_output(macro_body, program)
 +  begin
 -  result, result_pragmas = program.expand_macro(a_macro, call, program, program)
 -  result = result.chomp(';')
@@ -45,11 +53,16 @@ index b2378cd..7248eac 100644
 +      macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line,
 +      contextual_program: true,
 +      expected_error_type: ex.class.name,
-+      expected_error_message: ex.message
++      expected_error_message: ex.message,
++      side_effect_output: captured_output.try(&.to_s)
 +    )
 +    raise ex
 +  end
-+  record_macro_fixture(macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line, contextual_program: true)
++  record_macro_fixture(
++    macro_body, expected, a_macro.args.map(&.name), call.args, flags, file, line,
++    contextual_program: true,
++    side_effect_output: captured_output.try(&.to_s)
++  )
    result.should eq(expected), file: file, line: line
    result_pragmas.should eq(expected_pragmas), file: file, line: line if expected_pragmas
  end
@@ -58,6 +71,7 @@ index b2378cd..7248eac 100644
 +  macro_body, expected, argument_names, arguments, flags, file, line, *, contextual_program,
 +  expected_error_type : String? = nil,
 +  expected_error_message : String? = nil,
++  side_effect_output : String? = nil,
 +)
 +  path = ENV["FACET_MACRO_CAPTURE"]?
 +  return unless path
@@ -74,6 +88,7 @@ index b2378cd..7248eac 100644
 +        json.field "commands", facet_macro_capture_commands(macro_body, expected)
 +        json.field "expected_error_type", expected_error_type
 +        json.field "expected_error_message", expected_error_message
++        json.field "side_effect_output", side_effect_output
 +        json.field "contextual_program", contextual_program
 +        json.field "arguments" do
 +          json.array do
@@ -94,7 +109,12 @@ index b2378cd..7248eac 100644
 +                  json.field "name_kind", captured_name.kind
 +                  json.field "name_without_generic_args_source", captured_name.without_generic_args_source
 +                end
-+                if structure = facet_macro_capture_structure(node)
++                structure = if node.is_a?(Crystal::TypeNode)
++                              facet_macro_capture_type_node(node, macro_body)
++                            else
++                              facet_macro_capture_structure(node)
++                            end
++                if structure
 +                  json.field "structure", structure
 +                end
 +              end
@@ -105,6 +125,14 @@ index b2378cd..7248eac 100644
 +    end
 +    io << '\n'
 +  end
++end
++
++private def facet_macro_capture_output(macro_body : String, program : Crystal::Program) : IO::Memory?
++  return nil unless ENV["FACET_MACRO_CAPTURE"]?
++  return nil unless macro_body.matches?(/\{%\s*(?:puts|print|p!?|pp!?)\b/)
++  captured = IO::Memory.new
++  program.stdout = IO::MultiWriter.new(program.stdout, captured)
++  captured
 +end
 +
 +private def facet_macro_capture_commands(macro_body : String, expected : String) : Hash(String, String)
@@ -151,6 +179,12 @@ index b2378cd..7248eac 100644
 +
 +private def facet_macro_capture_structure(node : Crystal::ASTNode) : FacetMacroCapturedNode?
 +  case node
++  when Crystal::MetaMacroVar
++    FacetMacroCapturedNode.new(
++      node.to_s,
++      node.class.name,
++      {"name" => FacetMacroCapturedNode.new(node.name, "Crystal::MacroId")}
++    )
 +  when Crystal::Call
 +    fields = {
 +      "receiver"  => facet_macro_capture_node(node.obj),
@@ -302,6 +336,108 @@ index b2378cd..7248eac 100644
 +  when Crystal::Arg
 +    facet_macro_capture_arg(node)
 +  end
++end
++
++private def facet_macro_capture_type_node(
++  node : Crystal::TypeNode,
++  macro_body : String,
++  depth : Int32 = 0,
++) : FacetMacroCapturedNode
++  type = node.type.not_nil!
++  resolved = type.devirtualize
++  fields = {
++    "name"                      => FacetMacroCapturedNode.new(resolved.to_s(generic_args: true), "Crystal::MacroId"),
++    "name_without_generic_args" => FacetMacroCapturedNode.new(resolved.to_s(generic_args: false), "Crystal::MacroId"),
++  }
++  booleans = {
++    "abstract?" => type.abstract?,
++    "union?"    => type.is_a?(Crystal::UnionType),
++    "nilable?"  => type.nilable?,
++    "module?"   => type.module?,
++    "class?"    => type.class? && !type.struct?,
++    "struct?"   => type.class? && type.struct?,
++    "private?"  => type.private?,
++    "public?"   => !type.private?,
++  }
++  collections = {} of String => Array(FacetMacroCapturedNode)
++
++  fields["visibility"] = FacetMacroCapturedNode.new(type.private? ? ":private" : ":public", "Crystal::SymbolLiteral") if macro_body.includes?(".visibility")
++  booleans["has_inner_pointers?"] = type.has_inner_pointers? if macro_body.includes?(".has_inner_pointers?")
++
++  if depth <= 1
++    if depth == 0 && macro_body.includes?(".class")
++      fields["class"] = facet_macro_capture_type_node(Crystal::TypeNode.new(type.metaclass), macro_body, depth + 1)
++    end
++    if macro_body.includes?(".instance")
++      fields["instance"] = facet_macro_capture_type_node(Crystal::TypeNode.new(type.instance_type), macro_body, depth + 1)
++    end
++    if macro_body.includes?(".superclass")
++      fields["superclass"] = facet_macro_capture_node(Crystal::TypeNode.superclass(type))
++    end
++    if macro_body.includes?(".type_vars")
++      collections["type_vars"] = facet_macro_capture_type_nodes(Crystal::TypeNode.type_vars(type), macro_body, depth + 1)
++    end
++    if macro_body.includes?(".instance_vars")
++      collections["instance_vars"] = facet_macro_capture_nodes(Crystal::TypeNode.instance_vars(type, nil))
++    end
++    if macro_body.includes?(".class_vars")
++      collections["class_vars"] = facet_macro_capture_nodes(Crystal::TypeNode.class_vars(type))
++    end
++    if macro_body.includes?(".all_methods")
++      collections["all_methods"] = facet_macro_capture_nodes(Crystal::TypeNode.all_methods(type))
++    elsif macro_body.includes?(".methods")
++      collections["methods"] = facet_macro_capture_nodes(Crystal::TypeNode.methods(type))
++    end
++    if macro_body.includes?(".ancestors") || facet_macro_capture_type_comparison?(macro_body)
++      collections["ancestors"] = facet_macro_capture_type_nodes(Crystal::TypeNode.ancestors(type), macro_body, depth + 1)
++    end
++    if facet_macro_capture_type_comparison?(macro_body)
++      collections["all_subclasses"] = facet_macro_capture_type_nodes(Crystal::TypeNode.all_subclasses(type), macro_body, depth + 1)
++    end
++    if macro_body.includes?(".subclasses")
++      collections["subclasses"] = facet_macro_capture_type_nodes(Crystal::TypeNode.subclasses(type), macro_body, depth + 1)
++    end
++    if macro_body.includes?(".includers")
++      collections["includers"] = facet_macro_capture_type_nodes(Crystal::TypeNode.includers(type), macro_body, depth + 1)
++    end
++    if macro_body.includes?(".union_types")
++      collections["union_types"] = facet_macro_capture_type_nodes(Crystal::TypeNode.union_types(node), macro_body, depth + 1)
++    end
++    if macro_body.includes?(".constants")
++      collections["constants"] = facet_macro_capture_nodes(Crystal::TypeNode.constants(type))
++    end
++  end
++
++  if macro_body.includes?(".size")
++    instance_type = type.instance_type
++    size = case instance_type
++           when Crystal::TupleInstanceType      then instance_type.tuple_types.size
++           when Crystal::NamedTupleInstanceType then instance_type.entries.size
++           end
++    fields["size"] = FacetMacroCapturedNode.new(size.to_s, "Crystal::NumberLiteral") if size
++  end
++
++  FacetMacroCapturedNode.new(node.to_s, node.class.name, fields, collections, booleans)
++end
++
++private def facet_macro_capture_nodes(nodes : Crystal::ArrayLiteral) : Array(FacetMacroCapturedNode)
++  nodes.elements.map do |entry|
++    facet_macro_capture_structure(entry) || facet_macro_capture_node(entry)
++  end
++end
++
++private def facet_macro_capture_type_nodes(
++  nodes : Crystal::ArrayLiteral,
++  macro_body : String,
++  depth : Int32,
++) : Array(FacetMacroCapturedNode)
++  nodes.elements.map do |entry|
++    entry.is_a?(Crystal::TypeNode) ? facet_macro_capture_type_node(entry, macro_body, depth) : facet_macro_capture_node(entry)
++  end
++end
++
++private def facet_macro_capture_type_comparison?(macro_body : String) : Bool
++  macro_body.matches?(/\s(?:<|<=|>|>=|==|!=)\s/)
 +end
 +
 +private def facet_macro_capture_proc_literal(node : Crystal::ProcLiteral) : FacetMacroCapturedNode
@@ -770,6 +906,7 @@ index b2378cd..7248eac 100644
 +
 +private def facet_macro_capture_def(node : Crystal::Def) : FacetMacroCapturedNode
 +  fields = {
++    "name"         => FacetMacroCapturedNode.new(node.name, "Crystal::MacroId"),
 +    "body"         => facet_macro_capture_node(node.body),
 +    "double_splat" => facet_macro_capture_node(node.double_splat),
 +    "block_arg"    => facet_macro_capture_node(node.block_arg),
@@ -859,6 +996,13 @@ index b2378cd..7248eac 100644
 +
 +private def facet_macro_capture_name(node : Crystal::ASTNode) : FacetMacroCapturedName?
 +  case node
++  when Crystal::TypeNode
++    type = node.type.not_nil!.devirtualize
++    FacetMacroCapturedName.new(
++      type.to_s(generic_args: true),
++      "identifier",
++      type.to_s(generic_args: false)
++    )
 +  when Crystal::Primitive
 +    value = node.name
 +    source = value.matches?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/) ? ":#{value}" : ":#{value.inspect}"

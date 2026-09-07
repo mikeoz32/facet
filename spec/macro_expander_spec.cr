@@ -62,6 +62,19 @@ describe Facet::Compiler::MacroExpander do
     end
   end
 
+  it "captures macro print side effects without emitting source" do
+    value = Facet::Compiler::MacroSyntaxValue.string("bar")
+    expander = Facet::Compiler::MacroExpander.new
+    output = expander.expand_template(
+      %({% puts foo %}{% print foo %}{% p foo %}{% p! foo %}{% pp foo %}{% pp! foo %}),
+      {"foo" => value.as(Facet::Compiler::MacroValue)}
+    )
+
+    output.should be_empty
+    expander.side_effect_output.should eq("bar\nbar\"bar\"\nfoo # => \"bar\"\n\"bar\"\nfoo # => \"bar\"\n")
+    expander.diagnostics.should be_empty
+  end
+
   it "preserves direct collection and range syntax and evaluates string interpolation" do
     source = Facet::Compiler::Source.new(<<-CR)
       array = {{[1, 2, 3]}}

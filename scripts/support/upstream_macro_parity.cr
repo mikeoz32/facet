@@ -29,16 +29,18 @@ end
 record UpstreamMacroParityResult,
   actual : String?,
   diagnostics : Array(String),
-  output_diagnostics : Array(String) do
+  output_diagnostics : Array(String),
+  side_effect_output : String = "" do
   def matches?(fixture_case : UpstreamMacroFixtureCase) : Bool
     diagnostics.empty? && actual == fixture_case.expected
   end
 
   def matches?(fixture_case : UpstreamRuntimeMacroFixtureCase) : Bool
+    output_matches = side_effect_output == (fixture_case.side_effect_output || "")
     if expected_error = fixture_case.expected_error_message
-      diagnostics == [expected_error]
+      diagnostics == [expected_error] && output_matches
     else
-      diagnostics.empty? && actual == fixture_case.expected
+      diagnostics.empty? && actual == fixture_case.expected && output_matches
     end
   end
 end
@@ -94,7 +96,9 @@ record UpstreamRuntimeMacroFixtureHeader,
   flag_case_count : Int32,
   command_case_count : Int32,
   error_case_count : Int32,
+  side_effect_case_count : Int32,
   metadata_argument_count : Int32,
+  structured_type_node_argument_count : Int32,
   structured_name_argument_count : Int32,
   structured_call_argument_count : Int32,
   structured_control_flow_argument_count : Int32,
@@ -120,6 +124,7 @@ record UpstreamRuntimeMacroFixtureCase,
   commands : Hash(String, String),
   expected_error_type : String?,
   expected_error_message : String?,
+  side_effect_output : String?,
   contextual_program : Bool,
   arguments : Array(UpstreamRuntimeMacroArgument) do
   include JSON::Serializable
@@ -190,7 +195,12 @@ module UpstreamMacroParity
         arguments,
         "#{fixture_case.source_file}:#{fixture_case.line}"
       ).chomp(';')
-      return UpstreamMacroParityResult.new(actual, expander.diagnostics.map(&.message), [] of String)
+      return UpstreamMacroParityResult.new(
+        actual,
+        expander.diagnostics.map(&.message),
+        [] of String,
+        expander.side_effect_output
+      )
     end
 
     macro_name = "__facet_upstream_runtime_macro_#{index}"
@@ -218,7 +228,7 @@ module UpstreamMacroParity
     diagnostics.concat(expander.diagnostics.map(&.message))
     output_diagnostics = expanded.diagnostics.map(&.message)
     output_diagnostics.each { |message| diagnostics.delete(message) }
-    UpstreamMacroParityResult.new(expanded.source.text.chomp(';'), diagnostics, output_diagnostics)
+    UpstreamMacroParityResult.new(expanded.source.text.chomp(';'), diagnostics, output_diagnostics, expander.side_effect_output)
   rescue ex : Exception
     UpstreamMacroParityResult.new(nil, ["#{ex.class}: #{ex.message}"], [] of String)
   end
@@ -256,6 +266,7 @@ module UpstreamMacroParity
     return true if root_member_requested?(body, argument.name, "is_a?")
     if structure = argument.structure
       return true if structure.kind == "Crystal::Annotation"
+      return true if structure.kind == "Crystal::TypeNode"
       if {"Crystal::ProcNotation", "Crystal::Metaclass", "Crystal::Generic", "Crystal::Union"}.includes?(structure.kind)
         return true if root_member_requested?(body, argument.name, "resolve") ||
                        root_member_requested?(body, argument.name, "resolve?")
