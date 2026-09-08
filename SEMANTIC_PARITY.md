@@ -3,11 +3,16 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 first committed upstream slice comes from eight Crystal 1.21 compiler semantic
 suites and contains 529 contracts executed by 397 examples (two upstream
-pending). Every contract is classified: 29 currently pass Facet exactly and
-500 are listed with a deferred reason. A passing type contract requires the
+pending). Every contract is classified: 131 currently pass Facet exactly and
+398 are listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
 owns the diagnostic wording.
+
+The current exact baseline is 131 contracts. It includes bare zero-argument
+method calls, call-site specialization of untyped and defaulted parameters,
+structural explicit generic and union arguments, canonical union presentation,
+and typed/exact-arity overload selection under the captured target options.
 
 The current slice covers class construction/allocation, simple method return
 inference, generic receiver substitution, lexical assignments, unions,

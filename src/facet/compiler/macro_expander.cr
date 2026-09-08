@@ -100,6 +100,10 @@ module Facet
       getter type_superclass_annotations : Hash(String, Array(MacroSemanticAnnotationSnapshot))
       getter type_subclasses : Hash(String, Array(String))
 
+      def flags : Array(String)
+        @flags.dup
+      end
+
       def initialize(
         environment : Hash(String, String?) = {} of String => String?,
         flags : Array(String) = [] of String,

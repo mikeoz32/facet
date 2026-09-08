@@ -38,6 +38,9 @@ describe Facet::Compiler::MacroExpander do
 
     output.lstrip.should eq(%("bar"|nil|true|"x"|true||facet\n|quoted\n))
     expander.diagnostics.should be_empty
+    context.flags.should eq(["foo", "target=x"])
+    context.flags << "mutated-copy"
+    context.flag("mutated-copy").should be_false
 
     uncaptured = Facet::Compiler::MacroExpander.new
     uncaptured.expand_template(%({{ `facet-command-must-not-run` }}), arguments).should eq(%(`facet-command-must-not-run`))

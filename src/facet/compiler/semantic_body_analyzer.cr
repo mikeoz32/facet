@@ -5,6 +5,7 @@ module Facet
 
       def initialize(
         @types : TypeStore,
+        @semantic_options : SemanticOptions,
         @trees : Hash(FileId, SyntaxTree),
         @revisions : Hash(FileId, UInt64),
         @definitions : Hash(DefId, SemanticDefinition),
@@ -21,6 +22,7 @@ module Facet
         @emit_diagnostics : Bool,
       )
         @inference_stack = Set(DefId).new
+        @specialized_returns = {} of {DefId, Array(TypeId), TypeId} => TypeId
       end
 
       def analyze_file(file_id : FileId) : Nil
@@ -44,7 +46,12 @@ module Facet
         values
       end
 
-      private def analyze_method(definition : SemanticDefinition, record : Bool) : TypeId
+      private def analyze_method(
+        definition : SemanticDefinition,
+        record : Bool,
+        argument_types : Array(TypeId)? = nil,
+        self_type : TypeId? = nil,
+      ) : TypeId
         node_ref = definition.node
         return @types.unknown unless node_ref
         tree = @trees[node_ref.file_id]?
@@ -53,15 +60,22 @@ module Facet
         body = node.body
         return @types.named("Nil") unless body
         env = {} of String => TypeId
+        if owner = definition.owner
+          instance = self_type || @types.named(owner)
+          env["self"] = definition.class_method ? @types.metaclass(instance) : instance
+        end
         node.parameters.reject { |parameter| parameter.kind == NodeKind::BlockParam }.each_with_index do |parameter, index|
           name = parameter.name
           next unless name
-          env[name.lchop('@')] = definition.parameter_types[index]? || @types.unknown
-          env[name] = definition.parameter_types[index]? || @types.unknown if name.starts_with?('@')
-        end
-        if owner = definition.owner
-          instance = @types.named(owner)
-          env["self"] = definition.class_method ? @types.metaclass(instance) : instance
+          type_id = definition.parameter_types[index]? || @types.unknown
+          if type_id == @types.unknown
+            type_id = argument_types.try { |types| types[index]? } || @types.unknown
+          end
+          if type_id == @types.unknown
+            type_id = parameter.value.try { |value| infer(value, node_ref.file_id, definition.owner || "", env, false) } || @types.unknown
+          end
+          env[name.lchop('@')] = type_id
+          env[name] = type_id if name.starts_with?('@')
         end
         @body_executions += 1
         infer(body, node_ref.file_id, definition.owner || "", env, record)
@@ -163,7 +177,23 @@ module Facet
             return @types.metaclass(@definitions[definition_id].type_id)
           end
         end
+        if self_type = env["self"]?
+          return @types.unknown if @macro_names.includes?(name)
+          if callable_without_receiver?(self_type, name)
+            return resolve_call(node, self_type, file_id, scope, env, record, name)
+          end
+        end
         @types.unknown
+      end
+
+      private def callable_without_receiver?(receiver_type : TypeId, name : String) : Bool
+        members = receiver_members(receiver_type)
+        return false unless members
+        members.any? do |instance_type, class_method|
+          type_name = @types[instance_type].name
+          next false unless type_name
+          !lookup_methods(type_name, name, class_method).empty? || method_missing?(instance_type, class_method)
+        end
       end
 
       private def infer_type_apply(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
@@ -172,13 +202,53 @@ module Facet
         resolved = resolve_type_name(name, scope)
         return @types.unknown unless @type_definitions.has_key?(resolved)
         arguments = node.child(1).try(&.children).try do |nodes|
-          nodes.map do |argument|
-            inferred = infer(argument, file_id, scope, env, record)
-            type = @types[inferred]
-            type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
-          end
+          nodes.map { |argument| infer_type_expression(argument, file_id, scope, env, record) }
         end || [] of TypeId
         @types.metaclass(@types.named(resolved, arguments))
+      end
+
+      private def infer_type_expression(
+        node : SyntaxNode,
+        file_id : FileId,
+        scope : String,
+        env : Hash(String, TypeId),
+        record : Bool,
+      ) : TypeId
+        case node.kind
+        when NodeKind::TypeApply
+          inferred = infer_type_apply(node, file_id, scope, env, record)
+          type = @types[inferred]
+          type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
+        when NodeKind::Ident, NodeKind::Const, NodeKind::Path
+          name = node.symbol_name || node.text
+          if name == "self"
+            inferred = env["self"]? || @types.unknown
+            type = @types[inferred]
+            return type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
+          end
+          @types.named(resolve_type_name(name, scope))
+        when NodeKind::LiteralNumber, NodeKind::LiteralSymbol, NodeKind::LiteralString
+          @types.named(node.text)
+        when NodeKind::Binary
+          if node.text.includes?('|')
+            return @types.union(semantic_children(node).map { |child| infer_type_expression(child, file_id, scope, env, record) })
+          end
+          inferred_type_expression(node, file_id, scope, env, record)
+        else
+          inferred_type_expression(node, file_id, scope, env, record)
+        end
+      end
+
+      private def inferred_type_expression(
+        node : SyntaxNode,
+        file_id : FileId,
+        scope : String,
+        env : Hash(String, TypeId),
+        record : Bool,
+      ) : TypeId
+        inferred = infer(node, file_id, scope, env, record)
+        type = @types[inferred]
+        type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
       end
 
       private def infer_assign(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
@@ -257,9 +327,10 @@ module Facet
         end
         children = semantic_children(node)
         left = children.first?.try { |child| infer(child, file_id, scope, env, record) } || @types.unknown
-        children[1]?.try { |child| infer(child, file_id, scope, env, record) }
+        right = children[1]?.try { |child| infer(child, file_id, scope, env, record) } || @types.unknown
         text = node.text
-        return @types.named("Bool") if text.includes?("==") || text.includes?("!=") || text.includes?('<') || text.includes?('>') || text.includes?("&&") || text.includes?("||")
+        return @types.union([left, right]) if text.includes?("&&") || text.includes?("||")
+        return @types.named("Bool") if text.includes?("==") || text.includes?("!=") || text.includes?('<') || text.includes?('>')
         left
       end
 
@@ -286,8 +357,9 @@ module Facet
         scope : String,
         env : Hash(String, TypeId),
         record : Bool,
+        explicit_name : String? = nil,
       ) : TypeId
-        name = node.call_name
+        name = explicit_name || node.call_name
         return @types.unknown unless name
         arguments = node.arguments.map { |argument| infer(argument.value || argument, file_id, scope, env, record) }
 
@@ -323,10 +395,10 @@ module Facet
             missing << type_name
           else
             applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
-            selected = applicable.empty? ? candidates : applicable
+            selected = select_overloads(applicable.empty? ? candidates : applicable, arguments)
             resolved.concat(selected)
             selected.each do |candidate|
-              return_type = inferred_return_type(candidate)
+              return_type = inferred_return_type(candidate, arguments, instance_type)
               resolved_returns << substitute_type(return_type, instance_type, type_name)
             end
           end
@@ -409,14 +481,28 @@ module Facet
         end
       end
 
-      private def inferred_return_type(definition : SemanticDefinition) : TypeId
+      private def inferred_return_type(
+        definition : SemanticDefinition,
+        arguments : Array(TypeId),
+        self_type : TypeId,
+      ) : TypeId
         return definition.return_type unless definition.return_type == @types.unknown
         return @types.unknown if definition.generated || @inference_stack.includes?(definition.id)
+        parameter_specific = definition.parameter_types.any? { |type_id| type_id == @types.unknown }
+        receiver_specific = definition.owner.try { |owner| self_type != @types.named(owner) } || false
+        cache_key = {definition.id, arguments, self_type}
+        if parameter_specific || receiver_specific
+          if cached = @specialized_returns[cache_key]?
+            return cached
+          end
+        end
         @inference_stack << definition.id
-        inferred = analyze_method(definition, record: false)
+        inferred = analyze_method(definition, record: false, argument_types: arguments, self_type: self_type)
         @inference_stack.delete(definition.id)
         return @types.unknown if inferred == @types.error
-        if inferred != @types.unknown
+        if parameter_specific || receiver_specific
+          @specialized_returns[cache_key] = inferred
+        elsif inferred != @types.unknown
           @definitions[definition.id] = SemanticDefinition.new(
             definition.id,
             definition.kind,
@@ -531,6 +617,51 @@ module Facet
         return false if arity < definition.min_arity
         max = definition.max_arity
         max.nil? || arity <= max
+      end
+
+      private def select_overloads(
+        candidates : Array(SemanticDefinition),
+        arguments : Array(TypeId),
+      ) : Array(SemanticDefinition)
+        compatible = candidates.select do |candidate|
+          candidate.parameter_types.each_with_index.all? do |parameter_type, index|
+            argument_type = arguments[index]?
+            argument_type.nil? || type_compatible?(argument_type, parameter_type)
+          end
+        end
+        compatible = candidates if compatible.empty?
+        scored = compatible.map { |candidate| {candidate, overload_score(candidate, arguments)} }
+        best = scored.max_of? { |entry| entry[1] } || 0
+        scored.select { |_, score| score == best }.map { |entry| entry[0] }
+      end
+
+      private def overload_score(definition : SemanticDefinition, arguments : Array(TypeId)) : Int32
+        score = if @semantic_options.preview_overload_order? && definition.min_arity == arguments.size && definition.max_arity == arguments.size
+                  4
+                else
+                  0
+                end
+        definition.parameter_types.each_with_index do |parameter_type, index|
+          argument_type = arguments[index]?
+          next unless argument_type
+          score += 8 if parameter_type != @types.unknown && parameter_type == argument_type
+        end
+        score
+      end
+
+      private def type_compatible?(actual_id : TypeId, expected_id : TypeId) : Bool
+        return true if actual_id == @types.unknown || expected_id == @types.unknown
+        return true if actual_id == expected_id
+        expected = @types[expected_id]
+        return expected.arguments.any? { |member| type_compatible?(actual_id, member) } if expected.kind == SemanticTypeKind::Union
+        actual = @types[actual_id]
+        return false unless actual.kind == SemanticTypeKind::Nominal && expected.kind == SemanticTypeKind::Nominal
+        current = actual.name
+        while name = current
+          return true if name == expected.name
+          current = @superclasses[name]?.try { |superclass| resolve_type_name(superclass, name) }
+        end
+        false
       end
 
       private def without_nil(type_id : TypeId) : TypeId

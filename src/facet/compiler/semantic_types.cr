@@ -18,6 +18,24 @@ module Facet
       Strict
     end
 
+    struct SemanticOptions
+      def initialize(flags : Enumerable(String) = [] of String)
+        @flags = flags.to_set
+      end
+
+      def flags : Set(String)
+        @flags.dup
+      end
+
+      def preview_overload_order? : Bool
+        @flags.includes?("preview_overload_order")
+      end
+
+      def fingerprint : UInt64
+        @flags.to_a.sort.reduce(0_u64) { |value, flag| value ^ flag.hash.to_u64 }
+      end
+    end
+
     enum SemanticTypeKind
       Unknown
       Error
@@ -94,27 +112,33 @@ module Facet
             members << type_id
           end
         end
-        members = members.uniq.sort
+        members = members.uniq.sort_by { |type_id| display(type_id) }
         return @unknown if members.empty?
         return members.first if members.size == 1
         intern(SemanticType.new(SemanticTypeKind::Union, arguments: members))
       end
 
       def display(id : TypeId) : String
+        display(id, false)
+      end
+
+      private def display(id : TypeId, nested : Bool) : String
         type = self[id]
         case type.kind
         when SemanticTypeKind::Unknown then "Unknown"
         when SemanticTypeKind::Error   then "Error"
         when SemanticTypeKind::Nominal
           name = type.name || "Unknown"
-          type.arguments.empty? ? name : "#{name}(#{type.arguments.map { |arg| display(arg) }.join(", ")})"
-        when SemanticTypeKind::Metaclass     then "#{display(type.arguments.first)}.class"
+          type.arguments.empty? ? name : "#{name}(#{type.arguments.map { |arg| display(arg, true) }.join(", ")})"
+        when SemanticTypeKind::Metaclass     then "#{display(type.arguments.first, true)}.class"
         when SemanticTypeKind::TypeParameter then type.name || "T"
-        when SemanticTypeKind::Union         then type.arguments.map { |arg| display(arg) }.join(" | ")
-        when SemanticTypeKind::Tuple         then "Tuple(#{type.arguments.map { |arg| display(arg) }.join(", ")})"
-        when SemanticTypeKind::NamedTuple    then "NamedTuple(#{type.arguments.map { |arg| display(arg) }.join(", ")})"
-        when SemanticTypeKind::Proc          then "Proc(#{type.arguments.map { |arg| display(arg) }.join(", ")})"
-        else                                      "Unknown"
+        when SemanticTypeKind::Union
+          body = type.arguments.map { |arg| display(arg, true) }.join(" | ")
+          nested ? body : "(#{body})"
+        when SemanticTypeKind::Tuple      then "Tuple(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
+        when SemanticTypeKind::NamedTuple then "NamedTuple(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
+        when SemanticTypeKind::Proc       then "Proc(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
+        else                                   "Unknown"
         end
       end
 

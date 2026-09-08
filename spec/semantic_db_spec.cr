@@ -5,6 +5,7 @@ private def semantic_fixture(
   entry : String,
   roots : Array(String) = ["/workspace", "/stdlib"],
   prelude : String? = "prelude",
+  semantic_options : Facet::Compiler::SemanticOptions = Facet::Compiler::SemanticOptions.new,
 )
   manager = Facet::Compiler::SourceManager.new
   ids = {} of String => Facet::Compiler::FileId
@@ -13,7 +14,7 @@ private def semantic_fixture(
   end
   queries = Facet::Compiler::QueryDb.new(manager)
   resolver = Facet::Compiler::RegisteredSourceResolver.new(roots, prelude)
-  semantic = Facet::Compiler::SemanticDb.new(queries, resolver)
+  semantic = Facet::Compiler::SemanticDb.new(queries, resolver, semantic_options: semantic_options)
   {semantic, semantic.analyze([ids[entry]]), ids, queries}
 end
 
@@ -226,6 +227,77 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("String")
   end
 
+  it "preserves explicit nested and union generic arguments" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "class Box(T); end\nBox(Box(Int32 | Float64)).new\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    call = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], call.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Box(Box(Float64 | Int32))")
+  end
+
+  it "resolves a bare zero-argument call through Object methods" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "def answer; 42; end\nanswer\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    call = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], call.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Int32")
+  end
+
+  it "specializes untyped parameters from call arguments and defaults" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "def identity(value); value; end\ndef defaulted(value = 'x'); value; end\n{identity(42), defaulted}\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Char)")
+  end
+
+  it "reuses identical call-site specializations within a semantic snapshot" do
+    semantic, _, _, _ = semantic_fixture({
+      "/workspace/main.cr" => "def identity(value); cheeky = value; cheeky; end\n{identity(1), identity(2)}\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    # One specialized pass serves both calls; the second execution records the
+    # method body itself for editor queries.
+    semantic.stats.body_inference_executions.should eq(2)
+  end
+
+  it "keeps self-return inference specific to each generic receiver" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "class Box(T); def itself; self; end; end\n{Box(Int32).new.itself, Box(Char).new.itself}\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Box(Int32), Box(Char))")
+  end
+
+  it "prefers exact arity and parameter types during overload selection" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def choose(value : Int32); 1; end
+        def choose(value : Char); 'x'; end
+        def count(a, b); 1; end
+        def count(a, b, c = 0); 'x'; end
+        {choose(1), choose('x'), count(1, 2)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil, Facet::Compiler::SemanticOptions.new(["preview_overload_order"]))
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Char, Int32)")
+  end
+
   it "diagnoses only when every closed member of a union lacks the method" do
     _, snapshot, ids, _ = semantic_fixture({
       "/workspace/main.cr" => <<-CR,
@@ -241,7 +313,7 @@ describe Facet::Compiler::SemanticDb do
     }, "/workspace/main.cr", ["/workspace"], nil)
 
     snapshot.diagnostics_for(ids["/workspace/main.cr"]).map(&.message).should eq([
-      "undefined method 'absent' for A | B",
+      "undefined method 'absent' for (A | B)",
     ])
   end
 end

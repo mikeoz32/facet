@@ -203,6 +203,7 @@ module Facet
         @queries : QueryDb,
         @resolver : RequireResolver = RegisteredSourceResolver.new,
         @macro_context : MacroExpansionContext = MacroExpansionContext.new,
+        @semantic_options : SemanticOptions = SemanticOptions.new,
       )
         @types = TypeStore.new
         @stats = SemanticStats.new
@@ -222,7 +223,7 @@ module Facet
         expanded_key = expanded_entries.keys.sort.map do |file_id|
           "#{file_id}:#{expanded_entries[file_id].ast.source.hash}"
         end.join(',')
-        cache_key = "#{mode.value}:#{expand_entries}:#{entry_ids.join(',')}:#{expanded_key}"
+        cache_key = "#{mode.value}:#{@semantic_options.fingerprint}:#{expand_entries}:#{entry_ids.join(',')}:#{expanded_key}"
         if cached = @analysis_cache[cache_key]?
           if cached.workspace_revision == @queries.manager.workspace_revision
             @stats.analysis_cache_hits += 1
@@ -367,6 +368,7 @@ module Facet
 
         analyzer = BodyAnalyzer.new(
           @types,
+          @semantic_options,
           trees,
           revisions,
           definitions,

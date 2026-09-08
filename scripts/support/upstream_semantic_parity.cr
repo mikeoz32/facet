@@ -40,7 +40,7 @@ record UpstreamSemanticResult,
   complete : Bool,
   parser_clean : Bool do
   def matches?(fixture : UpstreamSemanticCase) : Bool
-    return false if fixture.inject_primitives || fixture.flags
+    return false if fixture.inject_primitives
     return false unless @parser_clean
     case fixture.kind
     when "type"
@@ -83,11 +83,13 @@ module UpstreamSemanticParity
     queries = Facet::Compiler::QueryDb.new(manager)
     semantic = Facet::Compiler::SemanticDb.new(
       queries,
-      Facet::Compiler::RegisteredSourceResolver.new([] of String, nil)
+      Facet::Compiler::RegisteredSourceResolver.new([] of String, nil),
+      semantic_options: Facet::Compiler::SemanticOptions.new(fixture.flags.try { |flags| [flags] } || [] of String)
     )
     snapshot = semantic.analyze([file_id])
     tree = queries.syntax(file_id)
-    diagnostic = snapshot.diagnostics_for(file_id).first?
+    diagnostics = snapshot.diagnostics_for(file_id)
+    diagnostic = fixture.kind == "type" ? diagnostics.find(&.confidence.conclusive?) : diagnostics.first?
     actual_type = final_expression(tree.root).try do |node|
       ref = Facet::Compiler::NodeRef.new(file_id, node.id, manager.revision(file_id))
       snapshot.type_of(ref).try { |type_id| semantic.types.display(type_id) }
