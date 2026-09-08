@@ -251,6 +251,59 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Box(Box(Float64 | Int32))")
   end
 
+  it "binds method forall variables through values, metaclasses, and generic returns" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Box(T); end
+        def reflected(x : Free) forall Free; Free; end
+        def reflected_class(x : Free.class) forall Free; Free; end
+        def wrap(x : T) forall T; Box(T).new; end
+        def passthrough(x : U) : U forall U; x; end
+        {reflected(1), reflected_class(Int32), wrap('x'), passthrough(1)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int32.class, Int32.class, Box(Char), Int32)"
+    )
+  end
+
+  it "binds method forall variables from defaults and tuple restrictions" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def default_type(x, y : U = nil) forall U; U; end
+        def default_class(x : Free.class = Int32) forall Free; Free; end
+        def tuple_second(x : {X, Y}) forall X, Y; Y; end
+        def tuple_value(x : {_, _}); x; end
+        {default_type(1), default_class, tuple_second({1, 2.5}), tuple_value({1, 2.5})}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Nil.class, Int32.class, Float64.class, Tuple(Int32, Float64))"
+    )
+  end
+
+  it "parenthesizes a union metaclass inferred through forall" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def union_type(x : T?) forall T; T; end
+        union_type(1 || "" || nil)
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("(Int32 | String).class")
+  end
+
   it "resolves a bare zero-argument call through Object methods" do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => "def answer; 42; end\nanswer\n",

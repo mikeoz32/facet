@@ -7,12 +7,14 @@
   method indexing, basic inference/generic substitution, strict/tolerant
   snapshots, and confidence-graded coded undefined-method diagnostics.
 - Added a committed Crystal 1.21 semantic corpus with 529 contracts from 397
-  official examples. All contracts are classified; 243 form the current exact
-  no-regression baseline and 286 remain explicitly deferred. The semantic
+  official examples. All contracts are classified; 265 form the current exact
+  no-regression baseline and 264 remain explicitly deferred. The semantic
   analyzer now resolves bare zero-argument calls, specializes untyped and
   defaulted parameters at call sites, preserves explicit nested/union generic
   arguments, orders preview overloads by positional-signature specificity,
-  preserves compact numeric suffixes, and canonicalizes nil-last unions.
+  preserves compact numeric suffixes, canonicalizes nil-last unions, and binds
+  method-level `forall` variables through values, metaclasses, defaults,
+  optional unions, tuples, and generic return types.
 
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet

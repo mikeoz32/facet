@@ -417,6 +417,15 @@ module Facet
         end
       end
 
+      def free_variables : Array(SyntaxNode)
+        case kind
+        when NodeKind::Def, NodeKind::MacroDef
+          child(4).try(&.children) || [] of SyntaxNode
+        else
+          [] of SyntaxNode
+        end
+      end
+
       def superclass : SyntaxNode?
         {NodeKind::Class, NodeKind::Struct, NodeKind::Enum}.includes?(kind) ? present_child(1) : nil
       end

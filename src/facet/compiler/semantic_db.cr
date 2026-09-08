@@ -34,7 +34,8 @@ module Facet
       max_arity : Int32?,
       parameter_types : Array(String?),
       return_type : String?,
-      generated : Bool
+      generated : Bool,
+      free_variables : Array(String)
 
     record IndexedInclude,
       owner : String,
@@ -335,11 +336,12 @@ module Facet
         indexes.each do |file_id, index|
           revision = @queries.manager.revision(file_id)
           index.methods.each do |declaration|
+            free_variables = declaration.free_variables.to_set
             parameter_types = declaration.parameter_types.map do |name|
-              name ? resolve_type_text(name, declaration.owner, type_definitions) : @types.unknown
+              name ? resolve_type_text(name, declaration.owner, type_definitions, free_variables) : @types.unknown
             end
             return_type = declaration.return_type.try do |name|
-              resolve_type_text(name, declaration.owner, type_definitions)
+              resolve_type_text(name, declaration.owner, type_definitions, free_variables)
             end || @types.unknown
             id = definition_id("#{file_id}:#{declaration.key}")
             definition = SemanticDefinition.new(
@@ -356,7 +358,8 @@ module Facet
               declaration.max_arity,
               parameter_types,
               return_type,
-              declaration.generated
+              declaration.generated,
+              declaration.free_variables
             )
             definitions[id] = definition
             methods_by_owner[declaration.owner] << id
@@ -468,20 +471,40 @@ module Facet
         id
       end
 
-      private def resolve_type_text(text : String, scope : String, definitions : Hash(String, DefId)) : TypeId
-        TypeTextResolver.new(@types, definitions).resolve(text, scope)
+      private def resolve_type_text(
+        text : String,
+        scope : String,
+        definitions : Hash(String, DefId),
+        type_parameters : Set(String) = Set(String).new,
+      ) : TypeId
+        TypeTextResolver.new(@types, definitions, type_parameters).resolve(text, scope)
       end
     end
 
     private class TypeTextResolver
-      def initialize(@types : TypeStore, @definitions : Hash(String, DefId))
+      def initialize(
+        @types : TypeStore,
+        @definitions : Hash(String, DefId),
+        @type_parameters : Set(String) = Set(String).new,
+      )
       end
 
       def resolve(source : String, scope : String) : TypeId
         text = source.strip
         return @types.unknown if text.empty?
+        return @types.unknown if text == "_"
+        if wrapped_in_parentheses?(text)
+          return resolve(text.byte_slice(1, text.bytesize - 2), scope)
+        end
         if text.ends_with?('?')
           return @types.union([resolve(text.rchop('?'), scope), @types.named("Nil")])
+        end
+        if text.ends_with?(".class")
+          return @types.metaclass(resolve(text.rchop(".class"), scope))
+        end
+        if text.starts_with?('{') && text.ends_with?('}')
+          inside = text.byte_slice(1, text.bytesize - 2)
+          return @types.tuple(split_top_level(inside, ',').map { |part| resolve(part, scope) })
         end
         union_parts = split_top_level(text, '|')
         return @types.union(union_parts.map { |part| resolve(part, scope) }) if union_parts.size > 1
@@ -494,8 +517,19 @@ module Facet
           end
         end
         name = resolve_name(text, scope)
-        return @types.type_parameter(name) if !@definitions.has_key?(name) && name.size == 1 && name[0].uppercase?
+        return @types.type_parameter(name) if @type_parameters.includes?(name) || (!@definitions.has_key?(name) && name.size == 1 && name[0].uppercase?)
         @types.named(name)
+      end
+
+      private def wrapped_in_parentheses?(text : String) : Bool
+        return false unless text.starts_with?('(') && text.ends_with?(')')
+        depth = 0
+        text.each_char_with_index do |char, index|
+          depth += 1 if char == '('
+          depth -= 1 if char == ')'
+          return false if depth == 0 && index < text.size - 1
+        end
+        depth == 0
       end
 
       private def resolve_name(name : String, scope : String) : String
@@ -617,7 +651,8 @@ module Facet
           max_arity,
           parameter_types,
           node.return_type.try(&.text),
-          @generated
+          @generated,
+          node.free_variables.map(&.text)
         )
       end
 

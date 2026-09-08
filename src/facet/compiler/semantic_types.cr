@@ -134,7 +134,10 @@ module Facet
         when SemanticTypeKind::Nominal
           name = type.name || "Unknown"
           type.arguments.empty? ? name : "#{name}(#{type.arguments.map { |arg| display(arg, true) }.join(", ")})"
-        when SemanticTypeKind::Metaclass     then "#{display(type.arguments.first, true)}.class"
+        when SemanticTypeKind::Metaclass
+          instance = type.arguments.first
+          rendered = display(instance, true)
+          self[instance].kind == SemanticTypeKind::Union ? "(#{rendered}).class" : "#{rendered}.class"
         when SemanticTypeKind::TypeParameter then type.name || "T"
         when SemanticTypeKind::Union
           body = type.arguments.map { |arg| display(arg, true) }.join(" | ")
@@ -190,6 +193,7 @@ module Facet
       getter parameter_types : Array(TypeId)
       getter return_type : TypeId
       getter generated : Bool
+      getter free_variables : Array(String)
 
       def initialize(
         @id : DefId,
@@ -206,6 +210,7 @@ module Facet
         @parameter_types : Array(TypeId) = [] of TypeId,
         @return_type : TypeId = 0,
         @generated : Bool = false,
+        @free_variables : Array(String) = [] of String,
       )
       end
     end

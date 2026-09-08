@@ -1,6 +1,14 @@
 module Facet
   module Compiler
     private class BodyAnalyzer
+      BUILTIN_TYPE_NAMES = Set{
+        "Object", "Reference", "Value", "Number", "Int", "Float", "Signed", "Unsigned",
+        "Int8", "Int16", "Int32", "Int64", "Int128",
+        "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
+        "Float32", "Float64", "Bool", "Char", "String", "Symbol", "Nil", "Regex",
+        "Array", "Hash", "Tuple", "NamedTuple", "Proc", "Range", "Pointer", "Slice", "StaticArray",
+      }
+
       getter body_executions : Int32 = 0
 
       def initialize(
@@ -51,6 +59,7 @@ module Facet
         record : Bool,
         argument_types : Array(TypeId)? = nil,
         self_type : TypeId? = nil,
+        free_bindings : Hash(String, TypeId) = {} of String => TypeId,
       ) : TypeId
         node_ref = definition.node
         return @types.unknown unless node_ref
@@ -64,13 +73,17 @@ module Facet
           instance = self_type || @types.named(owner)
           env["self"] = definition.class_method ? @types.metaclass(instance) : instance
         end
+        definition.free_variables.each do |name|
+          bound = free_bindings[name]? || @types.type_parameter(name)
+          env[name] = @types.metaclass(bound)
+        end
         node.parameters.reject { |parameter| parameter.kind == NodeKind::BlockParam }.each_with_index do |parameter, index|
           name = parameter.name
           next unless name
-          type_id = definition.parameter_types[index]? || @types.unknown
-          if type_id == @types.unknown
-            type_id = argument_types.try { |types| types[index]? } || @types.unknown
-          end
+          declared_type = definition.parameter_types[index]? || @types.unknown
+          declared_type = substitute_free_type(declared_type, free_bindings)
+          argument_type = argument_types.try { |types| types[index]? }
+          type_id = argument_type && argument_type != @types.unknown ? argument_type : declared_type
           if type_id == @types.unknown
             type_id = parameter.value.try { |value| infer(value, node_ref.file_id, definition.owner || "", env, false) } || @types.unknown
           end
@@ -176,6 +189,9 @@ module Facet
             bind(node, file_id, definition_id) if record
             return @types.metaclass(@definitions[definition_id].type_id)
           end
+          if BUILTIN_TYPE_NAMES.includes?(resolved)
+            return @types.metaclass(@types.named(resolved))
+          end
         end
         if self_type = env["self"]?
           return @types.unknown if @macro_names.includes?(name)
@@ -223,6 +239,10 @@ module Facet
           name = node.symbol_name || node.text
           if name == "self"
             inferred = env["self"]? || @types.unknown
+            type = @types[inferred]
+            return type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
+          end
+          if inferred = env[name]?
             type = @types[inferred]
             return type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
           end
@@ -462,6 +482,104 @@ module Facet
         @types.named(owner, inferred)
       end
 
+      private def infer_free_bindings(
+        definition : SemanticDefinition,
+        arguments : Array(TypeId),
+      ) : Hash(String, TypeId)
+        names = definition.free_variables.to_set
+        return {} of String => TypeId if names.empty?
+
+        effective_arguments = arguments.dup
+        if node_ref = definition.node
+          if tree = @trees[node_ref.file_id]?
+            node = tree.node(node_ref.node_id)
+            env = {} of String => TypeId
+            if owner = definition.owner
+              instance = @types.named(owner)
+              env["self"] = definition.class_method ? @types.metaclass(instance) : instance
+            end
+            names.each { |name| env[name] = @types.metaclass(@types.type_parameter(name)) }
+            node.parameters.reject { |parameter| parameter.kind == NodeKind::BlockParam }.each_with_index do |parameter, index|
+              while effective_arguments.size <= index
+                effective_arguments << @types.unknown
+              end
+              if effective_arguments[index] == @types.unknown
+                if value = parameter.value
+                  effective_arguments[index] = infer(value, node_ref.file_id, definition.owner || "", env, false)
+                end
+              end
+              if name = parameter.name
+                env[name.lchop('@')] = effective_arguments[index]
+                env[name] = effective_arguments[index] if name.starts_with?('@')
+              end
+            end
+          end
+        end
+
+        bindings = {} of String => TypeId
+        definition.parameter_types.each_with_index do |parameter_type, index|
+          if argument_type = effective_arguments[index]?
+            collect_free_type_bindings(parameter_type, argument_type, names, bindings)
+          end
+        end
+        bindings
+      end
+
+      private def collect_free_type_bindings(
+        parameter_id : TypeId,
+        argument_id : TypeId,
+        names : Set(String),
+        bindings : Hash(String, TypeId),
+      ) : Nil
+        parameter = @types[parameter_id]
+        if parameter.kind == SemanticTypeKind::TypeParameter && names.includes?(parameter.name || "")
+          name = parameter.name.not_nil!
+          bindings[name] = bindings[name]?.try { |current| @types.union([current, argument_id]) } || argument_id
+          return
+        end
+
+        argument = @types[argument_id]
+        if parameter.kind == SemanticTypeKind::Union
+          argument_members = argument.kind == SemanticTypeKind::Union ? argument.arguments : [argument_id]
+          free_members = parameter.arguments.select { |member| contains_free_type?(member, names) }
+          concrete_members = parameter.arguments.reject { |member| contains_free_type?(member, names) }
+          argument_members.each do |member|
+            next if concrete_members.any? { |concrete| type_compatible?(member, concrete) }
+            free_members.each { |free| collect_free_type_bindings(free, member, names, bindings) }
+          end
+          return
+        end
+
+        return unless parameter.kind == argument.kind && parameter.name == argument.name
+        parameter.arguments.zip(argument.arguments) do |parameter_argument, actual_argument|
+          collect_free_type_bindings(parameter_argument, actual_argument, names, bindings)
+        end
+      end
+
+      private def contains_free_type?(type_id : TypeId, names : Set(String)) : Bool
+        type = @types[type_id]
+        return true if type.kind == SemanticTypeKind::TypeParameter && names.includes?(type.name || "")
+        type.arguments.any? { |argument| contains_free_type?(argument, names) }
+      end
+
+      private def substitute_free_type(type_id : TypeId, bindings : Hash(String, TypeId)) : TypeId
+        type = @types[type_id]
+        if type.kind == SemanticTypeKind::TypeParameter
+          return bindings[type.name || ""]? || type_id
+        end
+        return type_id if type.arguments.empty?
+        arguments = type.arguments.map { |argument| substitute_free_type(argument, bindings) }
+        case type.kind
+        when SemanticTypeKind::Nominal    then @types.named(type.name || "Unknown", arguments)
+        when SemanticTypeKind::Metaclass  then @types.metaclass(arguments.first)
+        when SemanticTypeKind::Union      then @types.union(arguments)
+        when SemanticTypeKind::Tuple      then @types.tuple(arguments)
+        when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments)
+        when SemanticTypeKind::Proc       then @types.proc_type(arguments)
+        else                                   type_id
+        end
+      end
+
       private def collect_type_parameter_bindings(
         parameter_type_id : TypeId,
         argument_type_id : TypeId,
@@ -486,9 +604,12 @@ module Facet
         arguments : Array(TypeId),
         self_type : TypeId,
       ) : TypeId
-        return definition.return_type unless definition.return_type == @types.unknown
+        free_bindings = infer_free_bindings(definition, arguments)
+        unless definition.return_type == @types.unknown
+          return substitute_free_type(definition.return_type, free_bindings)
+        end
         return @types.unknown if definition.generated || @inference_stack.includes?(definition.id)
-        parameter_specific = definition.parameter_types.any? { |type_id| type_id == @types.unknown }
+        parameter_specific = !definition.parameter_types.empty?
         receiver_specific = definition.owner.try { |owner| self_type != @types.named(owner) } || false
         cache_key = {definition.id, arguments, self_type}
         if parameter_specific || receiver_specific
@@ -497,7 +618,13 @@ module Facet
           end
         end
         @inference_stack << definition.id
-        inferred = analyze_method(definition, record: false, argument_types: arguments, self_type: self_type)
+        inferred = analyze_method(
+          definition,
+          record: false,
+          argument_types: arguments,
+          self_type: self_type,
+          free_bindings: free_bindings
+        )
         @inference_stack.delete(definition.id)
         return @types.unknown if inferred == @types.error
         if parameter_specific || receiver_specific
@@ -517,7 +644,8 @@ module Facet
             definition.max_arity,
             definition.parameter_types,
             inferred,
-            definition.generated
+            definition.generated,
+            definition.free_variables
           )
         end
         inferred
