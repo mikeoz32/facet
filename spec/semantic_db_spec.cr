@@ -227,6 +227,19 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("String")
   end
 
+  it "preserves compact numeric suffixes and canonical nil-last unions" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => %({1i8, 1u16, 2.3f32, 2.3f64, 1 || "" || nil}\n),
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int8, UInt16, Float32, Float64, (Int32 | String | Nil))"
+    )
+  end
+
   it "preserves explicit nested and union generic arguments" do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => "class Box(T); end\nBox(Box(Int32 | Float64)).new\n",
@@ -296,6 +309,27 @@ describe Facet::Compiler::SemanticDb do
     result = tree.root.children.last.children.last
     ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Char, Int32)")
+  end
+
+  it "orders untyped preview overloads by positional signature specificity" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def optional(x, y, z = 0); 1; end
+        def optional(x, y, z = 0, w = 0); 'x'; end
+        def required(x, y = 0); 'x'; end
+        def required(x, y, z = 0); 1; end
+        def bounded(x, y, *rest); 'x'; end
+        def bounded(x, y, z = 0); 1; end
+        def later_splat(x, y, *rest); 'x'; end
+        def later_splat(x, y, z = 0, *rest); 1; end
+        {optional(1, 2), required(1, 2), bounded(1, 2), later_splat(1, 2)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil, Facet::Compiler::SemanticOptions.new(["preview_overload_order"]))
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Int32, Int32, Int32)")
   end
 
   it "diagnoses only when every closed member of a union lacks the method" do

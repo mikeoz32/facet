@@ -630,9 +630,26 @@ module Facet
           end
         end
         compatible = candidates if compatible.empty?
+        if @semantic_options.preview_overload_order? && compatible.all? { |candidate| candidate.parameter_types.all? { |type_id| type_id == @types.unknown } }
+          best = compatible.max_of? { |candidate| preview_positional_score(candidate) } || 0
+          return compatible.select { |candidate| preview_positional_score(candidate) == best }
+        end
         scored = compatible.map { |candidate| {candidate, overload_score(candidate, arguments)} }
         best = scored.max_of? { |entry| entry[1] } || 0
         scored.select { |_, score| score == best }.map { |entry| entry[0] }
+      end
+
+      # Crystal's preview order treats required positional parameters as more
+      # specific than optional parameters, and optional parameters as more
+      # specific than a splat. With the same required prefix, a smaller finite
+      # maximum wins; between splats, the later splat position wins.
+      private def preview_positional_score(definition : SemanticDefinition) : Int32
+        score = definition.min_arity * 10_000
+        if max = definition.max_arity
+          score + 5_000 - max
+        else
+          score + definition.parameter_types.size
+        end
       end
 
       private def overload_score(definition : SemanticDefinition, arguments : Array(TypeId)) : Int32
@@ -702,27 +719,27 @@ module Facet
 
       private def number_type(text : String) : TypeId
         normalized = text.downcase
-        name = if normalized.ends_with?("_i8")
+        name = if normalized.ends_with?("i8")
                  "Int8"
-               elsif normalized.ends_with?("_i16")
+               elsif normalized.ends_with?("i16")
                  "Int16"
-               elsif normalized.ends_with?("_i64")
+               elsif normalized.ends_with?("i64")
                  "Int64"
-               elsif normalized.ends_with?("_i128")
+               elsif normalized.ends_with?("i128")
                  "Int128"
-               elsif normalized.ends_with?("_u8")
+               elsif normalized.ends_with?("u8")
                  "UInt8"
-               elsif normalized.ends_with?("_u16")
+               elsif normalized.ends_with?("u16")
                  "UInt16"
-               elsif normalized.ends_with?("_u32")
+               elsif normalized.ends_with?("u32")
                  "UInt32"
-               elsif normalized.ends_with?("_u64")
+               elsif normalized.ends_with?("u64")
                  "UInt64"
-               elsif normalized.ends_with?("_u128")
+               elsif normalized.ends_with?("u128")
                  "UInt128"
-               elsif normalized.ends_with?("_f32")
+               elsif normalized.ends_with?("f32")
                  "Float32"
-               elsif normalized.ends_with?("_f64") || normalized.includes?('.') || normalized.includes?('e')
+               elsif normalized.ends_with?("f64") || normalized.includes?('.') || normalized.includes?('e')
                  "Float64"
                else
                  "Int32"
