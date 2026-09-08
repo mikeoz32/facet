@@ -1,0 +1,112 @@
+diff --git a/spec/spec_helper.cr b/spec/spec_helper.cr
+index b2378cd..fac3701 100644
+--- a/spec/spec_helper.cr
++++ b/spec/spec_helper.cr
+@@ -3,6 +3,7 @@
+ Crystal::Config.path = "#{__DIR__}/../src"
+ 
+ require "spec"
++require "json"
+ 
+ require "compiler/requires"
+ require "./support/syntax"
+@@ -40,6 +41,48 @@ record SemanticResult,
+   program : Program,
+   node : ASTNode
+ 
++private def record_facet_semantic_contract(
++  kind : String,
++  source : String,
++  file : String,
++  line : Int32,
++  inject_primitives : Bool = false,
++  flags : String? = nil,
++  expected_type : String? = nil,
++  actual_type : String? = nil,
++  expected_error : String? = nil,
++  actual_error : Crystal::TypeException? = nil,
++)
++  path = ENV["FACET_SEMANTIC_CAPTURE"]?
++  return unless path
++  File.open(path, "a") do |io|
++    JSON.build(io) do |json|
++      json.object do
++        json.field "kind", kind
++        json.field "source", source
++        json.field "suite", File.basename(file)
++        json.field "file", file
++        json.field "line", line
++        json.field "inject_primitives", inject_primitives
++        json.field "flags", flags
++        json.field "expected_type", expected_type
++        json.field "actual_type", actual_type
++        json.field "expected_error", expected_error
++        json.field "actual_error", actual_error.try(&.deepest_error_message).try(&.to_s)
++        json.field "error_line", actual_error.try(&.line_number)
++        json.field "error_column", actual_error.try(&.column_number)
++        json.field "error_size", actual_error.try(&.size)
++      end
++    end
++    io << '\n'
++  end
++end
++
++private def semantic_contract_type(node : Crystal::ASTNode) : String
++  target = node.is_a?(Crystal::Expressions) ? node.last : node
++  target.type.to_s
++end
++
+ def assert_type(str, *, inject_primitives = false, flags = nil, file = __FILE__, line = __LINE__, &)
+   result = semantic(str, flags: flags, inject_primitives: inject_primitives)
+   program = result.program
+@@ -49,5 +92,15 @@ def assert_type(str, *, inject_primitives = false, flags = nil, file = __FILE__,
+     node = node.last
+   end
+   node.type.should eq(expected_type), file: file, line: line
++  record_facet_semantic_contract(
++    "type",
++    str,
++    file,
++    line,
++    inject_primitives,
++    flags,
++    expected_type: expected_type.to_s,
++    actual_type: node.type.to_s
++  )
+   result
+ end
+@@ -159,11 +212,32 @@ def assert_expand_named(from : String, to, *, generic = nil, flags = nil, filena
+ end
+ 
+ def assert_error(str, message = nil, *, inject_primitives = false, flags = nil, file = __FILE__, line = __LINE__)
+-  expect_raises TypeException, message, file, line do
++  error = expect_raises TypeException, message, file, line do
+     semantic str, inject_primitives: inject_primitives, flags: flags
+   end
++  record_facet_semantic_contract(
++    "error",
++    str,
++    file,
++    line,
++    inject_primitives,
++    flags,
++    expected_error: message,
++    actual_error: error
++  )
++  error
+ end
+ 
+ def assert_no_errors(*args, **opts)
+-  semantic(*args, **opts)
++  result = semantic(*args, **opts)
++  if source = args[0]?.as?(String)
++    record_facet_semantic_contract(
++      "no_errors",
++      source,
++      __FILE__,
++      __LINE__,
++      actual_type: semantic_contract_type(result.node)
++    )
++  end
++  result
+ end

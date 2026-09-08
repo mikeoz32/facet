@@ -1,0 +1,630 @@
+module Facet
+  module Compiler
+    private class BodyAnalyzer
+      getter body_executions : Int32 = 0
+
+      def initialize(
+        @types : TypeStore,
+        @trees : Hash(FileId, SyntaxTree),
+        @revisions : Hash(FileId, UInt64),
+        @definitions : Hash(DefId, SemanticDefinition),
+        @methods_by_owner : Hash(String, Array(DefId)),
+        @type_definitions : Hash(String, DefId),
+        @type_parameters : Hash(String, Array(String)),
+        @macro_names : Set(String),
+        @superclasses : Hash(String, String),
+        @includes : Hash(String, Array(String)),
+        @node_types : Hash(NodeRef, TypeId),
+        @bindings : Hash(NodeRef, DefId),
+        @diagnostics : Array(SemanticDiagnostic),
+        @reasons : Set(SemanticCompletenessReason),
+        @emit_diagnostics : Bool,
+      )
+        @inference_stack = Set(DefId).new
+      end
+
+      def analyze_file(file_id : FileId) : Nil
+        tree = @trees[file_id]
+        analyze_top_level(tree.root, file_id, "", {"self" => @types.named("Object")})
+        @definitions.each_value do |definition|
+          next unless definition.kind == SemanticDefinitionKind::Method
+          node_ref = definition.node
+          next unless node_ref && node_ref.file_id == file_id
+          analyze_method(definition, record: true)
+        end
+      end
+
+      def infer_method_returns : Hash(DefId, TypeId)
+        values = {} of DefId => TypeId
+        @definitions.each do |id, definition|
+          next unless definition.kind == SemanticDefinitionKind::Method
+          next unless definition.return_type == @types.unknown
+          values[id] = analyze_method(definition, record: false)
+        end
+        values
+      end
+
+      private def analyze_method(definition : SemanticDefinition, record : Bool) : TypeId
+        node_ref = definition.node
+        return @types.unknown unless node_ref
+        tree = @trees[node_ref.file_id]?
+        return @types.unknown unless tree
+        node = tree.node(node_ref.node_id)
+        body = node.body
+        return @types.named("Nil") unless body
+        env = {} of String => TypeId
+        node.parameters.reject { |parameter| parameter.kind == NodeKind::BlockParam }.each_with_index do |parameter, index|
+          name = parameter.name
+          next unless name
+          env[name.lchop('@')] = definition.parameter_types[index]? || @types.unknown
+          env[name] = definition.parameter_types[index]? || @types.unknown if name.starts_with?('@')
+        end
+        if owner = definition.owner
+          instance = @types.named(owner)
+          env["self"] = definition.class_method ? @types.metaclass(instance) : instance
+        end
+        @body_executions += 1
+        infer(body, node_ref.file_id, definition.owner || "", env, record)
+      end
+
+      private def analyze_top_level(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId)) : Nil
+        case node.kind
+        when NodeKind::Def, NodeKind::MacroDef
+          return
+        when NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum, NodeKind::Lib
+          type_scope = qualify(scope, node.name || "")
+          type_env = env.dup
+          type_env["self"] = @types.named(type_scope)
+          node.body.try do |body|
+            body.children.each do |child|
+              next if child.kind == NodeKind::Def
+              next if {"include", "extend"}.includes?(child.call_name)
+              analyze_top_level(child, file_id, type_scope, type_env)
+            end
+          end
+          return
+        when NodeKind::Expressions, NodeKind::File
+          node.children.each { |child| analyze_top_level(child, file_id, scope, env) }
+        else
+          infer(node, file_id, scope, env, true)
+        end
+      end
+
+      private def infer(
+        node : SyntaxNode,
+        file_id : FileId,
+        scope : String,
+        env : Hash(String, TypeId),
+        record : Bool,
+      ) : TypeId
+        type_id = case node.kind
+                  when NodeKind::LiteralString then @types.named("String")
+                  when NodeKind::LiteralChar   then @types.named("Char")
+                  when NodeKind::LiteralRegex  then @types.named("Regex")
+                  when NodeKind::LiteralSymbol then @types.named("Symbol")
+                  when NodeKind::LiteralBool   then @types.named("Bool")
+                  when NodeKind::LiteralNil    then @types.named("Nil")
+                  when NodeKind::LiteralNumber then number_type(node.text)
+                  when NodeKind::TypeApply
+                    infer_type_apply(node, file_id, scope, env, record)
+                  when NodeKind::Ident, NodeKind::Const, NodeKind::InstanceVar, NodeKind::ClassVar, NodeKind::Global, NodeKind::Path
+                    infer_name(node, file_id, scope, env, record)
+                  when NodeKind::Assign
+                    infer_assign(node, file_id, scope, env, record)
+                  when NodeKind::VarDecl
+                    infer_var_decl(node, file_id, scope, env, record)
+                  when NodeKind::Expressions, NodeKind::File, NodeKind::Begin, NodeKind::Ensure
+                    infer_sequence(node.children, file_id, scope, env, record)
+                  when NodeKind::Array
+                    values = semantic_children(node).map { |child| infer(child, file_id, scope, env, record) }
+                    @types.named("Array", [values.empty? ? @types.unknown : @types.union(values)])
+                  when NodeKind::Hash
+                    infer_hash(node, file_id, scope, env, record)
+                  when NodeKind::Tuple
+                    @types.tuple(semantic_children(node).map { |child| infer(child, file_id, scope, env, record) })
+                  when NodeKind::NamedTuple
+                    @types.named_tuple(semantic_children(node).map { |child| infer(child.value || child, file_id, scope, env, record) })
+                  when NodeKind::Range
+                    elements = semantic_children(node).map { |child| infer(child, file_id, scope, env, record) }
+                    @types.named("Range", [elements.empty? ? @types.unknown : @types.union(elements)])
+                  when NodeKind::If, NodeKind::Unless, NodeKind::Ternary
+                    infer_conditional(node, file_id, scope, env, record)
+                  when NodeKind::Call, NodeKind::CallWithBlock
+                    infer_call(node, file_id, scope, env, record)
+                  when NodeKind::Binary
+                    infer_binary(node, file_id, scope, env, record)
+                  when NodeKind::Unary
+                    infer_unary(node, file_id, scope, env, record)
+                  when NodeKind::Return, NodeKind::Next, NodeKind::Break
+                    child = semantic_children(node).first?
+                    child ? infer(child, file_id, scope, env, record) : @types.named("Nil")
+                  when NodeKind::NamedArg
+                    node.value.try { |value| infer(value, file_id, scope, env, record) } || @types.unknown
+                  when NodeKind::Index
+                    infer_index(node, file_id, scope, env, record)
+                  else
+                    children = semantic_children(node)
+                    children.empty? ? @types.unknown : infer_sequence(children, file_id, scope, env, record)
+                  end
+        remember(node, file_id, type_id) if record
+        type_id
+      end
+
+      private def infer_name(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        name = node.symbol_name || node.text
+        return env[name] if env.has_key?(name)
+        if name == "self"
+          return env["self"]? || @types.unknown
+        end
+        if constant_name?(name)
+          resolved = resolve_type_name(name, scope)
+          if definition_id = @type_definitions[resolved]?
+            bind(node, file_id, definition_id) if record
+            return @types.metaclass(@definitions[definition_id].type_id)
+          end
+        end
+        @types.unknown
+      end
+
+      private def infer_type_apply(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        name = node.symbol_name || node.child(0).try(&.symbol_name)
+        return @types.unknown unless name
+        resolved = resolve_type_name(name, scope)
+        return @types.unknown unless @type_definitions.has_key?(resolved)
+        arguments = node.child(1).try(&.children).try do |nodes|
+          nodes.map do |argument|
+            inferred = infer(argument, file_id, scope, env, record)
+            type = @types[inferred]
+            type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
+          end
+        end || [] of TypeId
+        @types.metaclass(@types.named(resolved, arguments))
+      end
+
+      private def infer_assign(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        value = node.value
+        type_id = value ? infer(value, file_id, scope, env, record) : @types.unknown
+        if target = node.target
+          assign_target(target, type_id, env)
+          remember(target, file_id, type_id) if record
+        end
+        type_id
+      end
+
+      private def infer_var_decl(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        type_id = node.declared_type.try { |type| resolve_type_text(type.text, scope) }
+        type_id ||= node.value.try { |value| infer(value, file_id, scope, env, record) }
+        type_id ||= @types.unknown
+        if target = node.target
+          assign_target(target, type_id, env)
+          remember(target, file_id, type_id) if record
+        end
+        type_id
+      end
+
+      private def infer_sequence(nodes : Array(SyntaxNode), file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        result = @types.named("Nil")
+        nodes.each { |child| result = infer(child, file_id, scope, env, record) }
+        result
+      end
+
+      private def infer_hash(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        keys = [] of TypeId
+        values = [] of TypeId
+        semantic_children(node).each do |entry|
+          parts = semantic_children(entry)
+          if parts.size >= 2
+            keys << infer(parts[0], file_id, scope, env, record)
+            values << infer(parts[1], file_id, scope, env, record)
+          end
+        end
+        @types.named("Hash", [keys.empty? ? @types.unknown : @types.union(keys), values.empty? ? @types.unknown : @types.union(values)])
+      end
+
+      private def infer_conditional(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        children = semantic_children(node)
+        condition = node.condition || children.first?
+        infer(condition, file_id, scope, env, record) if condition
+        branch_env = env.dup
+        then_node = node.body || children[1]?
+        else_node = children[2]?
+        then_type = then_node ? infer(then_node, file_id, scope, branch_env, record) : @types.named("Nil")
+        else_type = else_node ? infer(else_node, file_id, scope, env.dup, record) : @types.named("Nil")
+        @types.union([then_type, else_type])
+      end
+
+      private def infer_call(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        if receiver = node.receiver
+          receiver_type = infer(receiver, file_id, scope, env, record)
+          return resolve_call(node, receiver_type, file_id, scope, env, record)
+        end
+        name = node.call_name
+        return @types.unknown unless name
+        node.arguments.each { |argument| infer(argument.value || argument, file_id, scope, env, record) }
+        return @types.unknown if @macro_names.includes?(name)
+        if name == "typeof"
+          return @types.metaclass(node.arguments.first?.try { |argument| infer(argument, file_id, scope, env, record) } || @types.unknown)
+        end
+        self_type = env["self"]?
+        return @types.unknown unless self_type
+        resolve_call(node, self_type, file_id, scope, env, record)
+      end
+
+      private def infer_binary(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        if receiver = node.receiver
+          receiver_type = infer(receiver, file_id, scope, env, record)
+          return resolve_call(node, receiver_type, file_id, scope, env, record)
+        end
+        children = semantic_children(node)
+        left = children.first?.try { |child| infer(child, file_id, scope, env, record) } || @types.unknown
+        children[1]?.try { |child| infer(child, file_id, scope, env, record) }
+        text = node.text
+        return @types.named("Bool") if text.includes?("==") || text.includes?("!=") || text.includes?('<') || text.includes?('>') || text.includes?("&&") || text.includes?("||")
+        left
+      end
+
+      private def infer_unary(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        child = semantic_children(node).first?
+        value = child ? infer(child, file_id, scope, env, record) : @types.unknown
+        node.text.lstrip.starts_with?('!') ? @types.named("Bool") : value
+      end
+
+      private def infer_index(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        receiver = semantic_children(node).first?
+        return @types.unknown unless receiver
+        receiver_type = infer(receiver, file_id, scope, env, record)
+        type = @types[receiver_type]
+        return type.arguments.first if type.kind == SemanticTypeKind::Nominal && {"Array", "Slice", "StaticArray"}.includes?(type.name) && type.arguments.first?
+        return type.arguments[1] if type.kind == SemanticTypeKind::Nominal && type.name == "Hash" && type.arguments.size > 1
+        @types.unknown
+      end
+
+      private def resolve_call(
+        node : SyntaxNode,
+        receiver_type : TypeId,
+        file_id : FileId,
+        scope : String,
+        env : Hash(String, TypeId),
+        record : Bool,
+      ) : TypeId
+        name = node.call_name
+        return @types.unknown unless name
+        arguments = node.arguments.map { |argument| infer(argument.value || argument, file_id, scope, env, record) }
+
+        if name == "as" || name == "as?"
+          target = node.arguments.first?
+          return target ? resolve_type_text(target.text, scope) : @types.unknown
+        elsif name == "nil?" || name == "is_a?" || name == "responds_to?"
+          return @types.named("Bool")
+        elsif name == "not_nil!"
+          return without_nil(receiver_type)
+        end
+
+        receiver_members = receiver_members(receiver_type)
+        return unknown_call unless receiver_members
+        if {"new", "allocate"}.includes?(name) && receiver_members.all? { |member| member[1] }
+          instances = receiver_members.map do |member|
+            name == "new" ? infer_constructed_type(member[0], arguments) : member[0]
+          end
+          return @types.union(instances)
+        end
+
+        resolved = [] of SemanticDefinition
+        resolved_returns = [] of TypeId
+        missing = [] of String
+        receiver_members.each do |instance_type, class_method|
+          type = @types[instance_type]
+          type_name = type.name
+          unless type_name && @type_definitions.has_key?(type_name)
+            return unknown_call
+          end
+          candidates = lookup_methods(type_name, name, class_method)
+          if candidates.empty?
+            missing << type_name
+          else
+            applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
+            selected = applicable.empty? ? candidates : applicable
+            resolved.concat(selected)
+            selected.each do |candidate|
+              return_type = inferred_return_type(candidate)
+              resolved_returns << substitute_type(return_type, instance_type, type_name)
+            end
+          end
+        end
+
+        if missing.size == receiver_members.size
+          unless receiver_members.any? { |member| method_missing?(member[0], member[1]) }
+            emit_undefined_method(node, file_id, receiver_type, name) if record && @emit_diagnostics
+          end
+          return @types.error
+        end
+        return @types.unknown if resolved.empty? || missing.any?
+
+        if record
+          callee = node.callee
+          bind(callee, file_id, resolved.first.id) if callee
+        end
+        @types.union(resolved_returns)
+      end
+
+      private def substitute_type(type_id : TypeId, instance_type : TypeId, owner : String) : TypeId
+        type = @types[type_id]
+        instance = @types[instance_type]
+        if type.kind == SemanticTypeKind::TypeParameter
+          parameters = @type_parameters[owner]? || [] of String
+          if index = parameters.index(type.name || "")
+            return instance.arguments[index]? || @types.unknown
+          end
+          return @types.unknown
+        end
+        return type_id if type.arguments.empty?
+        arguments = type.arguments.map { |argument| substitute_type(argument, instance_type, owner) }
+        case type.kind
+        when SemanticTypeKind::Nominal    then @types.named(type.name || "Unknown", arguments)
+        when SemanticTypeKind::Metaclass  then @types.metaclass(arguments.first)
+        when SemanticTypeKind::Union      then @types.union(arguments)
+        when SemanticTypeKind::Tuple      then @types.tuple(arguments)
+        when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments)
+        when SemanticTypeKind::Proc       then @types.proc_type(arguments)
+        else                                   type_id
+        end
+      end
+
+      private def infer_constructed_type(instance_type : TypeId, arguments : Array(TypeId)) : TypeId
+        instance = @types[instance_type]
+        owner = instance.name
+        return instance_type unless owner
+        parameters = @type_parameters[owner]? || [] of String
+        return instance_type if parameters.empty? || !instance.arguments.empty?
+        bindings = {} of String => TypeId
+        initializers = lookup_methods(owner, "initialize", false).select do |candidate|
+          arity_matches?(candidate, arguments.size)
+        end
+        initializers.each do |initializer|
+          initializer.parameter_types.each_with_index do |parameter_type, index|
+            argument_type = arguments[index]?
+            collect_type_parameter_bindings(parameter_type, argument_type, bindings) if argument_type
+          end
+        end
+        inferred = parameters.map { |parameter| bindings[parameter]? || @types.unknown }
+        @types.named(owner, inferred)
+      end
+
+      private def collect_type_parameter_bindings(
+        parameter_type_id : TypeId,
+        argument_type_id : TypeId,
+        bindings : Hash(String, TypeId),
+      ) : Nil
+        parameter_type = @types[parameter_type_id]
+        if parameter_type.kind == SemanticTypeKind::TypeParameter
+          if name = parameter_type.name
+            bindings[name] = bindings[name]?.try { |existing| @types.union([existing, argument_type_id]) } || argument_type_id
+          end
+          return
+        end
+        argument_type = @types[argument_type_id]
+        return unless parameter_type.kind == argument_type.kind && parameter_type.name == argument_type.name
+        parameter_type.arguments.zip(argument_type.arguments) do |parameter, argument|
+          collect_type_parameter_bindings(parameter, argument, bindings)
+        end
+      end
+
+      private def inferred_return_type(definition : SemanticDefinition) : TypeId
+        return definition.return_type unless definition.return_type == @types.unknown
+        return @types.unknown if definition.generated || @inference_stack.includes?(definition.id)
+        @inference_stack << definition.id
+        inferred = analyze_method(definition, record: false)
+        @inference_stack.delete(definition.id)
+        return @types.unknown if inferred == @types.error
+        if inferred != @types.unknown
+          @definitions[definition.id] = SemanticDefinition.new(
+            definition.id,
+            definition.kind,
+            definition.name,
+            definition.qualified_name,
+            definition.span,
+            definition.type_id,
+            definition.node,
+            definition.owner,
+            definition.class_method,
+            definition.min_arity,
+            definition.max_arity,
+            definition.parameter_types,
+            inferred,
+            definition.generated
+          )
+        end
+        inferred
+      ensure
+        @inference_stack.delete(definition.id)
+      end
+
+      private def lookup_methods(type_name : String, name : String, class_method : Bool) : Array(SemanticDefinition)
+        values = [] of SemanticDefinition
+        visited = Set(String).new
+        queue = [type_name]
+        until queue.empty?
+          current = queue.shift
+          next if visited.includes?(current)
+          visited << current
+          (@methods_by_owner[current]? || [] of DefId).each do |id|
+            method = @definitions[id]
+            values << method if method.name == name && method.class_method == class_method
+          end
+          if superclass = @superclasses[current]?
+            queue << resolve_type_name(superclass, current)
+          end
+          (@includes[current]? || [] of String).each do |included|
+            queue << resolve_type_name(included, current)
+          end
+        end
+        values
+      end
+
+      private def method_missing?(instance_type : TypeId, class_method : Bool) : Bool
+        type_name = @types[instance_type].name
+        return true unless type_name
+        !lookup_methods(type_name, "method_missing", class_method).empty?
+      end
+
+      private def receiver_members(type_id : TypeId) : Array({TypeId, Bool})?
+        type = @types[type_id]
+        case type.kind
+        when SemanticTypeKind::Nominal
+          [{type_id, false}]
+        when SemanticTypeKind::Metaclass
+          instance = type.arguments.first?
+          instance ? [{instance, true}] : nil
+        when SemanticTypeKind::Union
+          members = [] of {TypeId, Bool}
+          type.arguments.each do |member|
+            expanded = receiver_members(member)
+            return nil unless expanded
+            members.concat(expanded)
+          end
+          members
+        else
+          nil
+        end
+      end
+
+      private def unknown_call : TypeId
+        @reasons << SemanticCompletenessReason::UnknownType
+        @types.unknown
+      end
+
+      private def emit_undefined_method(node : SyntaxNode, file_id : FileId, receiver_type : TypeId, name : String) : Nil
+        span = node.callee.try(&.span) || node.span
+        diagnostic = SemanticDiagnostic.new(
+          "facet.undefined_method",
+          file_id,
+          span,
+          "undefined method '#{name}' for #{@types.display(receiver_type)}",
+          confidence: diagnostic_confidence(node, file_id, receiver_type)
+        )
+        key = {diagnostic.code, diagnostic.file_id, diagnostic.span.start, diagnostic.span.finish}
+        unless @diagnostics.any? { |existing| {existing.code, existing.file_id, existing.span.start, existing.span.finish} == key }
+          @diagnostics << diagnostic
+        end
+      end
+
+      private def diagnostic_confidence(
+        node : SyntaxNode,
+        file_id : FileId,
+        receiver_type : TypeId,
+      ) : SemanticDiagnosticConfidence
+        return SemanticDiagnosticConfidence::Provisional unless node.receiver
+        return SemanticDiagnosticConfidence::Provisional if @reasons.includes?(SemanticCompletenessReason::ParseRecovery)
+        return SemanticDiagnosticConfidence::Provisional if @reasons.includes?(SemanticCompletenessReason::MissingRequire)
+        return SemanticDiagnosticConfidence::Provisional if @reasons.includes?(SemanticCompletenessReason::MacroExpansion)
+        members = receiver_members(receiver_type)
+        return SemanticDiagnosticConfidence::Provisional unless members
+        local = members.all? do |instance_type, _|
+          type_name = @types[instance_type].name
+          definition_id = type_name.try { |name| @type_definitions[name]? }
+          definition_id.try { |id| @definitions[id].node.try(&.file_id) } == file_id
+        end
+        local ? SemanticDiagnosticConfidence::Conclusive : SemanticDiagnosticConfidence::Provisional
+      end
+
+      private def arity_matches?(definition : SemanticDefinition, arity : Int32) : Bool
+        return false if arity < definition.min_arity
+        max = definition.max_arity
+        max.nil? || arity <= max
+      end
+
+      private def without_nil(type_id : TypeId) : TypeId
+        type = @types[type_id]
+        return type_id unless type.kind == SemanticTypeKind::Union
+        members = type.arguments.reject { |member| @types[member].kind == SemanticTypeKind::Nominal && @types[member].name == "Nil" }
+        @types.union(members)
+      end
+
+      private def resolve_type_text(text : String, scope : String) : TypeId
+        TypeTextResolver.new(@types, @type_definitions).resolve(text, scope)
+      end
+
+      private def resolve_type_name(name : String, scope : String) : String
+        text = name.strip.lchop("::")
+        return text if name.starts_with?("::") || text.includes?("::")
+        parts = scope.split("::")
+        parts.pop if @type_definitions.has_key?(scope)
+        until parts.empty?
+          candidate = "#{parts.join("::")}::#{text}"
+          return candidate if @type_definitions.has_key?(candidate)
+          parts.pop
+        end
+        text
+      end
+
+      private def assign_target(target : SyntaxNode, type_id : TypeId, env : Hash(String, TypeId)) : Nil
+        if {NodeKind::Tuple, NodeKind::Destructure}.includes?(target.kind)
+          element_types = @types[type_id].arguments
+          semantic_children(target).each_with_index do |child, index|
+            assign_target(child, element_types[index]? || @types.unknown, env)
+          end
+        elsif name = target.symbol_name
+          env[name] = type_id
+          env[name.lchop('@')] = type_id if name.starts_with?('@')
+        end
+      end
+
+      private def number_type(text : String) : TypeId
+        normalized = text.downcase
+        name = if normalized.ends_with?("_i8")
+                 "Int8"
+               elsif normalized.ends_with?("_i16")
+                 "Int16"
+               elsif normalized.ends_with?("_i64")
+                 "Int64"
+               elsif normalized.ends_with?("_i128")
+                 "Int128"
+               elsif normalized.ends_with?("_u8")
+                 "UInt8"
+               elsif normalized.ends_with?("_u16")
+                 "UInt16"
+               elsif normalized.ends_with?("_u32")
+                 "UInt32"
+               elsif normalized.ends_with?("_u64")
+                 "UInt64"
+               elsif normalized.ends_with?("_u128")
+                 "UInt128"
+               elsif normalized.ends_with?("_f32")
+                 "Float32"
+               elsif normalized.ends_with?("_f64") || normalized.includes?('.') || normalized.includes?('e')
+                 "Float64"
+               else
+                 "Int32"
+               end
+        @types.named(name)
+      end
+
+      private def semantic_children(node : SyntaxNode) : Array(SyntaxNode)
+        node.children.reject { |child| child.kind == NodeKind::Nop }
+      end
+
+      private def constant_name?(name : String) : Bool
+        value = name.lchop("::").split("::").first?
+        value.try { |part| part[0]?.try(&.uppercase?) } || false
+      end
+
+      private def remember(node : SyntaxNode, file_id : FileId, type_id : TypeId) : Nil
+        @node_types[NodeRef.new(file_id, node.id, current_revision(file_id))] = type_id
+      end
+
+      private def bind(node : SyntaxNode, file_id : FileId, definition_id : DefId) : Nil
+        @bindings[NodeRef.new(file_id, node.id, current_revision(file_id))] = definition_id
+      end
+
+      private def current_revision(file_id : FileId) : UInt64
+        @revisions[file_id]
+      end
+
+      private def qualify(scope : String, name : String) : String
+        normalized = name.lchop("::")
+        return normalized if scope.empty? || name.starts_with?("::") || normalized.includes?("::")
+        "#{scope}::#{normalized}"
+      end
+    end
+  end
+end

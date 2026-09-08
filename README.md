@@ -1,12 +1,13 @@
 # Facet
 
 Facet is an experimental Crystal language frontend written in Crystal. Version
-0.1.5 includes a standalone lexer, tolerant parser, compact arena-backed AST,
-diagnostics, macro expansion primitives, and an incremental query cache.
+0.2.0 includes a standalone lexer, tolerant parser, compact arena-backed AST,
+diagnostics, macro expansion, an incremental query cache, and the first
+compiler-grade semantic query slice.
 
 Facet is not a drop-in replacement for the Crystal compiler yet. It currently
 targets parser tooling, editor integrations, and the frontend foundation needed
-for future name resolution, type checking, and compilation stages.
+for complete type checking and future compilation stages.
 
 ## Current capabilities
 
@@ -19,6 +20,10 @@ for future name resolution, type checking, and compilation stages.
   lexical environments, control flow, and hygienic macro variables.
 - `SourceManager` and `QueryDb` caching for parse, syntax, index, and expansion
   queries with automatic revision-based invalidation.
+- `SemanticDb` with revision-safe node references, canonical semantic types,
+  require-aware reachable source graphs, declaration/name binding, basic body
+  inference, overload lookup, generic return substitution, and strict/tolerant
+  snapshots. Unknown facts suppress unsafe diagnostics.
 - `SyntaxTree` / `SyntaxNode` named declaration, callee/receiver/argument,
   parameter type/default, body, control-flow condition, traversal, cursor lookup,
   documentation, and UTF-16 position queries for editor and compiler consumers.
@@ -54,9 +59,14 @@ for future name resolution, type checking, and compilation stages.
   as well as semantic AST shape, and removes no unsupported case.
   See [macro parity](MACRO_PARITY.md).
 
-Not implemented yet: complete compiler semantics, name and overload resolution,
-type inference/checking, require graph resolution, lowering, code generation, and
-binary production. APIs may change while those layers are designed.
+The first semantic parity corpus captures 529 contracts from 397 official
+Crystal 1.21 semantic examples. Facet currently supports 29 exactly and keeps
+all 500 remaining contracts in an explicit deferred manifest. See
+[semantic parity](SEMANTIC_PARITY.md).
+
+Not implemented yet: complete compiler semantics and type checking, the full
+Crystal require/macro fixed point, lowering, code generation, and binary
+production. APIs may change while those layers are extended.
 
 ## Installation
 
@@ -141,6 +151,39 @@ queries expose `callee`, `call_name`, `receiver`, positional and named arguments
 they preserve the same roles through parenthesized and bare block calls.
 Parameter queries expose internal/external names, exact name spans, declared
 types, and default values across regular, splat, double-splat, and block params.
+
+## Semantic queries
+
+```crystal
+manager = Facet::Compiler::SourceManager.new
+main = manager.add(%(require "./user"\nUser.new.missing), "/project/main.cr")
+manager.add("class User; end", "/project/user.cr")
+
+queries = Facet::Compiler::QueryDb.new(manager)
+resolver = Facet::Compiler::RegisteredSourceResolver.new(["/project"], nil)
+semantics = Facet::Compiler::SemanticDb.new(queries, resolver)
+snapshot = semantics.analyze([main], Facet::Compiler::SemanticMode::Tolerant)
+
+snapshot.diagnostics_for(main).each do |diagnostic|
+  puts "#{diagnostic.code}: #{diagnostic.message}"
+end
+```
+
+`NodeRef` combines `FileId`, arena `NodeId`, and source revision; a stale handle
+does not resolve through its old snapshot. `TypeStore` interns nominal,
+metaclass, generic, union, tuple, proc, unknown, and error types behind cheap
+`TypeId` handles. Tolerant snapshots retain partial facts for editors, while
+strict snapshots additionally expose whether error-free compilation can
+continue.
+
+`RegisteredSourceResolver` applies relative, rooted, glob, directory, and
+implicit prelude resolution only to sources registered by the host. A snapshot
+indexes the transitive reachable graph rather than treating every workspace
+file as visible. Macro-generated declarations from entry files participate in
+  method lookup; incomplete parsing, requires, macro expansion, and receiver
+  types remain explicit completeness reasons. Semantic diagnostics distinguish
+  conclusive closed-world results from provisional findings that editor clients
+  can retain as shadow telemetry without publishing.
 
 ## Incremental queries
 
@@ -266,10 +309,14 @@ expansion contexts after exact-context deduplication; Facet matches all
 - `ProgramIndex`: indexes macros plus type/member metadata used by type-aware expansion.
 - `MacroExpander` / `Hygiene`: partial compile-time expansion support.
 - `QueryDb`: revisioned parse/syntax/index/expansion queries and footprint invalidation.
+- `RequireGraph` / `RegisteredSourceResolver`: transitive visibility over
+  registered project, dependency, and stdlib sources.
+- `SemanticDb` / `SemanticSnapshot` / `TypeStore`: declarations, binding,
+  inference, method candidates, and coded semantic diagnostics.
 
 ## cr-analyzer integration
 
-[cr-analyzer](https://github.com/mikeoz32/cr-analyzer) uses Facet 0.1.5 for
+[cr-analyzer](https://github.com/mikeoz32/cr-analyzer) uses Facet 0.2.0 for
 its incremental syntax database, diagnostics, cursor queries, symbols, and the
 primary editor semantic index. Crystal::Parser remains a measured fallback
 while macro-generated declarations and the remaining unsupported inference
@@ -295,6 +342,8 @@ crystal run scripts/check_operator_parity.cr
 crystal run scripts/check_type_syntax_parity.cr
 crystal run scripts/check_collection_literal_parity.cr
 crystal run scripts/check_call_syntax_parity.cr
+crystal run scripts/check_upstream_semantic_parity.cr
+crystal spec spec/upstream_semantic_corpus_spec.cr
 ```
 
 The percent-literal matrix adds 1,060 generated cases across every ASCII letter
@@ -401,7 +450,8 @@ Current Crystal 1.21.0 parity baseline:
 | Macro evaluator | 1,042 executed contracts | 1,042/1,042 exact expansions, diagnostics, and output effects |
 | Semantic macros | 133 examples; 147 expansion events | 147/147 exact-text or semantic-AST matches; 0 skipped events |
 | Full semantic macros | 3,288 examples; 2,736 unique expansion contexts | 2,736/2,736 exact-text or semantic-AST-and-literal matches; all 1,077 call and 1,659 inline events covered |
-| Facet native suite | — | 11,790 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Semantic contracts, first slice | 397 examples; 529 type/error contracts | 29 exact supported contracts; all 500 deferred contracts classified by reason |
+| Facet native suite | — | 11,833 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

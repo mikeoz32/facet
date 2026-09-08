@@ -7,8 +7,13 @@ describe Facet::Compiler::QueryDb do
     db = Facet::Compiler::QueryDb.new(mgr)
 
     expanded1 = db.expand(fid)
+    global_index_hits = db.stats.global_index_cache_hits
+    global_index_rebuilds = db.stats.global_index_rebuilds
     expanded2 = db.expand(fid)
     expanded1.source.text.should eq(expanded2.source.text)
+    db.stats.global_index_cache_hits.should eq(global_index_hits)
+    db.stats.global_index_rebuilds.should eq(global_index_rebuilds)
+    db.stats.expand_cache_hits.should eq(1)
   end
 
   it "keys expansion caches by explicit macro context" do

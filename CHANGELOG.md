@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-08
+
+- Added the first compiler-grade `SemanticDb`: require-aware source graphs,
+  revision-safe semantic handles, canonical type interning, declaration and
+  method indexing, basic inference/generic substitution, strict/tolerant
+  snapshots, and confidence-graded coded undefined-method diagnostics.
+- Added a committed Crystal 1.21 semantic corpus with 529 contracts from 397
+  official examples. All contracts are classified; 29 form the initial exact
+  no-regression baseline and 500 remain explicitly deferred.
 
 - Added static and runtime-generated Crystal 1.21 macro specification corpora
   with complete assertion/context inventories and no-regression runners. Facet

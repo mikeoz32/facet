@@ -135,7 +135,6 @@ module Facet
         context : MacroExpansionContext = MacroExpansionContext.new,
       ) : AstFile
         parse_ast = parse(file_id)
-        idx = build_global_index
 
         if cached = @expand_cache[file_id]?
           current_deps = expansion_dependencies(
@@ -150,6 +149,7 @@ module Facet
           end
         end
 
+        idx = build_global_index
         footprint = MacroFootprint.new
         footprint.require_file(file_id)
         expander = MacroExpander.new(idx, context: context)
@@ -157,6 +157,11 @@ module Facet
         footprint = expander.last_footprint || footprint
         required_files = footprint.required_files.to_set
         macro_names = footprint.macro_names.to_set
+        macro_names.each do |name|
+          if providers = @macro_providers[name]?
+            required_files.concat(providers)
+          end
+        end
         type_introspection = footprint.type_introspection?
         deps = expansion_dependencies(file_id, required_files, macro_names, type_introspection)
         version = deps.max? || 0_u64
