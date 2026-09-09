@@ -662,6 +662,69 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Int32, Int32, Int32)")
   end
 
+  it "orders preview overloads by restriction subsumption and named specificity" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def typed_optional(x : Int32 = 0); 1; end
+        def typed_optional(*args); 'x'; end
+        def typed_optional_reversed(*args); 'x'; end
+        def typed_optional_reversed(x : Int32 = 0); 1; end
+
+        def named_optional(*, x : Int32 = 0); 1; end
+        def named_optional(**opts); 'x'; end
+        def named_optional_reversed(**opts); 'x'; end
+        def named_optional_reversed(*, x : Int32 = 0); 1; end
+
+        def named_required(*, n); 1; end
+        def named_required(*, n, **rest); 'x'; end
+        def named_required_reversed(*, n, **rest); 'x'; end
+        def named_required_reversed(*, n); 1; end
+
+        {typed_optional, typed_optional_reversed, named_optional,
+         named_optional_reversed, named_required(n: 0), named_required_reversed(n: 0)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil, Facet::Compiler::SemanticOptions.new(["preview_overload_order"]))
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int32, Int32, Int32, Int32, Int32, Int32)"
+    )
+  end
+
+  it "keeps the first preview overload when strictness dimensions conflict" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def restricted(x : Int32, *args : Number); 1; end
+        def restricted(*args : Int); 'x'; end
+        def restricted_reversed(*args : Int); 1; end
+        def restricted_reversed(x : Int32, *args : Number); 'x'; end
+
+        def mixed(x, *, y = 0); 1; end
+        def mixed(x = 0, *, y); 'x'; end
+        def mixed_reversed(x = 0, *, y); 1; end
+        def mixed_reversed(x, *, y = 0); 'x'; end
+
+        def named(*, x, y = 0); 1; end
+        def named(*, y, x = 0); 'x'; end
+        def named_reversed(*, y, x = 0); 1; end
+        def named_reversed(*, x, y = 0); 'x'; end
+
+        {restricted(1, 2, 3), restricted_reversed(1, 2, 3),
+         mixed(1, y: 2), mixed_reversed(1, y: 2),
+         named(x: 1, y: 2), named_reversed(x: 1, y: 2)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil, Facet::Compiler::SemanticOptions.new(["preview_overload_order"]))
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int32, Int32, Int32, Int32, Int32, Int32)"
+    )
+  end
+
   it "selects overloads by block presence and nominal restrictions" do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => <<-CR,
@@ -678,6 +741,95 @@ describe Facet::Compiler::SemanticDb do
     ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
       "Tuple(Float64, Int32, Float64, Int32)"
+    )
+  end
+
+  it "respects explicit class new methods and initializer instance-variable types" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Factory(T)
+          def self.new
+            1
+          end
+        end
+
+        class Defaults
+          def initialize(@self_value = self, @named_value = 'a')
+          end
+
+          def self_value
+            @self_value
+          end
+
+          def named_value
+            @named_value
+          end
+        end
+
+        class Declared
+          @value : Int32
+
+          def initialize(@value = fallback)
+          end
+
+          def value
+            @value
+          end
+
+          def fallback
+            1
+          end
+        end
+
+        {Factory(Int32).new, Defaults.new.self_value,
+         Defaults.new(named_value: 'b').named_value, Declared.new.value}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int32, Defaults, Char, Int32)"
+    )
+  end
+
+  it "types declarations as nil even when their bodies contain proc values" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class CallbackHolder
+          def self.callback(value)
+          end
+
+          @callback : Proc(String, Nil) = ->callback(String)
+        end
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Nil")
+  end
+
+  it "types Union type expressions as normalized metaclasses" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        struct Union
+          def self.types
+            T
+          end
+        end
+
+        {Union(Int32, String), Union(Int32, Int32), Union(Int32, String).types}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple((Int32 | String).class, Int32.class, Tuple(Int32, String).class)"
     )
   end
 

@@ -38,6 +38,7 @@ module Facet
         @standalone_method_analysis_depth = 0
         @return_type_stack = [] of Array(TypeId)
         @specialized_returns = {} of {DefId, Array(TypeId), TypeId, TypeId} => TypeId
+        @instance_variable_types = {} of {String, String} => TypeId
       end
 
       def analyze_file(file_id : FileId) : Nil
@@ -100,6 +101,7 @@ module Facet
           end
           env[name.lchop('@')] = type_id
           env[name] = type_id if name.starts_with?('@')
+          record_instance_variable_type(definition.owner, name, type_id) if name.starts_with?('@')
         end
         @body_executions += 1
         return_types = [] of TypeId
@@ -114,6 +116,7 @@ module Facet
       private def analyze_top_level(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId)) : Nil
         case node.kind
         when NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun, NodeKind::Alias, NodeKind::TypeDef
+          remember(node, file_id, @types.named("Nil"))
           return
         when NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum, NodeKind::Lib
           type_scope = qualify(scope, node.name || "")
@@ -126,6 +129,7 @@ module Facet
               analyze_top_level(child, file_id, type_scope, type_env)
             end
           end
+          remember(node, file_id, @types.named("Nil"))
           return
         when NodeKind::Expressions, NodeKind::File
           node.children.each { |child| analyze_top_level(child, file_id, scope, env) }
@@ -206,6 +210,23 @@ module Facet
       private def infer_name(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         name = node.symbol_name || node.text
         return env[name] if env.has_key?(name)
+        if node.kind == NodeKind::InstanceVar
+          if type_id = instance_variable_type(scope, name)
+            return type_id
+          end
+        end
+        if name == "T" && scope == "Union"
+          if self_type = env["self"]?
+            self_value = @types[self_type]
+            if self_value.kind == SemanticTypeKind::Metaclass
+              instance = self_value.arguments.first?
+              instance_value = instance.try { |type_id| @types[type_id] }
+              if instance_value.try(&.kind) == SemanticTypeKind::Nominal && instance_value.try(&.name) == "Union"
+                return @types.metaclass(@types.tuple(instance_value.not_nil!.arguments))
+              end
+            end
+          end
+        end
         if name == "self"
           return env["self"]? || @types.unknown
         end
@@ -262,6 +283,12 @@ module Facet
       private def infer_type_apply(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         name = node.symbol_name || node.child(0).try(&.symbol_name)
         return @types.unknown unless name
+        if name == "Union"
+          members = node.child(1).try(&.children).try do |arguments|
+            arguments.map { |argument| infer_type_expression(argument, file_id, scope, env, record) }
+          end || [] of TypeId
+          return @types.metaclass(@types.union(members))
+        end
         if resolve_constant_id(name, scope, env)
           reference = node.child(0) || node
           report_constant_as_type(reference, file_id)
@@ -342,6 +369,7 @@ module Facet
         type_id = value ? infer(value, file_id, scope, env, record) : @types.unknown
         if target = node.target
           assign_target(target, type_id, env)
+          record_instance_variable_target(scope, target, type_id)
           remember(target, file_id, type_id) if record
         end
         type_id
@@ -360,6 +388,7 @@ module Facet
         type_id ||= @types.unknown
         if target = node.target
           assign_target(target, type_id, env)
+          record_instance_variable_target(scope, target, type_id)
           remember(target, file_id, type_id) if record
         end
         type_id
@@ -419,7 +448,12 @@ module Facet
         end
         name = node.call_name
         return @types.unknown unless name
-        if name == "uninitialized"
+        if name == "Union"
+          members = node.arguments.map do |argument|
+            infer_type_expression(argument, file_id, scope, env, record)
+          end
+          return @types.metaclass(@types.union(members))
+        elsif name == "uninitialized"
           if argument = node.arguments.first?
             if reference = constant_type_reference(argument, scope)
               report_constant_as_type(reference, file_id)
@@ -712,9 +746,15 @@ module Facet
 
         receiver_members = receiver_members(receiver_type)
         return unknown_call unless receiver_members
-        if {"new", "allocate"}.includes?(name) && receiver_members.all? { |member| member[1] }
+        if {"new", "allocate"}.includes?(name) && receiver_members.all? { |member| member[1] } &&
+           (name == "allocate" || receiver_members.all? { |member| !declares_class_method?(member[0], "new") })
           instances = receiver_members.map do |member|
             name == "new" ? infer_constructed_type(member[0], arguments) : member[0]
+          end
+          if name == "new"
+            instances.each do |instance_type|
+              infer_initializer_effects(node, instance_type, arguments)
+            end
           end
           return @types.union(instances)
         end
@@ -844,6 +884,30 @@ module Facet
         end
         inferred = parameters.map { |parameter| bindings[parameter]? || @types.unknown }
         @types.named(owner, inferred)
+      end
+
+      private def declares_class_method?(instance_type : TypeId, name : String) : Bool
+        owner = @types[instance_type].name
+        return false unless owner
+        (@methods_by_owner[owner]? || [] of DefId).any? do |id|
+          definition = @definitions[id]
+          definition.name == name && definition.class_method
+        end
+      end
+
+      private def infer_initializer_effects(
+        call : SyntaxNode,
+        instance_type : TypeId,
+        arguments : Array(TypeId),
+      ) : Nil
+        owner = @types[instance_type].name
+        return unless owner
+        candidates = lookup_methods(owner, "initialize", false)
+        return if candidates.empty?
+        applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
+        select_overloads(applicable.empty? ? candidates : applicable, call, arguments, instance_type).each do |definition, aligned|
+          analyze_method(definition, record: false, argument_types: aligned, self_type: instance_type)
+        end
       end
 
       private def infer_free_bindings(
@@ -1070,7 +1134,13 @@ module Facet
           [{type_id, false}]
         when SemanticTypeKind::Metaclass
           instance = type.arguments.first?
-          instance ? [{instance, true}] : nil
+          return nil unless instance
+          instance_value = @types[instance]
+          if instance_value.kind == SemanticTypeKind::Union && @type_definitions.has_key?("Union")
+            [{@types.named("Union", instance_value.arguments), true}]
+          else
+            [{instance, true}]
+          end
         when SemanticTypeKind::Union
           members = [] of {TypeId, Bool}
           type.arguments.each do |member|
@@ -1150,11 +1220,9 @@ module Facet
             end
           end
           compatible = candidates if compatible.empty?
-          if @semantic_options.preview_overload_order? && compatible.all? { |candidate| candidate.parameter_types.all? { |type_id| type_id == @types.unknown } }
-            best = compatible.max_of? { |candidate| preview_positional_score(candidate) } || 0
-            compatible.select { |candidate| preview_positional_score(candidate) == best }.each do |candidate|
-              selected << {candidate, align_call_arguments(candidate, call, variant)}
-            end
+          if @semantic_options.preview_overload_order?
+            candidate = select_preview_overload(compatible, call, receiver_type)
+            selected << {candidate, align_call_arguments(candidate, call, variant)}
             next
           end
           scored = compatible.map do |candidate|
@@ -1178,7 +1246,11 @@ module Facet
       private def collapse_redefinitions(candidates : Array(SemanticDefinition)) : Array(SemanticDefinition)
         seen = Set(String).new
         candidates.reverse_each.compact_map do |candidate|
-          key = "#{candidate.parameter_types.join(',')}:#{candidate.min_arity}:#{candidate.max_arity}:#{candidate.block_type}:#{method_declares_block?(candidate)}:#{method_requires_block?(candidate)}"
+          shape = method_parameters(candidate).map do |parameter|
+            external_name = parameter.kind == NodeKind::Param ? parameter_name(parameter) : nil
+            "#{parameter.kind}:#{external_name}:#{parameter.value ? "optional" : "required"}"
+          end.join(',')
+          key = "#{candidate.parameter_types.join(',')}:#{candidate.min_arity}:#{candidate.max_arity}:#{shape}:#{candidate.block_type}:#{method_declares_block?(candidate)}:#{method_requires_block?(candidate)}"
           next if seen.includes?(key)
           seen << key
           candidate
@@ -1290,16 +1362,163 @@ module Facet
         variants
       end
 
-      # Crystal's preview order treats required positional parameters as more
-      # specific than optional parameters, and optional parameters as more
-      # specific than a splat. With the same required prefix, a smaller finite
-      # maximum wins; between splats, the later splat position wins.
-      private def preview_positional_score(definition : SemanticDefinition) : Int32
-        score = definition.min_arity * 10_000
-        if max = definition.max_arity
-          score + 5_000 - max
+      private def select_preview_overload(
+        candidates : Array(SemanticDefinition),
+        call : SyntaxNode,
+        receiver_type : TypeId,
+      ) : SemanticDefinition
+        winner = candidates.first
+        candidates.skip(1).each do |candidate|
+          if compare_preview_strictness(candidate, winner, call, receiver_type) > 0
+            winner = candidate
+          end
+        end
+        winner
+      end
+
+      # Preview overload order is a partial order. A restriction that subsumes
+      # another wins before parameter-shape specificity is considered. If two
+      # arguments (or positional and named dimensions) disagree, neither
+      # overload is stricter and declaration order is preserved.
+      private def compare_preview_strictness(
+        left : SemanticDefinition,
+        right : SemanticDefinition,
+        call : SyntaxNode,
+        receiver_type : TypeId,
+      ) : Int32
+        left_matches = matched_parameter_indexes(left, call)
+        right_matches = matched_parameter_indexes(right, call)
+        restriction_relation = 0
+        call.arguments.each_index do |index|
+          left_type = matched_parameter_type(left, left_matches[index]?, receiver_type)
+          right_type = matched_parameter_type(right, right_matches[index]?, receiver_type)
+          relation = compare_restrictions(left_type, right_type)
+          return 0 if restriction_relation != 0 && relation != 0 && restriction_relation != relation
+          restriction_relation = relation unless relation == 0
+        end
+        return restriction_relation unless restriction_relation == 0
+
+        shape_relation = 0
+        call.arguments.each_with_index do |argument, index|
+          relation = parameter_shape_rank(left, left_matches[index]?) <=>
+                     parameter_shape_rank(right, right_matches[index]?)
+          return 0 if shape_relation != 0 && relation != 0 && shape_relation != relation
+          shape_relation = relation unless relation == 0
+        end
+        return shape_relation unless shape_relation == 0
+
+        compare_signature_shapes(left, right)
+      end
+
+      private def compare_restrictions(left : TypeId, right : TypeId) : Int32
+        return 0 if left == right
+        return -1 if left == @types.unknown
+        return 1 if right == @types.unknown
+        left_subsumes = type_compatible?(left, right)
+        right_subsumes = type_compatible?(right, left)
+        return 1 if left_subsumes && !right_subsumes
+        return -1 if right_subsumes && !left_subsumes
+        0
+      end
+
+      private def matched_parameter_type(
+        definition : SemanticDefinition,
+        parameter_index : Int32?,
+        receiver_type : TypeId,
+      ) : TypeId
+        return @types.unknown unless parameter_index
+        type_id = definition.parameter_types[parameter_index]? || @types.unknown
+        effective_parameter_type(type_id, receiver_type)
+      end
+
+      private def matched_parameter_indexes(
+        definition : SemanticDefinition,
+        call : SyntaxNode,
+      ) : Array(Int32?)
+        parameters = method_parameters(definition)
+        splat_index = parameters.index(&.kind.==(NodeKind::Splat))
+        positional_limit = splat_index || parameters.index do |parameter|
+          {NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(parameter.kind)
+        end || parameters.size
+        positional_index = 0
+        call.arguments.map do |argument|
+          if argument.kind == NodeKind::NamedArg
+            name = argument.name
+            parameters.index do |parameter|
+              parameter.kind == NodeKind::Param && parameter_name(parameter) == name
+            end || parameters.index(&.kind.==(NodeKind::DoubleSplat))
+          elsif positional_index < positional_limit
+            index = positional_index
+            positional_index += 1
+            index
+          elsif splat_index && parameters[splat_index].name
+            splat_index
+          else
+            nil
+          end
+        end
+      end
+
+      private def parameter_shape_rank(
+        definition : SemanticDefinition,
+        parameter_index : Int32?,
+      ) : Int32
+        return 0 unless parameter_index
+        parameter = method_parameters(definition)[parameter_index]?
+        return 0 unless parameter
+        case parameter.kind
+        when NodeKind::Param
+          parameter.value ? 2 : 3
+        when NodeKind::Splat, NodeKind::DoubleSplat
+          1
         else
-          score + definition.parameter_types.size
+          0
+        end
+      end
+
+      private def compare_signature_shapes(
+        left : SemanticDefinition,
+        right : SemanticDefinition,
+      ) : Int32
+        positional = compare_signature_axis(positional_signature(left), positional_signature(right))
+        named = compare_signature_axis(named_signature(left), named_signature(right))
+        return 0 if positional != 0 && named != 0 && positional != named
+        positional == 0 ? named : positional
+      end
+
+      # The tuple is required count, explicit count, and whether the axis has a
+      # catch-all. Fixed signatures prefer fewer optional parameters; catch-all
+      # signatures prefer more explicit parameters before the catch-all.
+      private def positional_signature(definition : SemanticDefinition) : {Int32, Int32, Bool}
+        parameters = method_parameters(definition)
+        splat_index = parameters.index(&.kind.==(NodeKind::Splat))
+        limit = splat_index || parameters.index(&.kind.==(NodeKind::DoubleSplat)) || parameters.size
+        positional = parameters.first(limit).select(&.kind.==(NodeKind::Param))
+        catch_all = splat_index.try { |index| !parameters[index].name.nil? } || false
+        {positional.count(&.value.nil?), positional.size, catch_all}
+      end
+
+      private def named_signature(definition : SemanticDefinition) : {Int32, Int32, Bool}
+        parameters = method_parameters(definition)
+        splat_index = parameters.index(&.kind.==(NodeKind::Splat))
+        named = splat_index ? parameters.skip(splat_index + 1).select(&.kind.==(NodeKind::Param)) : [] of SyntaxNode
+        {named.count(&.value.nil?), named.size, parameters.any?(&.kind.==(NodeKind::DoubleSplat))}
+      end
+
+      private def compare_signature_axis(
+        left : {Int32, Int32, Bool},
+        right : {Int32, Int32, Bool},
+      ) : Int32
+        required = left[0] <=> right[0]
+        return required unless required == 0
+        if left[2] != right[2]
+          return left[2] ? -1 : 1
+        end
+        return 0 if left[1] == right[1]
+        if left[2]
+          left[1] <=> right[1]
+        else
+          right[1] <=> left[1]
         end
       end
 
@@ -1357,6 +1576,8 @@ module Facet
                     when "Int8", "Int16", "Int32", "Int64", "Int128"         then {"Int", "Signed", "Number", "Value", "Object"}
                     when "UInt8", "UInt16", "UInt32", "UInt64", "UInt128"    then {"Int", "Unsigned", "Number", "Value", "Object"}
                     when "Float32", "Float64"                                then {"Float", "Number", "Value", "Object"}
+                    when "Int", "Signed", "Unsigned", "Float"                then {"Number", "Value", "Object"}
+                    when "Number"                                            then {"Value", "Object"}
                     when "Bool", "Char", "Symbol", "Nil"                     then {"Value", "Object"}
                     when "String", "Regex", "Array", "Hash", "Proc", "Range" then {"Reference", "Object"}
                     else                                                          nil
@@ -1646,6 +1867,35 @@ module Facet
         elsif name = target.symbol_name
           env[name] = type_id
           env[name.lchop('@')] = type_id if name.starts_with?('@')
+        end
+      end
+
+      private def record_instance_variable_target(scope : String, target : SyntaxNode, type_id : TypeId) : Nil
+        return unless target.kind == NodeKind::InstanceVar
+        name = target.symbol_name || return
+        record_instance_variable_type(scope, name, type_id)
+      end
+
+      private def record_instance_variable_type(owner : String?, name : String, type_id : TypeId) : Nil
+        return unless owner
+        return if type_id == @types.unknown || type_id == @types.error
+        key = {owner, name}
+        @instance_variable_types[key] = @instance_variable_types[key]?.try do |current|
+          @types.union([current, type_id])
+        end || type_id
+      end
+
+      private def instance_variable_type(owner : String, name : String) : TypeId?
+        current = owner
+        visited = Set(String).new
+        loop do
+          return nil if visited.includes?(current)
+          visited << current
+          if type_id = @instance_variable_types[{current, name}]?
+            return type_id
+          end
+          superclass = @superclasses[current]? || return nil
+          current = resolve_type_name(superclass, current)
         end
       end
 
