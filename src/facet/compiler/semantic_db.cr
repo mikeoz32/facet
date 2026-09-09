@@ -35,7 +35,8 @@ module Facet
       parameter_types : Array(String?),
       return_type : String?,
       generated : Bool,
-      free_variables : Array(String)
+      free_variables : Array(String),
+      block_type : String?
 
     record IndexedInclude,
       owner : String,
@@ -343,6 +344,9 @@ module Facet
             return_type = declaration.return_type.try do |name|
               resolve_type_text(name, declaration.owner, type_definitions, free_variables)
             end || @types.unknown
+            block_type = declaration.block_type.try do |name|
+              resolve_type_text(name, declaration.owner, type_definitions, free_variables)
+            end || @types.unknown
             id = definition_id("#{file_id}:#{declaration.key}")
             definition = SemanticDefinition.new(
               id,
@@ -359,7 +363,8 @@ module Facet
               parameter_types,
               return_type,
               declaration.generated,
-              declaration.free_variables
+              declaration.free_variables,
+              block_type
             )
             definitions[id] = definition
             methods_by_owner[declaration.owner] << id
@@ -499,6 +504,15 @@ module Facet
         if text.ends_with?('?')
           return @types.union([resolve(text.rchop('?'), scope), @types.named("Nil")])
         end
+        if text.starts_with?("->")
+          return @types.proc_type([resolve(text.lchop("->"), scope)])
+        end
+        if text.starts_with?("**")
+          return resolve(text.byte_slice(2, text.bytesize - 2), scope)
+        end
+        if text.starts_with?('*')
+          return resolve(text.byte_slice(1, text.bytesize - 1), scope)
+        end
         if text.ends_with?(".class")
           return @types.metaclass(resolve(text.rchop(".class"), scope))
         end
@@ -635,7 +649,10 @@ module Facet
         has_splat = parameters.any? { |parameter| {NodeKind::Splat, NodeKind::DoubleSplat}.includes?(parameter.kind) }
         max_arity = has_splat ? nil : parameters.count { |parameter| parameter.kind != NodeKind::BlockParam }
         parameter_types = parameters.reject { |parameter| parameter.kind == NodeKind::BlockParam }.map do |parameter|
-          parameter.declared_type.try(&.text)
+          parameter.declared_type.try { |type| canonical_type_text(type) }
+        end
+        block_type = parameters.find { |parameter| parameter.kind == NodeKind::BlockParam }.try(&.declared_type).try do |type|
+          canonical_type_text(type)
         end
         signature = "#{scope}:#{class_method}:#{name}:#{parameter_types.join(',')}:#{min_arity}:#{max_arity}"
         ordinal = @overload_ordinals[signature]
@@ -650,10 +667,25 @@ module Facet
           min_arity,
           max_arity,
           parameter_types,
-          node.return_type.try(&.text),
+          node.return_type.try { |type| canonical_type_text(type) },
           @generated,
-          node.free_variables.map(&.text)
+          node.free_variables.map(&.text),
+          block_type
         )
+      end
+
+      private def canonical_type_text(node : SyntaxNode) : String
+        children = node.children.reject { |child| child.kind == NodeKind::Nop }
+        if node.kind == NodeKind::Path && children.size == 2 && children.last.symbol_name == "class"
+          return "(#{canonical_type_text(children.first)}).class"
+        end
+        if node.kind == NodeKind::Binary && node.text.includes?('|')
+          return children.map { |child| canonical_type_text(child) }.join(" | ")
+        end
+        if node.kind == NodeKind::Binary && node.text.includes?('?') && children.size == 1
+          return "#{canonical_type_text(children.first)}?"
+        end
+        node.text
       end
 
       private def definition_kind(kind : NodeKind) : SemanticDefinitionKind?

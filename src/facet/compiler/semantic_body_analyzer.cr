@@ -30,7 +30,8 @@ module Facet
         @emit_diagnostics : Bool,
       )
         @inference_stack = Set(DefId).new
-        @specialized_returns = {} of {DefId, Array(TypeId), TypeId} => TypeId
+        @block_inference_stack = Set({FileId, NodeId}).new
+        @specialized_returns = {} of {DefId, Array(TypeId), TypeId, TypeId} => TypeId
       end
 
       def analyze_file(file_id : FileId) : Nil
@@ -150,7 +151,11 @@ module Facet
                   when NodeKind::Tuple
                     @types.tuple(semantic_children(node).map { |child| infer(child, file_id, scope, env, record) })
                   when NodeKind::NamedTuple
-                    @types.named_tuple(semantic_children(node).map { |child| infer(child.value || child, file_id, scope, env, record) })
+                    entries = semantic_children(node)
+                    @types.named_tuple(
+                      entries.map { |child| infer(child.value || child, file_id, scope, env, record) },
+                      entries.map { |child| child.name || "" }
+                    )
                   when NodeKind::Range
                     elements = semantic_children(node).map { |child| infer(child, file_id, scope, env, record) }
                     @types.named("Range", [elements.empty? ? @types.unknown : @types.union(elements)])
@@ -382,6 +387,7 @@ module Facet
         name = explicit_name || node.call_name
         return @types.unknown unless name
         arguments = node.arguments.map { |argument| infer(argument.value || argument, file_id, scope, env, record) }
+        block_return = nil.as(TypeId?)
 
         if name == "as" || name == "as?"
           target = node.arguments.first?
@@ -416,9 +422,12 @@ module Facet
           else
             applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
             selected = select_overloads(applicable.empty? ? candidates : applicable, arguments)
+            if block_return.nil? && selected.any? { |candidate| candidate.block_type != @types.unknown && !candidate.free_variables.empty? }
+              block_return = infer_call_block_return(node, file_id, scope, env, record)
+            end
             resolved.concat(selected)
             selected.each do |candidate|
-              return_type = inferred_return_type(candidate, arguments, instance_type)
+              return_type = inferred_return_type(candidate, arguments, instance_type, block_return)
               resolved_returns << substitute_type(return_type, instance_type, type_name)
             end
           end
@@ -439,6 +448,24 @@ module Facet
         @types.union(resolved_returns)
       end
 
+      private def infer_call_block_return(
+        node : SyntaxNode,
+        file_id : FileId,
+        scope : String,
+        env : Hash(String, TypeId),
+        record : Bool,
+      ) : TypeId
+        body = node.body
+        body ||= node.child(1).try(&.body) if node.kind == NodeKind::Binary
+        return @types.unknown unless body
+        key = {file_id, node.id}
+        return @types.unknown if @block_inference_stack.includes?(key)
+        @block_inference_stack << key
+        infer(body, file_id, scope, env.dup, record)
+      ensure
+        @block_inference_stack.delete(key) if key
+      end
+
       private def substitute_type(type_id : TypeId, instance_type : TypeId, owner : String) : TypeId
         type = @types[type_id]
         instance = @types[instance_type]
@@ -456,7 +483,7 @@ module Facet
         when SemanticTypeKind::Metaclass  then @types.metaclass(arguments.first)
         when SemanticTypeKind::Union      then @types.union(arguments)
         when SemanticTypeKind::Tuple      then @types.tuple(arguments)
-        when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments)
+        when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments, type.name.try(&.split('\0')) || [] of String)
         when SemanticTypeKind::Proc       then @types.proc_type(arguments)
         else                                   type_id
         end
@@ -485,6 +512,7 @@ module Facet
       private def infer_free_bindings(
         definition : SemanticDefinition,
         arguments : Array(TypeId),
+        block_return : TypeId?,
       ) : Hash(String, TypeId)
         names = definition.free_variables.to_set
         return {} of String => TypeId if names.empty?
@@ -522,6 +550,14 @@ module Facet
             collect_free_type_bindings(parameter_type, argument_type, names, bindings)
           end
         end
+        if block_return && block_return != @types.unknown && definition.block_type != @types.unknown
+          collect_free_type_bindings(
+            definition.block_type,
+            @types.proc_type([block_return]),
+            names,
+            bindings
+          )
+        end
         bindings
       end
 
@@ -538,9 +574,16 @@ module Facet
           return
         end
 
-        argument = @types[argument_id]
+        actual_id = argument_id
+        argument = @types[actual_id]
+        if parameter.kind == SemanticTypeKind::Nominal && argument.kind == SemanticTypeKind::Nominal && parameter.name != argument.name
+          if ancestor = matching_ancestor_type(actual_id, parameter.name || "")
+            actual_id = ancestor
+            argument = @types[actual_id]
+          end
+        end
         if parameter.kind == SemanticTypeKind::Union
-          argument_members = argument.kind == SemanticTypeKind::Union ? argument.arguments : [argument_id]
+          argument_members = argument.kind == SemanticTypeKind::Union ? argument.arguments : [actual_id]
           free_members = parameter.arguments.select { |member| contains_free_type?(member, names) }
           concrete_members = parameter.arguments.reject { |member| contains_free_type?(member, names) }
           argument_members.each do |member|
@@ -574,7 +617,7 @@ module Facet
         when SemanticTypeKind::Metaclass  then @types.metaclass(arguments.first)
         when SemanticTypeKind::Union      then @types.union(arguments)
         when SemanticTypeKind::Tuple      then @types.tuple(arguments)
-        when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments)
+        when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments, type.name.try(&.split('\0')) || [] of String)
         when SemanticTypeKind::Proc       then @types.proc_type(arguments)
         else                                   type_id
         end
@@ -603,15 +646,16 @@ module Facet
         definition : SemanticDefinition,
         arguments : Array(TypeId),
         self_type : TypeId,
+        block_return : TypeId? = nil,
       ) : TypeId
-        free_bindings = infer_free_bindings(definition, arguments)
+        free_bindings = infer_free_bindings(definition, arguments, block_return)
         unless definition.return_type == @types.unknown
           return substitute_free_type(definition.return_type, free_bindings)
         end
         return @types.unknown if definition.generated || @inference_stack.includes?(definition.id)
         parameter_specific = !definition.parameter_types.empty?
         receiver_specific = definition.owner.try { |owner| self_type != @types.named(owner) } || false
-        cache_key = {definition.id, arguments, self_type}
+        cache_key = {definition.id, arguments, self_type, block_return || @types.unknown}
         if parameter_specific || receiver_specific
           if cached = @specialized_returns[cache_key]?
             return cached
@@ -645,7 +689,8 @@ module Facet
             definition.parameter_types,
             inferred,
             definition.generated,
-            definition.free_variables
+            definition.free_variables,
+            definition.block_type
           )
         end
         inferred
@@ -798,15 +843,36 @@ module Facet
         return true if actual_id == @types.unknown || expected_id == @types.unknown
         return true if actual_id == expected_id
         expected = @types[expected_id]
+        return true if expected.kind == SemanticTypeKind::TypeParameter
         return expected.arguments.any? { |member| type_compatible?(actual_id, member) } if expected.kind == SemanticTypeKind::Union
         actual = @types[actual_id]
         return false unless actual.kind == SemanticTypeKind::Nominal && expected.kind == SemanticTypeKind::Nominal
-        current = actual.name
-        while name = current
-          return true if name == expected.name
-          current = @superclasses[name]?.try { |superclass| resolve_type_name(superclass, name) }
+        !matching_ancestor_type(actual_id, expected.name || "").nil?
+      end
+
+      private def matching_ancestor_type(actual_id : TypeId, expected_name : String) : TypeId?
+        queue = [{actual_id, 0}]
+        visited = Set(TypeId).new
+        until queue.empty?
+          current_id, depth = queue.shift
+          next if visited.includes?(current_id)
+          visited << current_id
+          current = @types[current_id]
+          owner = current.name
+          next unless current.kind == SemanticTypeKind::Nominal && owner
+          return current_id if owner == expected_name
+          next if depth >= 64 || visited.size >= 512
+
+          ancestors = [] of String
+          ancestors << @superclasses[owner].not_nil! if @superclasses[owner]?
+          ancestors.concat(@includes[owner]? || [] of String)
+          parameters = (@type_parameters[owner]? || [] of String).to_set
+          ancestors.each do |source|
+            resolved = TypeTextResolver.new(@types, @type_definitions, parameters).resolve(source, owner)
+            queue << {substitute_type(resolved, current_id, owner), depth + 1}
+          end
         end
-        false
+        nil
       end
 
       private def without_nil(type_id : TypeId) : TypeId

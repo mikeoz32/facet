@@ -94,8 +94,9 @@ module Facet
         intern(SemanticType.new(SemanticTypeKind::Tuple, arguments: elements))
       end
 
-      def named_tuple(elements : Array(TypeId)) : TypeId
-        intern(SemanticType.new(SemanticTypeKind::NamedTuple, arguments: elements))
+      def named_tuple(elements : Array(TypeId), names : Array(String) = [] of String) : TypeId
+        labels = names.empty? ? nil : names.join('\0')
+        intern(SemanticType.new(SemanticTypeKind::NamedTuple, labels, elements))
       end
 
       def proc_type(elements : Array(TypeId)) : TypeId
@@ -142,10 +143,17 @@ module Facet
         when SemanticTypeKind::Union
           body = type.arguments.map { |arg| display(arg, true) }.join(" | ")
           nested ? body : "(#{body})"
-        when SemanticTypeKind::Tuple      then "Tuple(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
-        when SemanticTypeKind::NamedTuple then "NamedTuple(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
-        when SemanticTypeKind::Proc       then "Proc(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
-        else                                   "Unknown"
+        when SemanticTypeKind::Tuple then "Tuple(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
+        when SemanticTypeKind::NamedTuple
+          names = type.name.try(&.split('\0')) || [] of String
+          if names.size == type.arguments.size
+            body = names.zip(type.arguments).map { |name, arg| "#{name}: #{display(arg, false)}" }.join(", ")
+            "NamedTuple(#{body})"
+          else
+            "NamedTuple(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
+          end
+        when SemanticTypeKind::Proc then "Proc(#{type.arguments.map { |arg| display(arg, false) }.join(", ")})"
+        else                             "Unknown"
         end
       end
 
@@ -194,6 +202,7 @@ module Facet
       getter return_type : TypeId
       getter generated : Bool
       getter free_variables : Array(String)
+      getter block_type : TypeId
 
       def initialize(
         @id : DefId,
@@ -211,6 +220,7 @@ module Facet
         @return_type : TypeId = 0,
         @generated : Bool = false,
         @free_variables : Array(String) = [] of String,
+        @block_type : TypeId = 0,
       )
       end
     end

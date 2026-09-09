@@ -61,8 +61,8 @@ for complete type checking and future compilation stages.
   See [macro parity](MACRO_PARITY.md).
 
 The first semantic parity corpus captures 529 contracts from 397 official
-Crystal 1.21 semantic examples. Facet currently supports 265 exactly and keeps
-all 264 remaining contracts in an explicit deferred manifest. See
+Crystal 1.21 semantic examples. Facet currently supports 273 exactly and keeps
+all 256 remaining contracts in an explicit deferred manifest. See
 [semantic parity](SEMANTIC_PARITY.md).
 
 Not implemented yet: complete compiler semantics and type checking, the full
@@ -457,8 +457,8 @@ Current Crystal 1.21.0 parity baseline:
 | Macro evaluator | 1,042 executed contracts | 1,042/1,042 exact expansions, diagnostics, and output effects |
 | Semantic macros | 133 examples; 147 expansion events | 147/147 exact-text or semantic-AST matches; 0 skipped events |
 | Full semantic macros | 3,288 examples; 2,736 unique expansion contexts | 2,736/2,736 exact-text or semantic-AST-and-literal matches; all 1,077 call and 1,659 inline events covered |
-| Semantic contracts, first slice | 397 examples; 529 type/error contracts | 265 exact supported contracts; all 264 deferred contracts classified by reason |
-| Facet native suite | — | 12,080 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
+| Semantic contracts, first slice | 397 examples; 529 type/error contracts | 273 exact supported contracts; all 256 deferred contracts classified by reason |
+| Facet native suite | — | 12,089 examples passing; all 4,378 upstream parser inputs committed locally; all 3,437 accepted trees pass both the recursive native contract and semantic projection oracle |
 | Crystal stdlib corpus | 1,625 source files | 1,625 clean; 0 diagnostics; 0 AST integrity errors; 0 crashes |
 
 Raw example counts are not one-to-one coverage measures: Crystal helpers often

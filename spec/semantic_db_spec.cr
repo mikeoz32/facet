@@ -304,6 +304,40 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("(Int32 | String).class")
   end
 
+  it "binds forall variables through blocks, splats, generic includes, and nested unions" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        module Included(T); end
+        class Direct
+          include Included(Int32)
+        end
+        class Generic(T)
+          include Included(T)
+        end
+        def from_block(&block : -> Free) forall Free; yield; Free; end
+        def from_include(x : Included(T)) forall T; T; end
+        def from_splat(**x : **T) forall T; T; end
+        def nested(x : (Nil | T).class) forall T; T; end
+        def remainder(x : T | (Int32 | String)) forall T; T; end
+        {
+          from_block { 1 },
+          from_include(Direct.new),
+          from_include(Generic(Char).new),
+          from_splat(**{a: 1, b: ""}),
+          nested(String?),
+          remainder(1 || "" || 'a'),
+        }
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int32.class, Int32.class, Char.class, NamedTuple(a: Int32, b: String).class, String.class, Char.class)"
+    )
+  end
+
   it "resolves a bare zero-argument call through Object methods" do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => "def answer; 42; end\nanswer\n",
