@@ -429,6 +429,158 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(second.constant("Config::VALUE").not_nil!.type_id).should eq("String")
   end
 
+  it "reports unresolved constants at the method call site" do
+    _, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Foo
+          class Foo
+          end
+          def self.value
+            Foo::Foo
+          end
+        end
+        Foo.value
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    diagnostics = snapshot.diagnostics_for(ids["/workspace/main.cr"])
+    diagnostics.size.should eq(1)
+    diagnostic = diagnostics.first
+    diagnostic.code.should eq("facet.undefined_constant")
+    diagnostic.message.should eq("undefined constant Foo::Foo")
+    position = queries.syntax(ids["/workspace/main.cr"]).position_at(diagnostic.span.start)
+    {position.line + 1, position.character + 1}.should eq({8, 7})
+  end
+
+  it "isolates constant values from top-level locals and diagnoses cycles" do
+    _, isolated, isolated_ids, isolated_queries = semantic_fixture({
+      "/workspace/main.cr" => "local = 1; VALUE = local; VALUE\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    diagnostics = isolated.diagnostics_for(isolated_ids["/workspace/main.cr"])
+    diagnostics.size.should eq(1)
+    diagnostic = diagnostics.first
+    diagnostic.code.should eq("facet.undefined_local")
+    position = isolated_queries.syntax(isolated_ids["/workspace/main.cr"]).position_at(diagnostic.span.start)
+    {position.line + 1, position.character + 1}.should eq({1, 20})
+
+    _, cyclic, cyclic_ids, cyclic_queries = semantic_fixture({
+      "/workspace/main.cr" => "VALUE = VALUE.next\nVALUE\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    diagnostics = cyclic.diagnostics_for(cyclic_ids["/workspace/main.cr"])
+    diagnostics.size.should eq(1)
+    diagnostic = diagnostics.first
+    diagnostic.code.should eq("facet.constant_cycle")
+    position = cyclic_queries.syntax(cyclic_ids["/workspace/main.cr"]).position_at(diagnostic.span.start)
+    {position.line + 1, position.character + 1}.should eq({1, 1})
+  end
+
+  it "reports constants used as declaration and generic types" do
+    _, declaration, declaration_ids, declaration_queries = semantic_fixture({
+      "/workspace/main.cr" => "VALUE = 1\nitem : VALUE\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    diagnostics = declaration.diagnostics_for(declaration_ids["/workspace/main.cr"])
+    diagnostics.size.should eq(1)
+    diagnostic = diagnostics.first
+    diagnostic.code.should eq("facet.constant_as_type")
+    position = declaration_queries.syntax(declaration_ids["/workspace/main.cr"]).position_at(diagnostic.span.start)
+    {position.line + 1, position.character + 1}.should eq({2, 8})
+
+    _, generic, generic_ids, generic_queries = semantic_fixture({
+      "/workspace/main.cr" => "Box = Box(Int32).new\nBox\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    diagnostics = generic.diagnostics_for(generic_ids["/workspace/main.cr"])
+    diagnostics.size.should eq(1)
+    diagnostic = diagnostics.first
+    diagnostic.code.should eq("facet.constant_as_type")
+    position = generic_queries.syntax(generic_ids["/workspace/main.cr"]).position_at(diagnostic.span.start)
+    {position.line + 1, position.character + 1}.should eq({1, 7})
+  end
+
+  it "reports a constant parameter restriction when the method is instantiated" do
+    _, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "VALUE = 1\ndef consume(value : VALUE); end\nconsume(1)\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    diagnostics = snapshot.diagnostics_for(ids["/workspace/main.cr"])
+    diagnostics.size.should eq(1)
+    diagnostic = diagnostics.first
+    diagnostic.code.should eq("facet.constant_as_type")
+    position = queries.syntax(ids["/workspace/main.cr"]).position_at(diagnostic.span.start)
+    {position.line + 1, position.character + 1}.should eq({3, 1})
+  end
+
+  it "narrows truthy assignments and merges conditional branch bindings" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def guarded
+          value = 1 if 1
+          return 2 unless value && value
+          value
+        end
+        a = 1 || nil
+        b = 2 || nil
+        pair = if !a || !b
+                 {1, 2}
+               else
+                 {a, b}
+               end
+        {guarded, pair}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int32, Tuple(Int32, Int32))"
+    )
+  end
+
+  it "narrows is_a? alternatives through ancestors" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Parent; end
+        class Left < Parent
+          def value; 1; end
+        end
+        class Right < Parent
+          def value; 'r'; end
+        end
+        item = Left.new.as(Parent)
+        if item.is_a?(Left) || item.is_a?(Right)
+          item.value
+        else
+          nil
+        end
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("(Char | Int32 | Nil)")
+  end
+
+  it "combines explicit returns with the surviving guard environment" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def guarded
+          value = 1 || 2.0 || 'x'
+          if !value.is_a?(Int32) && !value.is_a?(Float64)
+            return true
+          end
+          value
+        end
+        guarded
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("(Bool | Float64 | Int32)")
+  end
+
   it "resolves a bare zero-argument call through Object methods" do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => "def answer; 42; end\nanswer\n",

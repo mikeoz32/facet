@@ -34,6 +34,9 @@ module Facet
         @block_inference_stack = Set({FileId, NodeId}).new
         @constant_inference_stack = Set(DefId).new
         @constant_types = {} of DefId => TypeId
+        @deferred_diagnostics = [] of {String, String}
+        @standalone_method_analysis_depth = 0
+        @return_type_stack = [] of Array(TypeId)
         @specialized_returns = {} of {DefId, Array(TypeId), TypeId, TypeId} => TypeId
       end
 
@@ -44,7 +47,11 @@ module Facet
           next unless definition.kind == SemanticDefinitionKind::Method
           node_ref = definition.node
           next unless node_ref && node_ref.file_id == file_id
+          diagnostic_count = @deferred_diagnostics.size
+          @standalone_method_analysis_depth += 1
           analyze_method(definition, record: true)
+          @standalone_method_analysis_depth -= 1
+          discard_deferred_diagnostics(diagnostic_count)
         end
       end
 
@@ -95,12 +102,18 @@ module Facet
           env[name] = type_id if name.starts_with?('@')
         end
         @body_executions += 1
-        infer(body, node_ref.file_id, definition.owner || "", env, record)
+        return_types = [] of TypeId
+        @return_type_stack << return_types
+        body_type = infer(body, node_ref.file_id, definition.owner || "", env, record)
+        return_types << body_type unless flow_terminates?(body)
+        @types.union(return_types)
+      ensure
+        @return_type_stack.pop if return_types
       end
 
       private def analyze_top_level(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId)) : Nil
         case node.kind
-        when NodeKind::Def, NodeKind::MacroDef
+        when NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun, NodeKind::Alias, NodeKind::TypeDef
           return
         when NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum, NodeKind::Lib
           type_scope = qualify(scope, node.name || "")
@@ -170,7 +183,12 @@ module Facet
                     infer_binary(node, file_id, scope, env, record)
                   when NodeKind::Unary
                     infer_unary(node, file_id, scope, env, record)
-                  when NodeKind::Return, NodeKind::Next, NodeKind::Break
+                  when NodeKind::Return
+                    child = semantic_children(node).first?
+                    value = child ? infer(child, file_id, scope, env, record) : @types.named("Nil")
+                    @return_type_stack.last?.try &.<< value
+                    value
+                  when NodeKind::Next, NodeKind::Break
                     child = semantic_children(node).first?
                     child ? infer(child, file_id, scope, env, record) : @types.named("Nil")
                   when NodeKind::NamedArg
@@ -205,12 +223,28 @@ module Facet
           if BUILTIN_TYPE_NAMES.includes?(resolved)
             return @types.metaclass(@types.named(resolved))
           end
+          report_semantic_error(
+            node,
+            file_id,
+            "facet.undefined_constant",
+            "undefined constant #{name}"
+          )
+          return @types.error
         end
         if self_type = env["self"]?
           return @types.unknown if @macro_names.includes?(name)
           if callable_without_receiver?(self_type, name)
             return resolve_call(node, self_type, file_id, scope, env, record, name)
           end
+        end
+        if node.kind == NodeKind::Ident && !@constant_inference_stack.empty?
+          emit_semantic_error(
+            node,
+            file_id,
+            "facet.undefined_local",
+            "undefined local variable or method '#{name}'"
+          )
+          return @types.error
         end
         @types.unknown
       end
@@ -228,6 +262,11 @@ module Facet
       private def infer_type_apply(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         name = node.symbol_name || node.child(0).try(&.symbol_name)
         return @types.unknown unless name
+        if resolve_constant_id(name, scope, env)
+          reference = node.child(0) || node
+          report_constant_as_type(reference, file_id)
+          return @types.error
+        end
         resolved = resolve_type_name(name, scope)
         return @types.unknown unless @type_definitions.has_key?(resolved)
         arguments = node.child(1).try(&.children).try do |nodes|
@@ -309,7 +348,14 @@ module Facet
       end
 
       private def infer_var_decl(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
-        type_id = node.declared_type.try { |type| resolve_type_text(type.text, scope) }
+        type_id = node.declared_type.try do |type|
+          if reference = constant_type_reference(type, scope)
+            report_constant_as_type(reference, file_id)
+            @types.error
+          else
+            resolve_type_text(type.text, scope)
+          end
+        end
         type_id ||= node.value.try { |value| infer(value, file_id, scope, env, record) }
         type_id ||= @types.unknown
         if target = node.target
@@ -321,7 +367,10 @@ module Facet
 
       private def infer_sequence(nodes : Array(SyntaxNode), file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         result = @types.named("Nil")
-        nodes.each { |child| result = infer(child, file_id, scope, env, record) }
+        nodes.each do |child|
+          result = infer(child, file_id, scope, env, record)
+          break if flow_terminates?(child)
+        end
         result
       end
 
@@ -339,15 +388,28 @@ module Facet
       end
 
       private def infer_conditional(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
-        children = semantic_children(node)
-        condition = node.condition || children.first?
+        condition = node.condition || present_child(node, 0)
         infer(condition, file_id, scope, env, record) if condition
-        branch_env = env.dup
-        then_node = node.body || children[1]?
-        else_node = children[2]?
-        then_type = then_node ? infer(then_node, file_id, scope, branch_env, record) : @types.named("Nil")
-        else_type = else_node ? infer(else_node, file_id, scope, env.dup, record) : @types.named("Nil")
-        @types.union([then_type, else_type])
+        then_node = node.body || present_child(node, 1)
+        else_node = present_child(node, 2)
+        body_truthy = node.kind != NodeKind::Unless
+        then_seed = condition ? condition_env(condition, env, body_truthy, scope) : env.dup
+        else_seed = condition ? condition_env(condition, env, !body_truthy, scope) : env.dup
+
+        then_env = then_seed || env.dup
+        else_env = else_seed || env.dup
+        then_type = then_node ? infer(then_node, file_id, scope, then_env, record) : @types.named("Nil")
+        else_type = else_node ? infer(else_node, file_id, scope, else_env, record) : @types.named("Nil")
+
+        surviving = [] of Hash(String, TypeId)
+        surviving << then_env if then_seed && !then_node.try { |body| flow_terminates?(body) }
+        surviving << else_env if else_seed && !else_node.try { |body| flow_terminates?(body) }
+        merge_flow_envs_into(env, surviving)
+
+        branch_types = [] of TypeId
+        branch_types << then_type if then_seed
+        branch_types << else_type if else_seed
+        @types.union(branch_types)
       end
 
       private def infer_call(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
@@ -357,6 +419,16 @@ module Facet
         end
         name = node.call_name
         return @types.unknown unless name
+        if name == "uninitialized"
+          if argument = node.arguments.first?
+            if reference = constant_type_reference(argument, scope)
+              report_constant_as_type(reference, file_id)
+              return @types.error
+            end
+            return resolve_type_text(argument.text, scope)
+          end
+          return @types.unknown
+        end
         node.arguments.each { |argument| infer(argument.value || argument, file_id, scope, env, record) }
         return @types.unknown if @macro_names.includes?(name)
         if name == "typeof"
@@ -375,16 +447,231 @@ module Facet
         children = semantic_children(node)
         left = children.first?.try { |child| infer(child, file_id, scope, env, record) } || @types.unknown
         right = children[1]?.try { |child| infer(child, file_id, scope, env, record) } || @types.unknown
-        text = node.text
-        return @types.union([left, right]) if text.includes?("&&") || text.includes?("||")
-        return @types.named("Bool") if text.includes?("==") || text.includes?("!=") || text.includes?('<') || text.includes?('>')
+        operator = node.operator_kind
+        return @types.union([left, right]) if {TokenKind::AndAnd, TokenKind::OrOr}.includes?(operator)
+        return @types.named("Bool") if {
+                                         TokenKind::EqualEqual,
+                                         TokenKind::BangEqual,
+                                         TokenKind::TripleEqual,
+                                         TokenKind::Less,
+                                         TokenKind::LessEqual,
+                                         TokenKind::Greater,
+                                         TokenKind::GreaterEqual,
+                                       }.includes?(operator)
         left
       end
 
       private def infer_unary(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         child = semantic_children(node).first?
         value = child ? infer(child, file_id, scope, env, record) : @types.unknown
-        node.text.lstrip.starts_with?('!') ? @types.named("Bool") : value
+        node.operator_kind == TokenKind::Bang ? @types.named("Bool") : value
+      end
+
+      private def condition_env(
+        node : SyntaxNode,
+        env : Hash(String, TypeId),
+        truthy : Bool,
+        scope : String,
+      ) : Hash(String, TypeId)?
+        if node.kind == NodeKind::Unary && node.operator_kind == TokenKind::Bang
+          child = semantic_children(node).first?
+          return child ? condition_env(child, env, !truthy, scope) : env.dup
+        end
+
+        if node.kind == NodeKind::Binary
+          children = semantic_children(node)
+          left = children.first?
+          right = children[1]?
+          if left && right
+            case node.operator_kind
+            when TokenKind::AndAnd
+              if truthy
+                first = condition_env(left, env, true, scope)
+                return first ? condition_env(right, first, true, scope) : nil
+              end
+              alternatives = [] of Hash(String, TypeId)
+              if first_false = condition_env(left, env, false, scope)
+                alternatives << first_false
+              end
+              if first_true = condition_env(left, env, true, scope)
+                if second_false = condition_env(right, first_true, false, scope)
+                  alternatives << second_false
+                end
+              end
+              return merge_flow_envs(alternatives)
+            when TokenKind::OrOr
+              unless truthy
+                first = condition_env(left, env, false, scope)
+                return first ? condition_env(right, first, false, scope) : nil
+              end
+              alternatives = [] of Hash(String, TypeId)
+              if first_true = condition_env(left, env, true, scope)
+                alternatives << first_true
+              end
+              if first_false = condition_env(left, env, false, scope)
+                if second_true = condition_env(right, first_false, true, scope)
+                  alternatives << second_true
+                end
+              end
+              return merge_flow_envs(alternatives)
+            end
+          end
+        end
+
+        if {NodeKind::Call, NodeKind::CallWithBlock, NodeKind::Binary}.includes?(node.kind)
+          if receiver = node.receiver
+            case node.call_name
+            when "is_a?"
+              target = node.arguments.first?
+              return narrow_is_a(receiver, target, env, truthy, scope) if target
+            when "nil?"
+              return narrow_nil(receiver, env, truthy)
+            end
+          end
+        end
+
+        if node.kind == NodeKind::Assign
+          if target = node.target
+            return narrow_truthiness(target, env, truthy)
+          end
+        end
+
+        narrow_truthiness(node, env, truthy)
+      end
+
+      private def narrow_truthiness(
+        node : SyntaxNode,
+        env : Hash(String, TypeId),
+        truthy : Bool,
+      ) : Hash(String, TypeId)?
+        name = simple_binding_name(node)
+        return env.dup unless name
+        current = env[name]?
+        return env.dup unless current
+        narrowed = truthy ? truthy_type(current) : falsey_type(current)
+        return nil unless narrowed
+        result = env.dup
+        result[name] = narrowed
+        result
+      end
+
+      private def narrow_nil(
+        receiver : SyntaxNode,
+        env : Hash(String, TypeId),
+        truthy : Bool,
+      ) : Hash(String, TypeId)?
+        name = simple_binding_name(receiver)
+        return env.dup unless name
+        current = env[name]?
+        return env.dup unless current
+        nil_type = @types.named("Nil")
+        narrowed = if truthy
+                     matching_union(current) { |member| member == nil_type ? member : nil }
+                   else
+                     matching_union(current) { |member| member != nil_type ? member : nil }
+                   end
+        return nil unless narrowed
+        result = env.dup
+        result[name] = narrowed
+        result
+      end
+
+      private def narrow_is_a(
+        receiver : SyntaxNode,
+        target : SyntaxNode,
+        env : Hash(String, TypeId),
+        truthy : Bool,
+        scope : String,
+      ) : Hash(String, TypeId)?
+        name = simple_binding_name(receiver)
+        return env.dup unless name
+        current = env[name]?
+        return env.dup unless current
+        target_type = resolve_type_text(target.text, scope)
+        narrowed = if truthy
+                     matching_union(current) do |member|
+                       if type_compatible?(member, target_type)
+                         member
+                       elsif type_compatible?(target_type, member)
+                         target_type
+                       end
+                     end
+                   else
+                     matching_union(current) do |member|
+                       type_compatible?(member, target_type) ? nil : member
+                     end
+                   end
+        # Crystal still types a statically impossible positive `is_a?` branch.
+        # Keep that branch reachable without inventing a narrower type.
+        return env.dup if truthy && !narrowed
+        return nil unless narrowed
+        result = env.dup
+        result[name] = narrowed
+        result
+      end
+
+      private def matching_union(type_id : TypeId, &block : TypeId -> TypeId?) : TypeId?
+        type = @types[type_id]
+        members = type.kind == SemanticTypeKind::Union ? type.arguments : [type_id]
+        matches = members.compact_map { |member| yield member }
+        matches.empty? ? nil : @types.union(matches)
+      end
+
+      private def truthy_type(type_id : TypeId) : TypeId?
+        matching_union(type_id) do |member|
+          type = @types[member]
+          type.kind == SemanticTypeKind::Nominal && type.name == "Nil" ? nil : member
+        end
+      end
+
+      private def falsey_type(type_id : TypeId) : TypeId?
+        matching_union(type_id) do |member|
+          type = @types[member]
+          type.kind == SemanticTypeKind::Nominal && {"Nil", "Bool"}.includes?(type.name) ? member : nil
+        end
+      end
+
+      private def simple_binding_name(node : SyntaxNode) : String?
+        return nil unless {NodeKind::Ident, NodeKind::InstanceVar, NodeKind::ClassVar, NodeKind::Global}.includes?(node.kind)
+        node.symbol_name
+      end
+
+      private def merge_flow_envs(envs : Array(Hash(String, TypeId))) : Hash(String, TypeId)?
+        return nil if envs.empty?
+        result = {} of String => TypeId
+        envs.flat_map(&.keys).uniq.each do |name|
+          values = envs.compact_map { |env| env[name]? }
+          values << @types.named("Nil") if values.size < envs.size
+          result[name] = @types.union(values)
+        end
+        result
+      end
+
+      private def merge_flow_envs_into(env : Hash(String, TypeId), envs : Array(Hash(String, TypeId))) : Nil
+        merged = merge_flow_envs(envs)
+        return unless merged
+        env.clear
+        env.merge!(merged)
+      end
+
+      private def flow_terminates?(node : SyntaxNode) : Bool
+        case node.kind
+        when NodeKind::Return, NodeKind::Break, NodeKind::Next
+          true
+        when NodeKind::Expressions, NodeKind::File, NodeKind::Begin, NodeKind::Ensure
+          semantic_children(node).any? { |child| flow_terminates?(child) }
+        when NodeKind::If, NodeKind::Unless, NodeKind::Ternary
+          then_node = node.body || present_child(node, 1)
+          else_node = present_child(node, 2)
+          !!(then_node && else_node && flow_terminates?(then_node) && flow_terminates?(else_node))
+        else
+          false
+        end
+      end
+
+      private def present_child(node : SyntaxNode, index : Int32) : SyntaxNode?
+        child = node.child(index)
+        child && child.kind != NodeKind::Nop ? child : nil
       end
 
       private def infer_index(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
@@ -406,6 +693,7 @@ module Facet
         record : Bool,
         explicit_name : String? = nil,
       ) : TypeId
+        return @types.error if receiver_type == @types.error
         name = explicit_name || node.call_name
         return @types.unknown unless name
         arguments = node.arguments.map { |argument| infer(argument.value || argument, file_id, scope, env, record) }
@@ -413,7 +701,9 @@ module Facet
 
         if name == "as" || name == "as?"
           target = node.arguments.first?
-          return target ? resolve_type_text(target.text, scope) : @types.unknown
+          return @types.unknown unless target
+          target_type = resolve_type_text(target.text, scope)
+          return name == "as?" ? @types.union([target_type, @types.named("Nil")]) : target_type
         elsif name == "nil?" || name == "is_a?" || name == "responds_to?"
           return @types.named("Bool")
         elsif name == "not_nil!"
@@ -449,7 +739,26 @@ module Facet
             end
             resolved.concat(selected)
             selected.each do |candidate|
+              if invalid_type = method_constant_type_reference(candidate)
+                report_semantic_error(
+                  node.callee || node,
+                  file_id,
+                  "facet.constant_as_type",
+                  "#{invalid_type.symbol_name || invalid_type.text} is not a type, it's a constant",
+                  defer_in_method: false
+                )
+                return @types.error
+              end
+              diagnostic_count = @deferred_diagnostics.size
               return_type = inferred_return_type(candidate, arguments, instance_type, block_return)
+              if @deferred_diagnostics.size > diagnostic_count
+                diagnostics = @deferred_diagnostics[diagnostic_count..]
+                discard_deferred_diagnostics(diagnostic_count)
+                diagnostics.each do |code, message|
+                  emit_semantic_error(node.callee || node, file_id, code, message)
+                end
+                return @types.error
+              end
               resolved_returns << substitute_type(return_type, instance_type, type_name)
             end
           end
@@ -910,7 +1219,12 @@ module Facet
 
       private def resolve_type_name(name : String, scope : String) : String
         text = name.strip.lchop("::")
-        return text if name.starts_with?("::") || text.includes?("::")
+        return text if name.starts_with?("::")
+        if text.includes?("::")
+          segments = text.split("::")
+          head = resolve_relative_type_head(segments.shift, scope)
+          return ([head] + segments).join("::")
+        end
         parts = scope.split("::")
         parts.pop if @type_definitions.has_key?(scope)
         until parts.empty?
@@ -921,12 +1235,31 @@ module Facet
         text
       end
 
+      private def resolve_relative_type_head(name : String, scope : String) : String
+        current = scope
+        until current.empty?
+          candidate = "#{current}::#{name}"
+          return candidate if @type_definitions.has_key?(candidate)
+          segments = current.split("::")
+          segments.pop
+          current = segments.join("::")
+        end
+        name
+      end
+
       private def resolve_constant_id(
         node : SyntaxNode,
         scope : String,
         env : Hash(String, TypeId),
       ) : DefId?
-        raw = node.symbol_name || node.text
+        resolve_constant_id(node.symbol_name || node.text, scope, env)
+      end
+
+      private def resolve_constant_id(
+        raw : String,
+        scope : String,
+        env : Hash(String, TypeId),
+      ) : DefId?
         global = raw.starts_with?("::")
         normalized = raw.lchop("::")
         parts = normalized.split("::")
@@ -1001,7 +1334,18 @@ module Facet
         if cached = @constant_types[definition_id]?
           return cached
         end
-        return @types.unknown if @constant_inference_stack.includes?(definition_id)
+        if @constant_inference_stack.includes?(definition_id)
+          definition = @definitions[definition_id]
+          if node_ref = definition.node
+            emit_semantic_error(
+              @trees[node_ref.file_id].node(node_ref.node_id),
+              node_ref.file_id,
+              "facet.constant_cycle",
+              "can't infer type of constant #{definition.name}"
+            )
+          end
+          return @types.error
+        end
         definition = @definitions[definition_id]
         node_ref = definition.node
         return @types.unknown unless node_ref
@@ -1041,6 +1385,73 @@ module Facet
         type_id
       ensure
         @constant_inference_stack.delete(definition_id)
+      end
+
+      private def constant_type_reference(node : SyntaxNode, scope : String) : SyntaxNode?
+        if {NodeKind::Ident, NodeKind::Const, NodeKind::Path}.includes?(node.kind)
+          name = node.symbol_name || node.text
+          return node if resolve_constant_id(name, scope, {} of String => TypeId)
+        end
+        node.children.each do |child|
+          if reference = constant_type_reference(child, scope)
+            return reference
+          end
+        end
+        nil
+      end
+
+      private def method_constant_type_reference(definition : SemanticDefinition) : SyntaxNode?
+        node_ref = definition.node
+        return nil unless node_ref
+        tree = @trees[node_ref.file_id]?
+        return nil unless tree
+        method = tree.node(node_ref.node_id)
+        method.parameters.each do |parameter|
+          if type = parameter.declared_type
+            if reference = constant_type_reference(type, definition.owner || "")
+              return reference
+            end
+          end
+        end
+        nil
+      end
+
+      private def report_constant_as_type(node : SyntaxNode, file_id : FileId) : Nil
+        name = node.symbol_name || node.text
+        report_semantic_error(
+          node,
+          file_id,
+          "facet.constant_as_type",
+          "#{name} is not a type, it's a constant"
+        )
+      end
+
+      private def report_semantic_error(
+        node : SyntaxNode,
+        file_id : FileId,
+        code : String,
+        message : String,
+        defer_in_method : Bool = true,
+      ) : Nil
+        if defer_in_method && (!@inference_stack.empty? || @standalone_method_analysis_depth > 0)
+          @deferred_diagnostics << {code, message}
+        else
+          emit_semantic_error(node, file_id, code, message)
+        end
+      end
+
+      private def emit_semantic_error(node : SyntaxNode, file_id : FileId, code : String, message : String) : Nil
+        diagnostic = SemanticDiagnostic.new(code, file_id, node.span, message)
+        key = {diagnostic.code, diagnostic.file_id, diagnostic.span.start, diagnostic.span.finish}
+        unless @diagnostics.any? { |existing| {existing.code, existing.file_id, existing.span.start, existing.span.finish} == key }
+          @diagnostics << diagnostic
+        end
+      end
+
+      private def discard_deferred_diagnostics(size : Int32) : Nil
+        while @deferred_diagnostics.size > size
+          @deferred_diagnostics.pop
+        end
       end
 
       private def assign_target(target : SyntaxNode, type_id : TypeId, env : Hash(String, TypeId)) : Nil

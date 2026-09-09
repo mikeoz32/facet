@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 295 currently pass Facet exactly and 287 are
+Every contract is classified: 321 currently pass Facet exactly and 261 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 295 contracts. It includes bare zero-argument
+The current exact baseline is 321 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and positional-signature specificity under the
@@ -31,6 +31,18 @@ covers nested and absolute paths, lexical method scope, superclass and included
 module ancestry, and `forall` metaclass paths. Implicit constant namespaces are
 represented as modules, enum members retain their enum type, and required-file
 constant edits invalidate dependent snapshots.
+Undefined constants, constant initializers that reference unavailable locals,
+constant inference cycles, and constants used in type positions match the
+captured semantic decision, coded diagnostic, and source location. Deferred
+method-body diagnostics are relocated to the instantiating call site when that
+is the official contract.
+
+Conditional inference carries branch-specific truthiness and `is_a?` types
+through negation and short-circuit `&&`/`||`. It merges assignments from
+surviving branches, removes terminated return-guard branches from the following
+environment, and combines explicit return values with fallthrough results.
+This includes narrowing from concrete unions as well as from an ancestor type
+to multiple possible descendants.
 
 The current slice covers class construction/allocation, simple method return
 inference, generic receiver substitution, lexical assignments, unions,

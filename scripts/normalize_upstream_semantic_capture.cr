@@ -58,8 +58,19 @@ cases = raw.map do |contract|
   key = "#{contract.suite}:#{contract.line}:#{contract.kind}"
   occurrence = occurrences[key]
   occurrences[key] = occurrence + 1
-  expected_code = if contract.kind == "error" && contract.actual_error.try(&.includes?("undefined method"))
-                    "facet.undefined_method"
+  expected_code = if contract.kind == "error"
+                    message = contract.actual_error
+                    if message.try(&.includes?("undefined method"))
+                      "facet.undefined_method"
+                    elsif message.try(&.includes?("undefined constant"))
+                      "facet.undefined_constant"
+                    elsif message.try(&.includes?("undefined local variable or method"))
+                      "facet.undefined_local"
+                    elsif message.try(&.includes?("can't infer type of constant"))
+                      "facet.constant_cycle"
+                    elsif message.try(&.includes?("is not a type, it's a constant"))
+                      "facet.constant_as_type"
+                    end
                   end
   SemanticContractCase.new(
     "#{key}:#{occurrence}",

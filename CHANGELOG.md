@@ -3,14 +3,22 @@
 ## Unreleased
 
 - Expanded the committed Crystal 1.21 semantic corpus with the official
-  constant suite: 582 contracts from 449 examples across nine suites, with 295
-  exact matches and all 287 remaining contracts explicitly classified.
+  constant suite: 582 contracts from 449 examples across nine suites, with 321
+  exact matches and all 261 remaining contracts explicitly classified.
   Capture now preserves no-error primitive-injection metadata.
 - Added first-class indexed constants with lazy value inference, revision-safe
   bindings, implicit module namespaces, enum-member types, lexical and absolute
   lookup, ancestor/include lookup, and metaclass paths such as `U::CONST`.
   Required-file edits invalidate dependent constant types without reusing stale
   node references.
+- Added exact constant diagnostics for unresolved paths, local-variable leakage
+  into constant initializers, inference cycles, and constants used as declared,
+  generic, uninitialized, or method-parameter types. Method-body failures are
+  reported at the instantiating call site where Crystal does so.
+- Added branch-sensitive semantic flow for truthiness, `nil?`, `is_a?`, unary
+  negation, and short-circuit `&&`/`||`; conditional assignments are merged back
+  into the surviving environment, return guards exclude terminated branches,
+  and explicit return values remain part of inferred method results.
 
 ## 0.2.0 - 2026-09-08
 

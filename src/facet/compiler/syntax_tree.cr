@@ -514,6 +514,13 @@ module Facet
         raw.semantic_flag?(flag)
       end
 
+      def operator_kind : TokenKind?
+        return nil unless {NodeKind::Unary, NodeKind::Binary}.includes?(kind)
+        operator = raw.payload_index
+        return nil unless operator.in?(0...@tree.ast.arena.operators.size)
+        @tree.ast.arena.operator_kind(operator)
+      end
+
       def doc : String?
         @tree.leading_doc(@id)
       end
