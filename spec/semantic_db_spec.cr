@@ -662,6 +662,68 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Int32, Int32, Int32)")
   end
 
+  it "selects overloads by block presence and nominal restrictions" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def block_choice; yield; 1; end
+        def block_choice; 2.5; end
+        def numeric(value : Int); 2.5; end
+        def numeric(value : Float); 1; end
+        {block_choice, block_choice { nil }, numeric(1), numeric(1.5)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Float64, Int32, Float64, Int32)"
+    )
+  end
+
+  it "dispatches union arguments and named arguments per overload" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Parent; end
+        class Child < Parent; end
+        def choose(value : Child); 1; end
+        def choose(value); 2.5; end
+        def named(a : Int32, b : Int32); true; end
+        def named(b : Int32, a : Nil); 'x'; end
+        value = nil || Parent.new || Child.new
+        named_value = 1 || nil
+        {choose(value), named(a: named_value, b: 2)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple((Float64 | Int32), (Bool | Char))"
+    )
+  end
+
+  it "matches structural tuple restrictions and replaces duplicate signatures" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def tuple_size(value : {X, Y}) forall X, Y; 1; end
+        def tuple_size(value : {X, Y, Z}) forall X, Y, Z; 'x'; end
+        def replaced(value : String.class); 1; end
+        def replaced(value : ::String.class); 'x'; end
+        tuple = {1, 2} || {1, 2, 3}
+        {tuple_size(tuple), replaced(String)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple((Char | Int32), Char)"
+    )
+  end
+
   it "diagnoses only when every closed member of a union lacks the method" do
     _, snapshot, ids, _ = semantic_fixture({
       "/workspace/main.cr" => <<-CR,

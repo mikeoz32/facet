@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 321 currently pass Facet exactly and 261 are
+Every contract is classified: 349 currently pass Facet exactly and 233 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 321 contracts. It includes bare zero-argument
+The current exact baseline is 349 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and positional-signature specificity under the
@@ -25,6 +25,11 @@ Block return restrictions, splat restrictions, generic include constraints,
 and keyed named-tuple identities participate in the same binding model. Nested
 union and metaclass restrictions are reconstructed from native AST structure,
 so grouping punctuation cannot distort semantic type resolution.
+Overload selection additionally accounts for built-in numeric ancestry,
+receiver-relative `self`, structural tuple/generic restrictions, block
+presence, named-argument order, double splats, and later definitions of the
+same signature. Union arguments dispatch per concrete member and merge the
+selected return types instead of widening every candidate together.
 Constants are indexed as first-class semantic definitions and lazily inferred
 without leaking top-level local variables into their value environment. Lookup
 covers nested and absolute paths, lexical method scope, superclass and included

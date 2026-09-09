@@ -3,8 +3,8 @@
 ## Unreleased
 
 - Expanded the committed Crystal 1.21 semantic corpus with the official
-  constant suite: 582 contracts from 449 examples across nine suites, with 321
-  exact matches and all 261 remaining contracts explicitly classified.
+  constant suite: 582 contracts from 449 examples across nine suites, with 349
+  exact matches and all 233 remaining contracts explicitly classified.
   Capture now preserves no-error primitive-injection metadata.
 - Added first-class indexed constants with lazy value inference, revision-safe
   bindings, implicit module namespaces, enum-member types, lexical and absolute
@@ -19,6 +19,10 @@
   negation, and short-circuit `&&`/`||`; conditional assignments are merged back
   into the surviving environment, return guards exclude terminated branches,
   and explicit return values remain part of inferred method results.
+- Expanded overload selection with built-in numeric ancestry, receiver-relative
+  `self` restrictions, structural generic/tuple matching, per-member union
+  dispatch, named-argument alignment, double-splat matching, block-presence
+  filtering, signature replacement, and stable specificity tie-breaking.
 
 ## 0.2.0 - 2026-09-08
 

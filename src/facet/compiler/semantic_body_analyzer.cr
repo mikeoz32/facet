@@ -733,12 +733,18 @@ module Facet
             missing << type_name
           else
             applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
-            selected = select_overloads(applicable.empty? ? candidates : applicable, arguments)
+            selections = select_overloads(
+              applicable.empty? ? candidates : applicable,
+              node,
+              arguments,
+              instance_type
+            )
+            selected = selections.map(&.[0])
             if block_return.nil? && selected.any? { |candidate| candidate.block_type != @types.unknown && !candidate.free_variables.empty? }
               block_return = infer_call_block_return(node, file_id, scope, env, record)
             end
             resolved.concat(selected)
-            selected.each do |candidate|
+            selections.each do |candidate, candidate_arguments|
               if invalid_type = method_constant_type_reference(candidate)
                 report_semantic_error(
                   node.callee || node,
@@ -750,7 +756,7 @@ module Facet
                 return @types.error
               end
               diagnostic_count = @deferred_diagnostics.size
-              return_type = inferred_return_type(candidate, arguments, instance_type, block_return)
+              return_type = inferred_return_type(candidate, candidate_arguments, instance_type, block_return)
               if @deferred_diagnostics.size > diagnostic_count
                 diagnostics = @deferred_diagnostics[diagnostic_count..]
                 discard_deferred_diagnostics(diagnostic_count)
@@ -1125,22 +1131,163 @@ module Facet
 
       private def select_overloads(
         candidates : Array(SemanticDefinition),
+        call : SyntaxNode,
         arguments : Array(TypeId),
+        receiver_type : TypeId,
+      ) : Array({SemanticDefinition, Array(TypeId)})
+        candidates = collapse_redefinitions(candidates)
+        candidates = filter_block_overloads(candidates, call)
+        selected = [] of {SemanticDefinition, Array(TypeId)}
+        argument_variants(arguments).each do |variant|
+          compatible = candidates.select do |candidate|
+            aligned = align_call_arguments(candidate, call, variant)
+            candidate.parameter_types.each_with_index.all? do |parameter_type, index|
+              argument_type = aligned[index]?
+              argument_type.nil? || type_compatible?(
+                argument_type,
+                effective_parameter_type(parameter_type, receiver_type)
+              )
+            end
+          end
+          compatible = candidates if compatible.empty?
+          if @semantic_options.preview_overload_order? && compatible.all? { |candidate| candidate.parameter_types.all? { |type_id| type_id == @types.unknown } }
+            best = compatible.max_of? { |candidate| preview_positional_score(candidate) } || 0
+            compatible.select { |candidate| preview_positional_score(candidate) == best }.each do |candidate|
+              selected << {candidate, align_call_arguments(candidate, call, variant)}
+            end
+            next
+          end
+          scored = compatible.map do |candidate|
+            aligned = align_call_arguments(candidate, call, variant)
+            {candidate, overload_score(candidate, aligned, receiver_type)}
+          end
+          best = scored.max_of? { |entry| entry[1] } || 0
+          candidate = scored.find { |_, score| score == best }.not_nil![0]
+          selected << {candidate, align_call_arguments(candidate, call, variant)}
+        end
+        selected.map(&.[0]).uniq(&.id).map do |candidate|
+          variants = selected.select { |entry| entry[0].id == candidate.id }.map(&.[1])
+          width = variants.max_of?(&.size) || 0
+          merged = Array(TypeId).new(width) do |index|
+            @types.union(variants.compact_map { |variant| variant[index]? })
+          end
+          {candidate, merged}
+        end
+      end
+
+      private def collapse_redefinitions(candidates : Array(SemanticDefinition)) : Array(SemanticDefinition)
+        seen = Set(String).new
+        candidates.reverse_each.compact_map do |candidate|
+          key = "#{candidate.parameter_types.join(',')}:#{candidate.min_arity}:#{candidate.max_arity}:#{candidate.block_type}:#{method_declares_block?(candidate)}:#{method_requires_block?(candidate)}"
+          next if seen.includes?(key)
+          seen << key
+          candidate
+        end.to_a.reverse
+      end
+
+      private def filter_block_overloads(
+        candidates : Array(SemanticDefinition),
+        call : SyntaxNode,
       ) : Array(SemanticDefinition)
-        compatible = candidates.select do |candidate|
-          candidate.parameter_types.each_with_index.all? do |parameter_type, index|
-            argument_type = arguments[index]?
-            argument_type.nil? || type_compatible?(argument_type, parameter_type)
+        has_block = call_has_block?(call)
+        if has_block
+          consuming = candidates.select { |candidate| method_consumes_block?(candidate) }
+          consuming.empty? ? candidates : consuming
+        else
+          callable = candidates.reject { |candidate| method_requires_block?(candidate) }
+          callable.empty? ? candidates : callable
+        end
+      end
+
+      private def call_has_block?(call : SyntaxNode) : Bool
+        return true if call.kind == NodeKind::CallWithBlock
+        call.kind == NodeKind::Binary && (call.child(1).try { |right| right.kind == NodeKind::CallWithBlock } || false)
+      end
+
+      private def method_consumes_block?(definition : SemanticDefinition) : Bool
+        method_declares_block?(definition) || method_requires_block?(definition)
+      end
+
+      private def method_declares_block?(definition : SemanticDefinition) : Bool
+        node_ref = definition.node
+        return false unless node_ref
+        tree = @trees[node_ref.file_id]?
+        return false unless tree
+        tree.node(node_ref.node_id).parameters.any? { |parameter| parameter.kind == NodeKind::BlockParam }
+      end
+
+      private def method_requires_block?(definition : SemanticDefinition) : Bool
+        node_ref = definition.node
+        return false unless node_ref
+        tree = @trees[node_ref.file_id]?
+        return false unless tree
+        body = tree.node(node_ref.node_id).body
+        return false unless body
+        body.kind == NodeKind::Yield || !body.descendants(NodeKind::Yield).empty?
+      end
+
+      private def align_call_arguments(
+        definition : SemanticDefinition,
+        call : SyntaxNode,
+        arguments : Array(TypeId),
+      ) : Array(TypeId)
+        call_arguments = call.arguments
+        return arguments unless call_arguments.any? { |argument| argument.kind == NodeKind::NamedArg }
+        parameters = method_parameters(definition)
+        return arguments if parameters.empty?
+        aligned = Array(TypeId).new(parameters.size, @types.unknown)
+        positional_index = 0
+        call_arguments.each_with_index do |argument, index|
+          argument_type = arguments[index]? || @types.unknown
+          if argument.kind == NodeKind::NamedArg
+            argument_name = argument.name
+            parameter_index = parameters.index do |parameter|
+              parameter_name(parameter) == argument_name
+            end
+            parameter_index ||= parameters.index(&.kind.==(NodeKind::DoubleSplat))
+            if parameter_index
+              current = aligned[parameter_index]
+              aligned[parameter_index] = current == @types.unknown ? argument_type : @types.union([current, argument_type])
+            end
+          else
+            while positional_index < aligned.size && aligned[positional_index] != @types.unknown
+              positional_index += 1
+            end
+            aligned[positional_index] = argument_type if positional_index < aligned.size
+            positional_index += 1
           end
         end
-        compatible = candidates if compatible.empty?
-        if @semantic_options.preview_overload_order? && compatible.all? { |candidate| candidate.parameter_types.all? { |type_id| type_id == @types.unknown } }
-          best = compatible.max_of? { |candidate| preview_positional_score(candidate) } || 0
-          return compatible.select { |candidate| preview_positional_score(candidate) == best }
+        aligned
+      end
+
+      private def method_parameters(definition : SemanticDefinition) : Array(SyntaxNode)
+        node_ref = definition.node
+        return [] of SyntaxNode unless node_ref
+        tree = @trees[node_ref.file_id]?
+        return [] of SyntaxNode unless tree
+        tree.node(node_ref.node_id).parameters.reject { |parameter| parameter.kind == NodeKind::BlockParam }
+      end
+
+      private def parameter_name(parameter : SyntaxNode) : String?
+        name = parameter.external_name || parameter.name
+        name.try(&.lchop('*').lchop('@'))
+      end
+
+      private def argument_variants(arguments : Array(TypeId)) : Array(Array(TypeId))
+        variants = [[] of TypeId]
+        arguments.each do |argument|
+          type = @types[argument]
+          members = type.kind == SemanticTypeKind::Union ? type.arguments : [argument]
+          expanded = [] of Array(TypeId)
+          variants.each do |prefix|
+            members.each do |member|
+              expanded << (prefix + [member])
+              return [arguments] if expanded.size > 64
+            end
+          end
+          variants = expanded
         end
-        scored = compatible.map { |candidate| {candidate, overload_score(candidate, arguments)} }
-        best = scored.max_of? { |entry| entry[1] } || 0
-        scored.select { |_, score| score == best }.map { |entry| entry[0] }
+        variants
       end
 
       # Crystal's preview order treats required positional parameters as more
@@ -1156,7 +1303,11 @@ module Facet
         end
       end
 
-      private def overload_score(definition : SemanticDefinition, arguments : Array(TypeId)) : Int32
+      private def overload_score(
+        definition : SemanticDefinition,
+        arguments : Array(TypeId),
+        receiver_type : TypeId,
+      ) : Int32
         score = if @semantic_options.preview_overload_order? && definition.min_arity == arguments.size && definition.max_arity == arguments.size
                   4
                 else
@@ -1165,20 +1316,52 @@ module Facet
         definition.parameter_types.each_with_index do |parameter_type, index|
           argument_type = arguments[index]?
           next unless argument_type
-          score += 8 if parameter_type != @types.unknown && parameter_type == argument_type
+          effective = effective_parameter_type(parameter_type, receiver_type)
+          next if effective == @types.unknown
+          score += 100
+          score += 40 if effective == argument_type
+          type = @types[effective]
+          score += 10 if type.kind != SemanticTypeKind::Union
+          score -= type.arguments.size if type.kind == SemanticTypeKind::Union
         end
         score
+      end
+
+      private def effective_parameter_type(type_id : TypeId, receiver_type : TypeId) : TypeId
+        type = @types[type_id]
+        return receiver_type if type.kind == SemanticTypeKind::Nominal && type.name == "self"
+        type_id
       end
 
       private def type_compatible?(actual_id : TypeId, expected_id : TypeId) : Bool
         return true if actual_id == @types.unknown || expected_id == @types.unknown
         return true if actual_id == expected_id
+        actual = @types[actual_id]
+        return actual.arguments.all? { |member| type_compatible?(member, expected_id) } if actual.kind == SemanticTypeKind::Union
         expected = @types[expected_id]
         return true if expected.kind == SemanticTypeKind::TypeParameter
         return expected.arguments.any? { |member| type_compatible?(actual_id, member) } if expected.kind == SemanticTypeKind::Union
-        actual = @types[actual_id]
+        if actual.kind == expected.kind && actual.name == expected.name && actual.arguments.size == expected.arguments.size
+          return actual.arguments.zip(expected.arguments).all? do |actual_argument, expected_argument|
+            type_compatible?(actual_argument, expected_argument)
+          end
+        end
         return false unless actual.kind == SemanticTypeKind::Nominal && expected.kind == SemanticTypeKind::Nominal
+        return true if builtin_subtype?(actual.name, expected.name)
         !matching_ancestor_type(actual_id, expected.name || "").nil?
+      end
+
+      private def builtin_subtype?(actual : String?, expected : String?) : Bool
+        return false unless actual && expected
+        ancestors = case actual
+                    when "Int8", "Int16", "Int32", "Int64", "Int128"         then {"Int", "Signed", "Number", "Value", "Object"}
+                    when "UInt8", "UInt16", "UInt32", "UInt64", "UInt128"    then {"Int", "Unsigned", "Number", "Value", "Object"}
+                    when "Float32", "Float64"                                then {"Float", "Number", "Value", "Object"}
+                    when "Bool", "Char", "Symbol", "Nil"                     then {"Value", "Object"}
+                    when "String", "Regex", "Array", "Hash", "Proc", "Range" then {"Reference", "Object"}
+                    else                                                          nil
+                    end
+        ancestors.try(&.includes?(expected)) || false
       end
 
       private def matching_ancestor_type(actual_id : TypeId, expected_name : String) : TypeId?
