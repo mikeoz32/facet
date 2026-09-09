@@ -18,6 +18,7 @@ module Facet
         @revisions : Hash(FileId, UInt64),
         @definitions : Hash(DefId, SemanticDefinition),
         @methods_by_owner : Hash(String, Array(DefId)),
+        @constants_by_name : Hash(String, DefId),
         @type_definitions : Hash(String, DefId),
         @type_parameters : Hash(String, Array(String)),
         @macro_names : Set(String),
@@ -31,6 +32,8 @@ module Facet
       )
         @inference_stack = Set(DefId).new
         @block_inference_stack = Set({FileId, NodeId}).new
+        @constant_inference_stack = Set(DefId).new
+        @constant_types = {} of DefId => TypeId
         @specialized_returns = {} of {DefId, Array(TypeId), TypeId, TypeId} => TypeId
       end
 
@@ -189,10 +192,15 @@ module Facet
           return env["self"]? || @types.unknown
         end
         if constant_name?(name)
+          if definition_id = resolve_constant_id(node, scope, env)
+            bind(node, file_id, definition_id) if record
+            return constant_type(definition_id)
+          end
           resolved = resolve_type_name(name, scope)
           if definition_id = @type_definitions[resolved]?
             bind(node, file_id, definition_id) if record
-            return @types.metaclass(@definitions[definition_id].type_id)
+            definition = @definitions[definition_id]
+            return definition.kind == SemanticDefinitionKind::Module ? @types.module_type(definition.type_id) : @types.metaclass(definition.type_id)
           end
           if BUILTIN_TYPE_NAMES.includes?(resolved)
             return @types.metaclass(@types.named(resolved))
@@ -225,7 +233,9 @@ module Facet
         arguments = node.child(1).try(&.children).try do |nodes|
           nodes.map { |argument| infer_type_expression(argument, file_id, scope, env, record) }
         end || [] of TypeId
-        @types.metaclass(@types.named(resolved, arguments))
+        instance_type = @types.named(resolved, arguments)
+        definition_id = @type_definitions[resolved]?
+        definition_id && @definitions[definition_id].kind == SemanticDefinitionKind::Module ? @types.module_type(instance_type) : @types.metaclass(instance_type)
       end
 
       private def infer_type_expression(
@@ -277,6 +287,18 @@ module Facet
       end
 
       private def infer_assign(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        if target = node.target
+          if name = target.symbol_name
+            if constant_name?(name)
+              if definition_id = resolve_constant_id(target, scope, env)
+                type_id = constant_type(definition_id)
+                bind(target, file_id, definition_id) if record
+                remember(target, file_id, type_id) if record
+                return type_id
+              end
+            end
+          end
+        end
         value = node.value
         type_id = value ? infer(value, file_id, scope, env, record) : @types.unknown
         if target = node.target
@@ -480,7 +502,7 @@ module Facet
         arguments = type.arguments.map { |argument| substitute_type(argument, instance_type, owner) }
         case type.kind
         when SemanticTypeKind::Nominal    then @types.named(type.name || "Unknown", arguments)
-        when SemanticTypeKind::Metaclass  then @types.metaclass(arguments.first)
+        when SemanticTypeKind::Metaclass  then type.name == "Module" ? @types.module_type(arguments.first) : @types.metaclass(arguments.first)
         when SemanticTypeKind::Union      then @types.union(arguments)
         when SemanticTypeKind::Tuple      then @types.tuple(arguments)
         when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments, type.name.try(&.split('\0')) || [] of String)
@@ -897,6 +919,128 @@ module Facet
           parts.pop
         end
         text
+      end
+
+      private def resolve_constant_id(
+        node : SyntaxNode,
+        scope : String,
+        env : Hash(String, TypeId),
+      ) : DefId?
+        raw = node.symbol_name || node.text
+        global = raw.starts_with?("::")
+        normalized = raw.lchop("::")
+        parts = normalized.split("::")
+
+        if !global && parts.size > 1
+          if first_type = env[parts.first]?
+            type = @types[first_type]
+            instance = type.kind == SemanticTypeKind::Metaclass ? type.arguments.first?.try { |id| @types[id] } : type
+            if owner = instance.try(&.name)
+              if definition_id = constant_in_owner(owner, parts[1..].join("::"))
+                return definition_id
+              end
+            end
+          end
+
+          owner = resolve_type_name(parts[0...-1].join("::"), scope)
+          if @type_definitions.has_key?(owner)
+            if definition_id = constant_in_owner(owner, parts.last)
+              return definition_id
+            end
+          end
+        end
+
+        return @constants_by_name[normalized]? if global
+        if parts.size == 1
+          current = scope
+          until current.empty?
+            if definition_id = constant_in_owner(current, normalized)
+              return definition_id
+            end
+            segments = current.split("::")
+            segments.pop
+            current = segments.join("::")
+          end
+          return @constants_by_name[normalized]?
+        end
+
+        current = scope
+        until current.empty?
+          candidate = "#{current}::#{normalized}"
+          if definition_id = @constants_by_name[candidate]?
+            return definition_id
+          end
+          segments = current.split("::")
+          segments.pop
+          current = segments.join("::")
+        end
+        @constants_by_name[normalized]?
+      end
+
+      private def constant_in_owner(owner : String, path : String) : DefId?
+        visited = Set(String).new
+        queue = [owner]
+        until queue.empty?
+          current = queue.shift
+          next if visited.includes?(current)
+          visited << current
+          if definition_id = @constants_by_name["#{current}::#{path}"]?
+            return definition_id
+          end
+          if superclass = @superclasses[current]?
+            queue << resolve_type_name(superclass, current)
+          end
+          (@includes[current]? || [] of String).each do |included|
+            queue << resolve_type_name(included, current)
+          end
+        end
+        nil
+      end
+
+      private def constant_type(definition_id : DefId) : TypeId
+        if cached = @constant_types[definition_id]?
+          return cached
+        end
+        return @types.unknown if @constant_inference_stack.includes?(definition_id)
+        definition = @definitions[definition_id]
+        node_ref = definition.node
+        return @types.unknown unless node_ref
+        tree = @trees[node_ref.file_id]?
+        return @types.unknown unless tree
+        value = tree.node(node_ref.node_id).value
+        return @types.unknown unless value
+
+        @constant_inference_stack << definition_id
+        owner = definition.owner || ""
+        owner_definition = @type_definitions[owner]?.try { |id| @definitions[id] }
+        env = {"self" => owner.empty? ? @types.named("Object") : @types.metaclass(@types.named(owner))}
+        type_id = if owner_definition.try(&.kind) == SemanticDefinitionKind::Enum
+                    owner_definition.not_nil!.type_id
+                  else
+                    infer(value, node_ref.file_id, owner, env, false)
+                  end
+        @constant_types[definition_id] = type_id
+        @definitions[definition_id] = SemanticDefinition.new(
+          definition.id,
+          definition.kind,
+          definition.name,
+          definition.qualified_name,
+          definition.span,
+          type_id,
+          definition.node,
+          definition.owner,
+          definition.class_method,
+          definition.min_arity,
+          definition.max_arity,
+          definition.parameter_types,
+          definition.return_type,
+          definition.generated,
+          definition.free_variables,
+          definition.block_type
+        )
+        type_id
+      ensure
+        @constant_inference_stack.delete(definition_id)
       end
 
       private def assign_target(target : SyntaxNode, type_id : TypeId, env : Hash(String, TypeId)) : Nil

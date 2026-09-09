@@ -86,6 +86,10 @@ module Facet
         intern(SemanticType.new(SemanticTypeKind::Metaclass, arguments: [instance_type]))
       end
 
+      def module_type(instance_type : TypeId) : TypeId
+        intern(SemanticType.new(SemanticTypeKind::Metaclass, "Module", [instance_type]))
+      end
+
       def type_parameter(name : String) : TypeId
         intern(SemanticType.new(SemanticTypeKind::TypeParameter, name))
       end
@@ -138,7 +142,11 @@ module Facet
         when SemanticTypeKind::Metaclass
           instance = type.arguments.first
           rendered = display(instance, true)
-          self[instance].kind == SemanticTypeKind::Union ? "(#{rendered}).class" : "#{rendered}.class"
+          if type.name == "Module"
+            "#{rendered}:Module"
+          else
+            self[instance].kind == SemanticTypeKind::Union ? "(#{rendered}).class" : "#{rendered}.class"
+          end
         when SemanticTypeKind::TypeParameter then type.name || "T"
         when SemanticTypeKind::Union
           body = type.arguments.map { |arg| display(arg, true) }.join(" | ")

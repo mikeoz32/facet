@@ -1,15 +1,18 @@
 # Semantic parity
 
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
-first committed upstream slice comes from eight Crystal 1.21 compiler semantic
-suites and contains 529 contracts executed by 397 examples (two upstream
-pending). Every contract is classified: 273 currently pass Facet exactly and
-256 are listed with a deferred reason. A passing type contract requires the
+committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
+and contains 582 contracts executed by 449 examples (two upstream pending).
+Every contract is classified: 295 currently pass Facet exactly and 287 are
+listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
-owns the diagnostic wording.
+owns the diagnostic wording. No-error contracts require a complete snapshot
+without a semantic diagnostic; the 16 captured primitive-injection contracts
+remain explicitly deferred because the portable replay does not inject the
+Crystal prelude.
 
-The current exact baseline is 273 contracts. It includes bare zero-argument
+The current exact baseline is 295 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and positional-signature specificity under the
@@ -22,6 +25,12 @@ Block return restrictions, splat restrictions, generic include constraints,
 and keyed named-tuple identities participate in the same binding model. Nested
 union and metaclass restrictions are reconstructed from native AST structure,
 so grouping punctuation cannot distort semantic type resolution.
+Constants are indexed as first-class semantic definitions and lazily inferred
+without leaking top-level local variables into their value environment. Lookup
+covers nested and absolute paths, lexical method scope, superclass and included
+module ancestry, and `forall` metaclass paths. Implicit constant namespaces are
+represented as modules, enum members retain their enum type, and required-file
+constant edits invalidate dependent snapshots.
 
 The current slice covers class construction/allocation, simple method return
 inference, generic receiver substitution, lexical assignments, unions,
@@ -63,7 +72,8 @@ FACET_SEMANTIC_CAPTURE=/tmp/crystal-semantic-contracts.jsonl \
   /tmp/crystal-1.21-semantic/spec/compiler/semantic/method_missing_spec.cr \
   /tmp/crystal-1.21-semantic/spec/compiler/semantic/union_spec.cr \
   /tmp/crystal-1.21-semantic/spec/compiler/semantic/var_spec.cr \
-  /tmp/crystal-1.21-semantic/spec/compiler/semantic/if_spec.cr
+  /tmp/crystal-1.21-semantic/spec/compiler/semantic/if_spec.cr \
+  /tmp/crystal-1.21-semantic/spec/compiler/semantic/const_spec.cr
 
 crystal run scripts/normalize_upstream_semantic_capture.cr -- \
   /tmp/crystal-semantic-contracts.jsonl \

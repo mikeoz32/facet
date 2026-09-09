@@ -51,6 +51,8 @@ record UpstreamSemanticResult,
       return false if fixture.error_line && @actual_line != fixture.error_line
       return false if fixture.error_column && @actual_column != fixture.error_column
       true
+    when "no_errors"
+      @complete && @actual_code.nil?
     else
       false
     end

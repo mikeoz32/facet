@@ -75,7 +75,7 @@ index b2378cd..fac3701 100644
 +  )
    result
  end
-@@ -159,11 +212,32 @@ def assert_expand_named(from : String, to, *, generic = nil, flags = nil, filena
+@@ -159,11 +212,36 @@ def assert_expand_named(from : String, to, *, generic = nil, flags = nil, filena
  end
  
  def assert_error(str, message = nil, *, inject_primitives = false, flags = nil, file = __FILE__, line = __LINE__)
@@ -96,15 +96,20 @@ index b2378cd..fac3701 100644
 +  error
  end
  
- def assert_no_errors(*args, **opts)
+-def assert_no_errors(*args, **opts)
 -  semantic(*args, **opts)
++def assert_no_errors(*args, file = __FILE__, line = __LINE__, **opts)
 +  result = semantic(*args, **opts)
 +  if source = args[0]?.as?(String)
++    inject_primitives = opts[:inject_primitives]? || false
++    flags = opts[:flags]?
 +    record_facet_semantic_contract(
 +      "no_errors",
 +      source,
-+      __FILE__,
-+      __LINE__,
++      file,
++      line,
++      inject_primitives,
++      flags,
 +      actual_type: semantic_contract_type(result.node)
 +    )
 +  end

@@ -338,6 +338,97 @@ describe Facet::Compiler::SemanticDb do
     )
   end
 
+  it "resolves constants through lexical scope, methods, ancestors, and absolute paths" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        TOP = 2.5
+        module Shared
+          FLAG = true
+        end
+        class Parent
+          VALUE = 1
+        end
+        class Child < Parent
+          include Shared
+          LOCAL = 2.5
+          def value; VALUE; end
+          def self.local; LOCAL; end
+        end
+        {Child.new.value, Child.local, Child::FLAG, ::TOP}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq(
+      "Tuple(Int32, Float64, Bool, Float64)"
+    )
+    semantic.types.display(snapshot.constant("Child::LOCAL").not_nil!.type_id).should eq("Float64")
+  end
+
+  it "resolves nested constant assignment paths and forall metaclass paths" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Box
+          Inner::VALUE = 'x'
+        end
+        struct Int32
+          MARK = 'm'
+        end
+        def mark(x : U) forall U; U::MARK; end
+        {Box::Inner::VALUE, mark(1)}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Char, Char)")
+  end
+
+  it "types enum members as their owning enum" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "lib LibC\n  enum Status\n    Ready = 1\n  end\nend\nLibC::Status::Ready\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("LibC::Status")
+  end
+
+  it "creates module types for implicit constant namespaces" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "Config::VALUE = 1\nConfig\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Config:Module")
+  end
+
+  it "invalidates referenced constants across required-file edits" do
+    semantic, first, ids, queries = semantic_fixture({
+      "/workspace/main.cr"      => %(require "./constants"\nConfig::VALUE\n),
+      "/workspace/constants.cr" => "module Config\n  VALUE = 1\nend\n",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    entry = ids["/workspace/main.cr"]
+    first_tree = queries.syntax(entry)
+    first_result = first_tree.root.children.last.children.last
+    first_ref = Facet::Compiler::NodeRef.new(entry, first_result.id, queries.manager.revision(entry))
+    semantic.types.display(first.type_of(first_ref).not_nil!).should eq("Int32")
+
+    queries.update(ids["/workspace/constants.cr"], "module Config\n  VALUE = \"changed\"\nend\n")
+    second = semantic.analyze([entry])
+    second_tree = queries.syntax(entry)
+    second_result = second_tree.root.children.last.children.last
+    second_ref = Facet::Compiler::NodeRef.new(entry, second_result.id, queries.manager.revision(entry))
+    semantic.types.display(second.type_of(second_ref).not_nil!).should eq("String")
+    semantic.types.display(second.constant("Config::VALUE").not_nil!.type_id).should eq("String")
+  end
+
   it "resolves a bare zero-argument call through Object methods" do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => "def answer; 42; end\nanswer\n",

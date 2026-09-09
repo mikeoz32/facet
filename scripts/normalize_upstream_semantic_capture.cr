@@ -83,7 +83,7 @@ header = SemanticContractHeader.new(
   "1.21.0",
   "57cf7da5094db6c5d3c058c6d054a757b5ced19e",
   cases.map(&.suite).uniq.sort,
-  397,
+  449,
   2,
   cases.size,
   cases.count { |entry| entry.kind == "type" },

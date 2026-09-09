@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Expanded the committed Crystal 1.21 semantic corpus with the official
+  constant suite: 582 contracts from 449 examples across nine suites, with 295
+  exact matches and all 287 remaining contracts explicitly classified.
+  Capture now preserves no-error primitive-injection metadata.
+- Added first-class indexed constants with lazy value inference, revision-safe
+  bindings, implicit module namespaces, enum-member types, lexical and absolute
+  lookup, ancestor/include lookup, and metaclass paths such as `U::CONST`.
+  Required-file edits invalidate dependent constant types without reusing stale
+  node references.
+
 ## 0.2.0 - 2026-09-08
 
 - Added the first compiler-grade `SemanticDb`: require-aware source graphs,

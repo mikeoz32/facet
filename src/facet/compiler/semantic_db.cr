@@ -21,7 +21,8 @@ module Facet
       span : Span,
       superclass : String?,
       type_parameters : Array(String),
-      generated : Bool
+      generated : Bool,
+      implicit : Bool = false
 
     record IndexedMethodDecl,
       key : String,
@@ -42,10 +43,20 @@ module Facet
       owner : String,
       target : String
 
+    record IndexedConstantDecl,
+      key : String,
+      name : String,
+      qualified_name : String,
+      owner : String,
+      node_id : NodeId,
+      span : Span,
+      generated : Bool
+
     class SemanticFileIndex
       getter revision : UInt64
       getter types : Array(IndexedTypeDecl)
       getter methods : Array(IndexedMethodDecl)
+      getter constants : Array(IndexedConstantDecl)
       getter includes : Array(IndexedInclude)
       getter macros : Set(String)
 
@@ -53,6 +64,7 @@ module Facet
         @revision : UInt64,
         @types : Array(IndexedTypeDecl),
         @methods : Array(IndexedMethodDecl),
+        @constants : Array(IndexedConstantDecl),
         @includes : Array(IndexedInclude),
         @macros : Set(String),
       )
@@ -72,6 +84,7 @@ module Facet
       @trees : Hash(FileId, SyntaxTree)
       @revisions : Hash(FileId, UInt64)
       @methods_by_owner : Hash(String, Array(DefId))
+      @constants_by_name : Hash(String, DefId)
       @type_definitions : Hash(String, DefId)
       @superclasses : Hash(String, String)
       @includes : Hash(String, Array(String))
@@ -88,6 +101,7 @@ module Facet
         @trees : Hash(FileId, SyntaxTree),
         @revisions : Hash(FileId, UInt64),
         @methods_by_owner : Hash(String, Array(DefId)),
+        @constants_by_name : Hash(String, DefId),
         @type_definitions : Hash(String, DefId),
         @superclasses : Hash(String, String),
         @includes : Hash(String, Array(String)),
@@ -156,6 +170,10 @@ module Facet
           end
         end
         results.uniq(&.id)
+      end
+
+      def constant(qualified_name : String) : SemanticDefinition?
+        @constants_by_name[qualified_name.lchop("::")]?.try { |id| @definitions[id]? }
       end
 
       def diagnostics_for(file_id : FileId) : Array(SemanticDiagnostic)
@@ -293,10 +311,12 @@ module Facet
         definitions = {} of DefId => SemanticDefinition
         type_definitions = {} of String => DefId
         methods_by_owner = Hash(String, Array(DefId)).new { |hash, key| hash[key] = [] of DefId }
+        constants_by_name = {} of String => DefId
         superclasses = {} of String => String
         type_parameters = {} of String => Array(String)
         includes = Hash(String, Array(String)).new { |hash, key| hash[key] = [] of String }
         macro_names = Set(String).new
+        explicit_type_names = indexes.values.flat_map(&.types).reject(&.implicit).map(&.qualified_name).to_set
 
         object_type = @types.named("Object")
         object_id = definition_id("builtin:type:Object")
@@ -313,6 +333,7 @@ module Facet
         indexes.each do |file_id, index|
           revision = @queries.manager.revision(file_id)
           index.types.each do |declaration|
+            next if declaration.implicit && explicit_type_names.includes?(declaration.qualified_name)
             type_id = @types.named(declaration.qualified_name)
             id = definition_id("#{file_id}:#{declaration.key}")
             definition = SemanticDefinition.new(
@@ -332,6 +353,26 @@ module Facet
           end
           index.includes.each { |edge| includes[edge.owner] << edge.target }
           macro_names.concat(index.macros)
+        end
+
+        indexes.each do |file_id, index|
+          revision = @queries.manager.revision(file_id)
+          index.constants.each do |declaration|
+            id = definition_id("#{file_id}:#{declaration.key}")
+            definition = SemanticDefinition.new(
+              id,
+              SemanticDefinitionKind::Constant,
+              declaration.name,
+              declaration.qualified_name,
+              declaration.span,
+              @types.unknown,
+              declaration.generated ? nil : NodeRef.new(file_id, declaration.node_id, revision),
+              declaration.owner,
+              generated: declaration.generated
+            )
+            definitions[id] = definition
+            constants_by_name[declaration.qualified_name] = id
+          end
         end
 
         indexes.each do |file_id, index|
@@ -381,6 +422,7 @@ module Facet
           revisions,
           definitions,
           methods_by_owner,
+          constants_by_name,
           type_definitions,
           type_parameters,
           macro_names,
@@ -409,6 +451,7 @@ module Facet
           trees,
           revisions,
           methods_by_owner,
+          constants_by_name,
           type_definitions,
           superclasses,
           includes
@@ -458,8 +501,10 @@ module Facet
         generated = FileSemanticIndexer.new(expanded, @queries.manager.revision(file_id), true).index
         type_keys = index.types.map(&.key).to_set
         method_keys = index.methods.map(&.key).to_set
+        constant_keys = index.constants.map(&.key).to_set
         generated.types.each { |declaration| index.types << declaration unless type_keys.includes?(declaration.key) }
         generated.methods.each { |declaration| index.methods << declaration unless method_keys.includes?(declaration.key) }
+        generated.constants.each { |declaration| index.constants << declaration unless constant_keys.includes?(declaration.key) }
         generated.includes.each { |edge| index.includes << edge unless index.includes.includes?(edge) }
         index.macros.concat(generated.macros)
       rescue
@@ -582,6 +627,7 @@ module Facet
       def initialize(@tree : SyntaxTree, @revision : UInt64, @generated : Bool)
         @types = [] of IndexedTypeDecl
         @methods = [] of IndexedMethodDecl
+        @constants = [] of IndexedConstantDecl
         @includes = [] of IndexedInclude
         @macros = Set(String).new
         @overload_ordinals = Hash(String, Int32).new(0)
@@ -589,7 +635,7 @@ module Facet
 
       def index : SemanticFileIndex
         walk(@tree.root, "")
-        SemanticFileIndex.new(@revision, @types, @methods, @includes, @macros)
+        SemanticFileIndex.new(@revision, @types, @methods, @constants, @includes, @macros)
       end
 
       private def walk(node : SyntaxNode, scope : String) : Nil
@@ -623,6 +669,26 @@ module Facet
         if node.kind == NodeKind::Def
           index_method(node, scope)
           return
+        end
+
+        if node.kind == NodeKind::Assign
+          if target = node.target
+            if name = target.symbol_name
+              if name.lchop("::").split("::").last[0]?.try(&.uppercase?)
+                qualified = qualify_constant(scope, name)
+                index_constant_namespaces(qualified, target)
+                @constants << IndexedConstantDecl.new(
+                  "constant:#{qualified}",
+                  qualified.split("::").last,
+                  qualified,
+                  scope,
+                  node.id,
+                  target.span,
+                  @generated
+                )
+              end
+            end
+          end
         end
         if node.kind == NodeKind::MacroDef
           @macros << name if name = node.name
@@ -686,6 +752,33 @@ module Facet
           return "#{canonical_type_text(children.first)}?"
         end
         node.text
+      end
+
+      private def index_constant_namespaces(qualified : String, target : SyntaxNode) : Nil
+        parts = qualified.split("::")
+        return if parts.size < 2
+        (1...parts.size).each do |size|
+          namespace = parts.first(size).join("::")
+          next if @types.any? { |declaration| declaration.qualified_name == namespace }
+          @types << IndexedTypeDecl.new(
+            "type:#{namespace}:#{SemanticDefinitionKind::Module.value}",
+            SemanticDefinitionKind::Module,
+            namespace.split("::").last,
+            namespace,
+            target.id,
+            target.span,
+            nil,
+            [] of String,
+            @generated,
+            true
+          )
+        end
+      end
+
+      private def qualify_constant(scope : String, name : String) : String
+        normalized = name.lchop("::")
+        return normalized if name.starts_with?("::") || scope.empty?
+        "#{scope}::#{normalized}"
       end
 
       private def definition_kind(kind : NodeKind) : SemanticDefinitionKind?
