@@ -812,6 +812,88 @@ describe Facet::Compiler::SemanticDb do
     semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Nil")
   end
 
+  it "infers generic constructor types from blocks stored in instance variables" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class CallbackBox(R)
+          def initialize(&@callback : -> R)
+          end
+
+          def call
+            @callback.call
+          end
+        end
+
+        {CallbackBox.new { 1 }.call, CallbackBox(Char).new { 'a' }.call}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Char)")
+  end
+
+  it "resolves class type parameters as expressions on specialized metaclasses" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class ValueBox(T)
+          def self.value
+            T
+          end
+        end
+
+        {ValueBox(1).value, ValueBox(Int32).value}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Int32.class)")
+  end
+
+  it "keeps receiver overrides ahead of equivalent inherited methods" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Parent
+          def delegated
+            value
+          end
+
+          def value
+            'a'
+          end
+        end
+
+        class Child < Parent
+          def value
+            1
+          end
+        end
+
+        class Object
+          def inherited_dispatch
+            value
+          end
+        end
+
+        class ImplicitChild
+          def value
+            2
+          end
+        end
+
+        {Child.new.delegated, ImplicitChild.new.inherited_dispatch}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Int32)")
+  end
+
   it "types Union type expressions as normalized metaclasses" do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => <<-CR,

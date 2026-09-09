@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 381 currently pass Facet exactly and 201 are
+Every contract is classified: 384 currently pass Facet exactly and 198 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 381 contracts. It includes bare zero-argument
+The current exact baseline is 384 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -38,6 +38,15 @@ types propagate from declarations, defaults, and named call arguments into
 reader methods. `Union(...)` expressions normalize to union metaclasses while
 reopened `Union` class methods remain callable and can inspect their member
 tuple through `T`.
+Block return types can specialize generic constructors and flow through
+`&@block` instance variables to native `Proc#call`. Instance-variable facts are
+keyed by specialized receiver, so one generic instantiation cannot widen
+another. Class type parameters used as expressions retain literal runtime types
+or type metaclasses, and dynamic self dispatch prefers receiver overrides while
+following the implicit `Object` superclass. The two captured constructor-block
+examples now infer their exact upstream type with complete snapshots, but stay
+classified as injected-primitives because the portable gate never promotes a
+contract carrying that upstream capture flag.
 Constants are indexed as first-class semantic definitions and lazily inferred
 without leaking top-level local variables into their value environment. Lookup
 covers nested and absolute paths, lexical method scope, superclass and included

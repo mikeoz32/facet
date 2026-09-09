@@ -72,6 +72,7 @@ module Facet
         argument_types : Array(TypeId)? = nil,
         self_type : TypeId? = nil,
         free_bindings : Hash(String, TypeId) = {} of String => TypeId,
+        block_return_type : TypeId? = nil,
       ) : TypeId
         node_ref = definition.node
         return @types.unknown unless node_ref
@@ -81,6 +82,7 @@ module Facet
         body = node.body
         return @types.named("Nil") unless body
         env = {} of String => TypeId
+        instance = nil.as(TypeId?)
         if owner = definition.owner
           instance = self_type || @types.named(owner)
           env["self"] = definition.class_method ? @types.metaclass(instance) : instance
@@ -101,7 +103,21 @@ module Facet
           end
           env[name.lchop('@')] = type_id
           env[name] = type_id if name.starts_with?('@')
-          record_instance_variable_type(definition.owner, name, type_id) if name.starts_with?('@')
+          record_instance_variable_type(definition.owner, name, type_id, instance) if name.starts_with?('@')
+        end
+        if block_parameter = node.parameters.find { |parameter| parameter.kind == NodeKind::BlockParam }
+          if name = block_parameter.name
+            type_id = if block_return_type && block_return_type != @types.unknown
+                        @types.proc_type([block_return_type])
+                      elsif instance
+                        substituted = substitute_type(definition.block_type, instance, definition.owner || "")
+                        contains_unknown_type?(substituted) ? definition.block_type : substituted
+                      else
+                        definition.block_type
+                      end
+            env[name] = type_id
+            record_instance_variable_type(definition.owner, name, type_id, instance) if name.starts_with?('@')
+          end
         end
         @body_executions += 1
         return_types = [] of TypeId
@@ -211,8 +227,20 @@ module Facet
         name = node.symbol_name || node.text
         return env[name] if env.has_key?(name)
         if node.kind == NodeKind::InstanceVar
-          if type_id = instance_variable_type(scope, name)
+          if type_id = instance_variable_type(scope, name, env["self"]?)
             return type_id
+          end
+        end
+        if parameter_index = (@type_parameters[scope]? || [] of String).index(name)
+          if self_type = env["self"]?
+            self_value = @types[self_type]
+            instance_id = self_value.kind == SemanticTypeKind::Metaclass ? self_value.arguments.first? : self_type
+            if instance_id
+              instance = @types[instance_id]
+              if argument = instance.arguments[parameter_index]?
+                return type_parameter_expression_type(argument)
+              end
+            end
           end
         end
         if name == "T" && scope == "Union"
@@ -369,7 +397,7 @@ module Facet
         type_id = value ? infer(value, file_id, scope, env, record) : @types.unknown
         if target = node.target
           assign_target(target, type_id, env)
-          record_instance_variable_target(scope, target, type_id)
+          record_instance_variable_target(scope, target, type_id, env["self"]?)
           remember(target, file_id, type_id) if record
         end
         type_id
@@ -388,7 +416,7 @@ module Facet
         type_id ||= @types.unknown
         if target = node.target
           assign_target(target, type_id, env)
-          record_instance_variable_target(scope, target, type_id)
+          record_instance_variable_target(scope, target, type_id, env["self"]?)
           remember(target, file_id, type_id) if record
         end
         type_id
@@ -744,16 +772,22 @@ module Facet
           return without_nil(receiver_type)
         end
 
+        receiver_value = @types[receiver_type]
+        if receiver_value.kind == SemanticTypeKind::Proc && name == "call"
+          return receiver_value.arguments.last? || @types.unknown
+        end
+
         receiver_members = receiver_members(receiver_type)
         return unknown_call unless receiver_members
         if {"new", "allocate"}.includes?(name) && receiver_members.all? { |member| member[1] } &&
            (name == "allocate" || receiver_members.all? { |member| !declares_class_method?(member[0], "new") })
+          block_return = infer_call_block_return(node, file_id, scope, env, record) if name == "new" && call_has_block?(node)
           instances = receiver_members.map do |member|
-            name == "new" ? infer_constructed_type(member[0], arguments) : member[0]
+            name == "new" ? infer_constructed_type(member[0], arguments, block_return) : member[0]
           end
           if name == "new"
             instances.each do |instance_type|
-              infer_initializer_effects(node, instance_type, arguments)
+              infer_initializer_effects(node, instance_type, arguments, block_return)
             end
           end
           return @types.union(instances)
@@ -866,7 +900,11 @@ module Facet
         end
       end
 
-      private def infer_constructed_type(instance_type : TypeId, arguments : Array(TypeId)) : TypeId
+      private def infer_constructed_type(
+        instance_type : TypeId,
+        arguments : Array(TypeId),
+        block_return : TypeId? = nil,
+      ) : TypeId
         instance = @types[instance_type]
         owner = instance.name
         return instance_type unless owner
@@ -880,6 +918,9 @@ module Facet
           initializer.parameter_types.each_with_index do |parameter_type, index|
             argument_type = arguments[index]?
             collect_type_parameter_bindings(parameter_type, argument_type, bindings) if argument_type
+          end
+          if block_return && initializer.block_type != @types.unknown
+            collect_type_parameter_bindings(initializer.block_type, @types.proc_type([block_return]), bindings)
           end
         end
         inferred = parameters.map { |parameter| bindings[parameter]? || @types.unknown }
@@ -899,6 +940,7 @@ module Facet
         call : SyntaxNode,
         instance_type : TypeId,
         arguments : Array(TypeId),
+        block_return : TypeId? = nil,
       ) : Nil
         owner = @types[instance_type].name
         return unless owner
@@ -906,7 +948,13 @@ module Facet
         return if candidates.empty?
         applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
         select_overloads(applicable.empty? ? candidates : applicable, call, arguments, instance_type).each do |definition, aligned|
-          analyze_method(definition, record: false, argument_types: aligned, self_type: instance_type)
+          analyze_method(
+            definition,
+            record: false,
+            argument_types: aligned,
+            self_type: instance_type,
+            block_return_type: block_return
+          )
         end
       end
 
@@ -1068,7 +1116,8 @@ module Facet
           record: false,
           argument_types: arguments,
           self_type: self_type,
-          free_bindings: free_bindings
+          free_bindings: free_bindings,
+          block_return_type: block_return
         )
         @inference_stack.delete(definition.id)
         return @types.unknown if inferred == @types.error
@@ -1113,6 +1162,11 @@ module Facet
           end
           if superclass = @superclasses[current]?
             queue << resolve_type_name(superclass, current)
+          elsif definition_id = @type_definitions[current]?
+            definition = @definitions[definition_id]
+            if definition.kind == SemanticDefinitionKind::Class && current != "Object"
+              queue << "Object"
+            end
           end
           (@includes[current]? || [] of String).each do |included|
             queue << resolve_type_name(included, current)
@@ -1244,17 +1298,40 @@ module Facet
       end
 
       private def collapse_redefinitions(candidates : Array(SemanticDefinition)) : Array(SemanticDefinition)
+        owners = [] of String?
+        by_owner = {} of String? => Array(SemanticDefinition)
+        candidates.each do |candidate|
+          unless by_owner.has_key?(candidate.owner)
+            owners << candidate.owner
+            by_owner[candidate.owner] = [] of SemanticDefinition
+          end
+          by_owner[candidate.owner] << candidate
+        end
+
         seen = Set(String).new
-        candidates.reverse_each.compact_map do |candidate|
-          shape = method_parameters(candidate).map do |parameter|
-            external_name = parameter.kind == NodeKind::Param ? parameter_name(parameter) : nil
-            "#{parameter.kind}:#{external_name}:#{parameter.value ? "optional" : "required"}"
-          end.join(',')
-          key = "#{candidate.parameter_types.join(',')}:#{candidate.min_arity}:#{candidate.max_arity}:#{shape}:#{candidate.block_type}:#{method_declares_block?(candidate)}:#{method_requires_block?(candidate)}"
-          next if seen.includes?(key)
-          seen << key
-          candidate
-        end.to_a.reverse
+        owners.flat_map do |owner|
+          local_seen = Set(String).new
+          retained = by_owner[owner].reverse_each.compact_map do |candidate|
+            key = overload_signature(candidate)
+            next if local_seen.includes?(key)
+            local_seen << key
+            candidate
+          end.to_a.reverse
+          retained.reject do |candidate|
+            key = overload_signature(candidate)
+            duplicate = seen.includes?(key)
+            seen << key
+            duplicate
+          end
+        end
+      end
+
+      private def overload_signature(candidate : SemanticDefinition) : String
+        shape = method_parameters(candidate).map do |parameter|
+          external_name = parameter.kind == NodeKind::Param ? parameter_name(parameter) : nil
+          "#{parameter.kind}:#{external_name}:#{parameter.value ? "optional" : "required"}"
+        end.join(',')
+        "#{candidate.parameter_types.join(',')}:#{candidate.min_arity}:#{candidate.max_arity}:#{shape}:#{candidate.block_type}:#{method_declares_block?(candidate)}:#{method_requires_block?(candidate)}"
       end
 
       private def filter_block_overloads(
@@ -1870,33 +1947,73 @@ module Facet
         end
       end
 
-      private def record_instance_variable_target(scope : String, target : SyntaxNode, type_id : TypeId) : Nil
+      private def record_instance_variable_target(
+        scope : String,
+        target : SyntaxNode,
+        type_id : TypeId,
+        self_type : TypeId? = nil,
+      ) : Nil
         return unless target.kind == NodeKind::InstanceVar
         name = target.symbol_name || return
-        record_instance_variable_type(scope, name, type_id)
+        record_instance_variable_type(scope, name, type_id, self_type)
       end
 
-      private def record_instance_variable_type(owner : String?, name : String, type_id : TypeId) : Nil
+      private def record_instance_variable_type(
+        owner : String?,
+        name : String,
+        type_id : TypeId,
+        self_type : TypeId? = nil,
+      ) : Nil
         return unless owner
-        return if type_id == @types.unknown || type_id == @types.error
-        key = {owner, name}
+        return if type_id == @types.error || contains_unknown_type?(type_id)
+        key = {instance_variable_owner_key(owner, self_type), name}
         @instance_variable_types[key] = @instance_variable_types[key]?.try do |current|
           @types.union([current, type_id])
         end || type_id
       end
 
-      private def instance_variable_type(owner : String, name : String) : TypeId?
+      private def instance_variable_type(owner : String, name : String, self_type : TypeId? = nil) : TypeId?
         current = owner
         visited = Set(String).new
         loop do
           return nil if visited.includes?(current)
           visited << current
-          if type_id = @instance_variable_types[{current, name}]?
+          keys = [instance_variable_owner_key(current, self_type), current].uniq
+          if type_id = keys.compact_map { |key| @instance_variable_types[{key, name}]? }.first?
             return type_id
           end
           superclass = @superclasses[current]? || return nil
           current = resolve_type_name(superclass, current)
         end
+      end
+
+      private def instance_variable_owner_key(owner : String, self_type : TypeId?) : String
+        return owner unless self_type
+        type = @types[self_type]
+        if type.kind == SemanticTypeKind::Metaclass
+          instance = type.arguments.first?
+          return instance ? @types.display(instance) : owner
+        end
+        @types.display(self_type)
+      end
+
+      private def contains_unknown_type?(type_id : TypeId) : Bool
+        return true if type_id == @types.unknown
+        @types[type_id].arguments.any? { |argument| contains_unknown_type?(argument) }
+      end
+
+      private def type_parameter_expression_type(type_id : TypeId) : TypeId
+        type = @types[type_id]
+        return type_id unless type.kind == SemanticTypeKind::Nominal
+        name = type.name || return type_id
+        numeric = name.lchop('+').lchop('-')
+        return number_type(name) if numeric[0]?.try(&.number?) || false
+        return @types.named("Bool") if {"true", "false"}.includes?(name)
+        return @types.named("Nil") if name == "nil"
+        return @types.named("Char") if name.starts_with?('\'')
+        return @types.named("String") if name.starts_with?('"')
+        return @types.named("Symbol") if name.starts_with?(':')
+        @types.metaclass(type_id)
       end
 
       private def number_type(text : String) : TypeId

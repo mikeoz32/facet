@@ -9,10 +9,7 @@
 19	unsupported_error	class_spec.cr:289:error:0
 20	unsupported_error	class_spec.cr:296:error:0
 22	incomplete	class_spec.cr:313:error:0
-23	type_mismatch	class_spec.cr:318:type:0
 26	type_mismatch	class_spec.cr:385:type:0
-29	type_mismatch	class_spec.cr:425:type:0
-32	type_mismatch	class_spec.cr:470:type:0
 33	unsupported_error	class_spec.cr:487:error:0
 34	unsupported_error	class_spec.cr:491:error:0
 35	type_mismatch	class_spec.cr:495:type:0

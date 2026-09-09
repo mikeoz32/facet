@@ -572,7 +572,9 @@ module Facet
             name = text.byte_slice(0, open)
             inside = text.byte_slice(open + 1, text.bytesize - open - 2)
             args = split_top_level(inside, ',').map { |part| resolve(part, scope) }
-            return @types.named(resolve_name(name, scope), args)
+            resolved_name = resolve_name(name, scope)
+            return @types.proc_type(args) if resolved_name == "Proc"
+            return @types.named(resolved_name, args)
           end
         end
         name = resolve_name(text, scope)
