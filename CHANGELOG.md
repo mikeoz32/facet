@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add first-class semantic type aliases with canonical targets, forward chains,
+  lexical/absolute resolution, generics, composite types, signature navigation,
+  inherited/include lookup and cycle/undefined-target diagnostics. Refresh aliases
+  and signatures after required-file edits, and isolate expansion merges from
+  cached source indexes so macro-provider changes cannot leave stale declarations.
+  Fix proc-arrow, metaclass-union and empty-tuple type resolution. The semantic
+  baseline now covers 407/582 contracts, with 175 explicitly deferred.
 - Validate method and constructor argument shape, argument types, and block
   requirements with coded diagnostics. Preserve unknown/incomplete-call behavior,
   hide parent initializer sets when overridden, and bind synthesized constructors

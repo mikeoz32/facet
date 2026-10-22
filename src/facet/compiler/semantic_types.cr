@@ -63,6 +63,12 @@ module Facet
 
     # Canonical semantic types make equality and dependency keys inexpensive.
     class TypeStore
+      BUILTIN_NAMES = Set{
+        "Object", "Reference", "Value", "Number", "Int", "Float", "Signed", "Unsigned",
+        "Int8", "Int16", "Int32", "Int64", "Int128", "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
+        "Float32", "Float64", "Bool", "Char", "String", "Symbol", "Nil", "Regex",
+        "Array", "Hash", "Tuple", "NamedTuple", "Proc", "Range", "Pointer", "Slice", "StaticArray", "NoReturn", "Void",
+      }
       getter types : Array(SemanticType)
       getter unknown : TypeId
       getter error : TypeId

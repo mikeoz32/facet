@@ -1,13 +1,7 @@
 module Facet
   module Compiler
     private class BodyAnalyzer
-      BUILTIN_TYPE_NAMES = Set{
-        "Object", "Reference", "Value", "Number", "Int", "Float", "Signed", "Unsigned",
-        "Int8", "Int16", "Int32", "Int64", "Int128",
-        "UInt8", "UInt16", "UInt32", "UInt64", "UInt128",
-        "Float32", "Float64", "Bool", "Char", "String", "Symbol", "Nil", "Regex",
-        "Array", "Hash", "Tuple", "NamedTuple", "Proc", "Range", "Pointer", "Slice", "StaticArray",
-      }
+      BUILTIN_TYPE_NAMES = TypeStore::BUILTIN_NAMES
 
       getter body_executions : Int32 = 0
 
@@ -29,6 +23,7 @@ module Facet
         @diagnostics : Array(SemanticDiagnostic),
         @reasons : Set(SemanticCompletenessReason),
         @emit_diagnostics : Bool,
+        @alias_targets : Hash(String, {String, String}) = {} of String => {String, String},
       )
         @inference_stack = Set(DefId).new
         @block_inference_stack = Set({FileId, NodeId}).new
@@ -79,6 +74,12 @@ module Facet
         tree = @trees[node_ref.file_id]?
         return @types.unknown unless tree
         node = tree.node(node_ref.node_id)
+        if record
+          node.parameters.each do |parameter|
+            parameter.declared_type.try { |type| record_type_reference(type, node_ref.file_id, definition.owner || "", definition.free_variables.to_set) }
+          end
+          node.return_type.try { |type| record_type_reference(type, node_ref.file_id, definition.owner || "", definition.free_variables.to_set) }
+        end
         body = node.body
         return @types.named("Nil") unless body
         env = {} of String => TypeId
@@ -131,7 +132,20 @@ module Facet
 
       private def analyze_top_level(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId)) : Nil
         case node.kind
-        when NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun, NodeKind::Alias, NodeKind::TypeDef
+        when NodeKind::Alias
+          if name = node.name
+            qualified = qualify(scope, name)
+            if definition_id = @type_definitions[qualified]?
+              if name_node = node.name_node
+                bind(name_node, file_id, definition_id)
+                remember(name_node, file_id, @types.metaclass(@definitions[definition_id].type_id))
+              end
+            end
+          end
+          node.child(1).try { |target| record_type_reference(target, file_id, scope) }
+          remember(node, file_id, @types.named("Nil"))
+          return
+        when NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun, NodeKind::TypeDef
           remember(node, file_id, @types.named("Nil"))
           return
         when NodeKind::Class, NodeKind::Module, NodeKind::Struct, NodeKind::Enum, NodeKind::Lib
@@ -152,6 +166,23 @@ module Facet
         else
           infer(node, file_id, scope, env, true)
         end
+      end
+
+      private def record_type_reference(
+        node : SyntaxNode, file_id : FileId, scope : String,
+        free_variables : Set(String) = Set(String).new,
+      ) : Nil
+        if name = node.symbol_name
+          unless free_variables.includes?(name)
+            resolved = resolve_type_name(name, scope)
+            if definition_id = @type_definitions[resolved]?
+              bind(node, file_id, definition_id)
+              type_id = TypeTextResolver.new(@types, @type_definitions, free_variables, @alias_targets).resolve(node.text, scope)
+              remember(node, file_id, type_id == @types.error ? type_id : @types.metaclass(type_id))
+            end
+          end
+        end
+        node.children.each { |child| record_type_reference(child, file_id, scope, free_variables) }
       end
 
       private def infer(
@@ -267,6 +298,7 @@ module Facet
           if definition_id = @type_definitions[resolved]?
             bind(node, file_id, definition_id) if record
             definition = @definitions[definition_id]
+            return @types.error if definition.type_id == @types.error
             return definition.kind == SemanticDefinitionKind::Module ? @types.module_type(definition.type_id) : @types.metaclass(definition.type_id)
           end
           if BUILTIN_TYPE_NAMES.includes?(resolved)
@@ -327,7 +359,10 @@ module Facet
         arguments = node.child(1).try(&.children).try do |nodes|
           nodes.map { |argument| infer_type_expression(argument, file_id, scope, env, record) }
         end || [] of TypeId
-        instance_type = @types.named(resolved, arguments)
+        target = @definitions[@type_definitions[resolved]].type_id
+        return @types.error if target == @types.error
+        target_name = @types[target].name || resolved
+        instance_type = @types.named(target_name, arguments)
         definition_id = @type_definitions[resolved]?
         definition_id && @definitions[definition_id].kind == SemanticDefinitionKind::Module ? @types.module_type(instance_type) : @types.metaclass(instance_type)
       end
@@ -355,7 +390,7 @@ module Facet
             type = @types[inferred]
             return type.kind == SemanticTypeKind::Metaclass ? type.arguments.first : inferred
           end
-          @types.named(resolve_type_name(name, scope))
+          resolve_type_text(name, scope)
         when NodeKind::LiteralNumber, NodeKind::LiteralSymbol, NodeKind::LiteralString
           @types.named(node.text)
         when NodeKind::Binary
@@ -1226,7 +1261,8 @@ module Facet
             end
           end
           (@includes[current]? || [] of String).each do |included|
-            queue << resolve_type_name(included, current)
+            resolved = resolve_type_text(included, current)
+            queue << (@types[resolved].name || resolve_type_name(included, current))
           end
         end
         values
@@ -1880,19 +1916,26 @@ module Facet
       end
 
       private def resolve_type_text(text : String, scope : String) : TypeId
-        TypeTextResolver.new(@types, @type_definitions).resolve(text, scope)
+        TypeTextResolver.new(@types, @type_definitions, aliases: @alias_targets).resolve(text, scope)
       end
 
       private def resolve_type_name(name : String, scope : String) : String
         text = name.strip.lchop("::")
-        return text if name.starts_with?("::")
+        absolute = name.starts_with?("::")
+        return text if absolute && !text.includes?("::")
         if text.includes?("::")
           segments = text.split("::")
-          head = resolve_relative_type_head(segments.shift, scope)
+          head_name = segments.shift
+          head = absolute ? head_name : resolve_relative_type_head(head_name, scope)
+          if alias_id = @type_definitions[head]?
+            definition = @definitions[alias_id]
+            if definition.kind == SemanticDefinitionKind::Alias
+              head = @types[definition.type_id].name || head
+            end
+          end
           return ([head] + segments).join("::")
         end
         parts = scope.split("::")
-        parts.pop if @type_definitions.has_key?(scope)
         until parts.empty?
           candidate = "#{parts.join("::")}::#{text}"
           return candidate if @type_definitions.has_key?(candidate)
@@ -1990,7 +2033,8 @@ module Facet
             queue << resolve_type_name(superclass, current)
           end
           (@includes[current]? || [] of String).each do |included|
-            queue << resolve_type_name(included, current)
+            resolved = resolve_type_text(included, current)
+            queue << (@types[resolved].name || resolve_type_name(included, current))
           end
         end
         nil
@@ -2168,7 +2212,8 @@ module Facet
             return type_id
           end
           superclass = @superclasses[current]? || return nil
-          current = resolve_type_name(superclass, current)
+          resolved = resolve_type_text(superclass, current)
+          current = @types[resolved].name || resolve_type_name(superclass, current)
         end
       end
 

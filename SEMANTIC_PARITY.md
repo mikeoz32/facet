@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 406 currently pass Facet exactly and 176 are
+Every contract is classified: 407 currently pass Facet exactly and 175 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 406 contracts. It includes bare zero-argument
+The current exact baseline is 407 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -69,6 +69,22 @@ missing providers, generated signatures without source handles, and unresolved
 argument splats remain conservative rather than producing conclusive mismatches.
 The captured diagnostic oracle now also classifies upstream arity, argument-type,
 and block errors; exact diagnostic codes and source positions remain required.
+Type aliases are indexed as `SemanticDefinitionKind::Alias`, retaining their
+declaration handles while resolving to canonical target types. Forward chains,
+lexical and absolute lookup, namespace aliases, open and specialized generic
+targets, unions, nilables, tuple/named-tuple and proc types participate in method
+restrictions, returns, local declarations, casts, construction and generic
+arguments. Method `forall` variables can shadow unqualified aliases; absolute
+alias references retain their meaning. Alias declarations, targets and method
+signature uses have navigation bindings. Inheritance and includes resolve aliased
+owners, including the snapshot method-candidate API.
+Alias cycles and undefined targets produce `facet.alias_cycle` and
+`facet.undefined_type`; missing providers keep unresolved targets conservative.
+Required-file edits invalidate target types, signatures and stale handles.
+Generated aliases refresh when their macro provider changes: expansion merges
+into snapshot-local index copies instead of mutating cached source indexes.
+This is frontend alias support, not full Crystal generic-argument validation or
+ABI layout semantics for FFI `type` declarations.
 Constants are indexed as first-class semantic definitions and lazily inferred
 without leaking top-level local variables into their value environment. Lookup
 covers nested and absolute paths, lexical method scope, superclass and included

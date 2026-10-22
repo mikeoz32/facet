@@ -52,11 +52,21 @@ module Facet
       span : Span,
       generated : Bool
 
+    record IndexedAliasDecl,
+      name : String,
+      qualified_name : String,
+      owner : String,
+      target : String,
+      node_id : NodeId,
+      span : Span,
+      generated : Bool
+
     class SemanticFileIndex
       getter revision : UInt64
       getter types : Array(IndexedTypeDecl)
       getter methods : Array(IndexedMethodDecl)
       getter constants : Array(IndexedConstantDecl)
+      getter aliases : Array(IndexedAliasDecl)
       getter includes : Array(IndexedInclude)
       getter macros : Set(String)
 
@@ -67,7 +77,15 @@ module Facet
         @constants : Array(IndexedConstantDecl),
         @includes : Array(IndexedInclude),
         @macros : Set(String),
+        @aliases : Array(IndexedAliasDecl) = [] of IndexedAliasDecl,
       )
+      end
+
+      # Expansion belongs to one snapshot. Never merge generated declarations
+      # into the cached source-only index: a provider can change independently.
+      def snapshot_copy : SemanticFileIndex
+        SemanticFileIndex.new(@revision, @types.dup, @methods.dup, @constants.dup,
+          @includes.dup, @macros.dup, @aliases.dup)
       end
     end
 
@@ -192,6 +210,14 @@ module Facet
       end
 
       private def resolve_relative_type(name : String, owner : String) : String
+        resolved = TypeTextResolver.new(@types, @type_definitions).resolve(name, owner)
+        if resolved_name = @types[resolved].name
+          if id = @type_definitions[resolved_name]?
+            definition = @definitions[id]
+            return @types[definition.type_id].name || resolved_name if definition.kind == SemanticDefinitionKind::Alias
+          end
+          return resolved_name
+        end
         normalized = name.strip.lchop("::")
         return normalized if name.starts_with?("::") || normalized.includes?("::")
         parts = owner.split("::")
@@ -298,7 +324,7 @@ module Facet
           if tree.ast.diagnostics.any?
             reasons << SemanticCompletenessReason::ParseRecovery
           end
-          indexes[file_id] = file_index(file_id, tree)
+          indexes[file_id] = file_index(file_id, tree).snapshot_copy
           if graph.entries.includes?(file_id)
             if expanded = expanded_entries[file_id]?
               merge_expanded_tree(file_id, indexes[file_id], expanded, reasons)
@@ -316,6 +342,7 @@ module Facet
         type_parameters = {} of String => Array(String)
         includes = Hash(String, Array(String)).new { |hash, key| hash[key] = [] of String }
         macro_names = Set(String).new
+        alias_targets = {} of String => {String, String}
         explicit_type_names = indexes.values.flat_map(&.types).reject(&.implicit).map(&.qualified_name).to_set
 
         object_type = @types.named("Object")
@@ -356,6 +383,38 @@ module Facet
         end
 
         indexes.each do |file_id, index|
+          index.aliases.each do |declaration|
+            alias_targets[declaration.qualified_name] = {declaration.target, declaration.owner}
+            type_definitions[declaration.qualified_name] = definition_id("#{file_id}:alias:#{declaration.qualified_name}")
+          end
+        end
+        alias_resolver = TypeTextResolver.new(@types, type_definitions, aliases: alias_targets)
+        indexes.each do |file_id, index|
+          index.aliases.each do |declaration|
+            type_id = alias_resolver.resolve(declaration.qualified_name, "")
+            if alias_resolver.unresolved_aliases.includes?(declaration.qualified_name) && reasons.includes?(SemanticCompletenessReason::MissingRequire)
+              type_id = @types.unknown
+            end
+            id = type_definitions[declaration.qualified_name]
+            definitions[id] = SemanticDefinition.new(
+              id, SemanticDefinitionKind::Alias, declaration.name, declaration.qualified_name,
+              declaration.span, type_id,
+              declaration.generated ? nil : NodeRef.new(file_id, declaration.node_id, revisions[file_id]),
+              declaration.owner, generated: declaration.generated
+            )
+          end
+        end
+        indexes.each do |file_id, index|
+          index.aliases.each do |declaration|
+            if alias_resolver.alias_cycles.includes?(declaration.qualified_name)
+              diagnostics << SemanticDiagnostic.new("facet.alias_cycle", file_id, declaration.span, "cyclic type alias '#{declaration.qualified_name}'")
+            elsif alias_resolver.unresolved_aliases.includes?(declaration.qualified_name) && !reasons.includes?(SemanticCompletenessReason::MissingRequire)
+              diagnostics << SemanticDiagnostic.new("facet.undefined_type", file_id, declaration.span, "undefined type in alias '#{declaration.qualified_name}'")
+            end
+          end
+        end
+
+        indexes.each do |file_id, index|
           revision = @queries.manager.revision(file_id)
           index.constants.each do |declaration|
             id = definition_id("#{file_id}:#{declaration.key}")
@@ -380,13 +439,13 @@ module Facet
           index.methods.each do |declaration|
             free_variables = declaration.free_variables.to_set
             parameter_types = declaration.parameter_types.map do |name|
-              name ? resolve_type_text(name, declaration.owner, type_definitions, free_variables) : @types.unknown
+              name ? resolve_type_text(name, declaration.owner, type_definitions, free_variables, alias_targets) : @types.unknown
             end
             return_type = declaration.return_type.try do |name|
-              resolve_type_text(name, declaration.owner, type_definitions, free_variables)
+              resolve_type_text(name, declaration.owner, type_definitions, free_variables, alias_targets)
             end || @types.unknown
             block_type = declaration.block_type.try do |name|
-              resolve_type_text(name, declaration.owner, type_definitions, free_variables)
+              resolve_type_text(name, declaration.owner, type_definitions, free_variables, alias_targets)
             end || @types.unknown
             id = definition_id("#{file_id}:#{declaration.key}")
             definition = SemanticDefinition.new(
@@ -432,7 +491,8 @@ module Facet
           bindings,
           diagnostics,
           reasons,
-          true
+          true,
+          alias_targets
         )
         graph.entries.each do |file_id|
           analyzer.analyze_file(file_id) if trees[file_id].ast.diagnostics.empty?
@@ -502,9 +562,11 @@ module Facet
         type_keys = index.types.map(&.key).to_set
         method_keys = index.methods.map(&.key).to_set
         constant_keys = index.constants.map(&.key).to_set
+        alias_keys = index.aliases.map(&.qualified_name).to_set
         generated.types.each { |declaration| index.types << declaration unless type_keys.includes?(declaration.key) }
         generated.methods.each { |declaration| index.methods << declaration unless method_keys.includes?(declaration.key) }
         generated.constants.each { |declaration| index.constants << declaration unless constant_keys.includes?(declaration.key) }
+        generated.aliases.each { |declaration| index.aliases << declaration unless alias_keys.includes?(declaration.qualified_name) }
         generated.includes.each { |edge| index.includes << edge unless index.includes.includes?(edge) }
         index.macros.concat(generated.macros)
       rescue
@@ -526,16 +588,22 @@ module Facet
         scope : String,
         definitions : Hash(String, DefId),
         type_parameters : Set(String) = Set(String).new,
+        aliases : Hash(String, {String, String}) = {} of String => {String, String},
       ) : TypeId
-        TypeTextResolver.new(@types, definitions, type_parameters).resolve(text, scope)
+        TypeTextResolver.new(@types, definitions, type_parameters, aliases).resolve(text, scope)
       end
     end
 
     private class TypeTextResolver
+      getter alias_cycles = Set(String).new
+      getter unresolved_aliases = Set(String).new
+      @alias_stack = [] of String
+
       def initialize(
         @types : TypeStore,
         @definitions : Hash(String, DefId),
         @type_parameters : Set(String) = Set(String).new,
+        @aliases : Hash(String, {String, String}) = {} of String => {String, String},
       )
       end
 
@@ -543,9 +611,18 @@ module Facet
         text = source.strip
         return @types.unknown if text.empty?
         return @types.unknown if text == "_"
+        return @types.type_parameter(text) if @alias_stack.empty? && @type_parameters.includes?(text)
         if wrapped_in_parentheses?(text)
           return resolve(text.byte_slice(1, text.bytesize - 2), scope)
         end
+        if arrow = top_level_arrow(text)
+          input = text.byte_slice(0, arrow).strip
+          output = text.byte_slice(arrow + 2, text.bytesize - arrow - 2)
+          inputs = split_top_level(input, ',').map { |part| resolve(part, scope) }
+          return @types.proc_type(inputs + [resolve(output, scope)])
+        end
+        union_parts = split_top_level(text, '|')
+        return @types.union(union_parts.map { |part| resolve(part, scope) }) if union_parts.size > 1
         if text.ends_with?('?')
           return @types.union([resolve(text.rchop('?'), scope), @types.named("Nil")])
         end
@@ -563,23 +640,61 @@ module Facet
         end
         if text.starts_with?('{') && text.ends_with?('}')
           inside = text.byte_slice(1, text.bytesize - 2)
-          return @types.tuple(split_top_level(inside, ',').map { |part| resolve(part, scope) })
+          entries = split_top_level(inside, ',')
+          if !entries.empty? && entries.all? { |entry| entry.matches?(/\A\w+\s*:/) }
+            names = entries.map { |entry| entry.split(':', 2).first.strip }
+            values = entries.map { |entry| resolve(entry.split(':', 2).last, scope) }
+            return @types.named_tuple(values, names)
+          end
+          return @types.tuple(entries.map { |part| resolve(part, scope) })
         end
-        union_parts = split_top_level(text, '|')
-        return @types.union(union_parts.map { |part| resolve(part, scope) }) if union_parts.size > 1
         if open = text.index('(')
           if text.ends_with?(')')
             name = text.byte_slice(0, open)
             inside = text.byte_slice(open + 1, text.bytesize - open - 2)
             args = split_top_level(inside, ',').map { |part| resolve(part, scope) }
             resolved_name = resolve_name(name, scope)
+            if @aliases.has_key?(resolved_name)
+              target = resolve_alias(resolved_name)
+              return target if target == @types.error
+              resolved_name = @types[target].name || resolved_name
+            end
             return @types.proc_type(args) if resolved_name == "Proc"
-            return @types.named(resolved_name, args)
+            return @types.tuple(args) if resolved_name == "Tuple"
+            return @types.union(args) if resolved_name == "Union"
+            return named_type(resolved_name, args)
           end
         end
         name = resolve_name(text, scope)
-        return @types.type_parameter(name) if @type_parameters.includes?(name) || (!@definitions.has_key?(name) && name.size == 1 && name[0].uppercase?)
-        @types.named(name)
+        return resolve_alias(name) if @aliases.has_key?(name)
+        return @types.type_parameter(name) if @type_parameters.includes?(name) || (@alias_stack.empty? && !@definitions.has_key?(name) && name.size == 1 && name[0].uppercase?)
+        named_type(name)
+      end
+
+      private def named_type(name : String, arguments : Array(TypeId) = [] of TypeId) : TypeId
+        if !@alias_stack.empty? && !@definitions.has_key?(name) && !TypeStore::BUILTIN_NAMES.includes?(name)
+          @unresolved_aliases.concat(@alias_stack)
+          return @types.error
+        end
+        @types.named(name, arguments)
+      end
+
+      private def resolve_alias(name : String) : TypeId
+        if @alias_stack.includes?(name)
+          @alias_cycles.concat(@alias_stack)
+          return @types.error
+        end
+        @alias_stack << name
+        caller_parameters = @type_parameters
+        @type_parameters = Set(String).new
+        begin
+          target, scope = @aliases[name]
+          result = resolve(target, scope)
+          @alias_cycles.includes?(name) || @unresolved_aliases.includes?(name) ? @types.error : result
+        ensure
+          @alias_stack.pop
+          @type_parameters = caller_parameters
+        end
       end
 
       private def wrapped_in_parentheses?(text : String) : Bool
@@ -593,20 +708,42 @@ module Facet
         depth == 0
       end
 
+      private def top_level_arrow(text : String) : Int32?
+        depth = 0
+        text.to_slice.each_with_index do |byte, index|
+          case byte
+          when '('.ord, '['.ord, '{'.ord then depth += 1
+          when ')'.ord, ']'.ord, '}'.ord then depth -= 1
+          when '-'.ord
+            return index if depth == 0 && text.to_slice[index + 1]? == '>'.ord
+          end
+        end
+        nil
+      end
+
       private def resolve_name(name : String, scope : String) : String
         normalized = name.strip.lchop("::")
-        return normalized if name.starts_with?("::") || normalized.includes?("::")
+        scope = "" if name.starts_with?("::")
         parts = scope.split("::")
         until parts.empty?
           candidate = "#{parts.join("::")}::#{normalized}"
           return candidate if @definitions.has_key?(candidate)
           parts.pop
         end
+        if normalized.includes?("::")
+          head, tail = normalized.split("::", 2)
+          resolved_head = resolve_name(head, scope)
+          if @aliases.has_key?(resolved_head)
+            resolved_head = @types[resolve_alias(resolved_head)].name || resolved_head
+          end
+          return "#{resolved_head}::#{tail}"
+        end
         normalized
       end
 
       private def split_top_level(text : String, separator : Char) : Array(String)
         values = [] of String
+        return values if text.strip.empty?
         depth = 0
         start = 0
         text.each_char_with_index do |char, index|
@@ -632,15 +769,26 @@ module Facet
         @constants = [] of IndexedConstantDecl
         @includes = [] of IndexedInclude
         @macros = Set(String).new
+        @aliases = [] of IndexedAliasDecl
         @overload_ordinals = Hash(String, Int32).new(0)
       end
 
       def index : SemanticFileIndex
         walk(@tree.root, "")
-        SemanticFileIndex.new(@revision, @types, @methods, @constants, @includes, @macros)
+        SemanticFileIndex.new(@revision, @types, @methods, @constants, @includes, @macros, @aliases)
       end
 
       private def walk(node : SyntaxNode, scope : String) : Nil
+        if node.kind == NodeKind::Alias
+          name = node.name
+          target = node.child(1)
+          if name && target
+            qualified = qualify(scope, name)
+            index_namespaces(qualified, node.name_node || node)
+            @aliases << IndexedAliasDecl.new(name.split("::").last, qualified, scope, canonical_type_text(target), node.id, node.name_span || node.span, @generated)
+          end
+          return
+        end
         if type_kind = definition_kind(node.kind)
           name = node.name
           return unless name
@@ -748,8 +896,14 @@ module Facet
         if node.kind == NodeKind::Path && children.size == 2 && children.last.symbol_name == "class"
           return "(#{canonical_type_text(children.first)}).class"
         end
-        if node.kind == NodeKind::Binary && node.text.includes?('|')
-          return children.map { |child| canonical_type_text(child) }.join(" | ")
+        return "Nil" if node.kind == NodeKind::LiteralNil
+        if node.kind == NodeKind::Binary && node.operator_kind == TokenKind::Pipe
+          return children.map { |child| "(#{canonical_type_text(child)})" }.join(" | ")
+        end
+        if node.kind == NodeKind::ProcType
+          inputs = node.child(0).try(&.children).try { |args| args.map { |arg| canonical_type_text(arg) } } || [] of String
+          output = node.child(1).try { |type| canonical_type_text(type) } || "Nil"
+          return "Proc(#{(inputs + [output]).join(", ")})"
         end
         if node.kind == NodeKind::Binary && node.text.includes?('?') && children.size == 1
           return "#{canonical_type_text(children.first)}?"
