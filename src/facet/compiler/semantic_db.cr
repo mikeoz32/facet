@@ -645,6 +645,7 @@ module Facet
           name = node.name
           return unless name
           qualified = qualify(scope, name)
+          index_namespaces(qualified, node.name_node || node)
           superclass = node.superclass.try(&.text)
           generic_parameters = node.name_node.try do |name_node|
             if name_node.kind == NodeKind::TypeApply
@@ -668,7 +669,7 @@ module Facet
           return
         end
 
-        if node.kind == NodeKind::Def
+        if node.kind == NodeKind::Def || (node.kind == NodeKind::Fun && @types.any? { |type| type.qualified_name == scope && type.kind == SemanticDefinitionKind::Lib })
           index_method(node, scope)
           return
         end
@@ -678,7 +679,7 @@ module Facet
             if name = target.symbol_name
               if name.lchop("::").split("::").last[0]?.try(&.uppercase?)
                 qualified = qualify_constant(scope, name)
-                index_constant_namespaces(qualified, target)
+                index_namespaces(qualified, target)
                 @constants << IndexedConstantDecl.new(
                   "constant:#{qualified}",
                   qualified.split("::").last,
@@ -708,7 +709,7 @@ module Facet
       private def index_method(node : SyntaxNode, scope : String) : Nil
         raw_name = node.name || return
         scope = "Object" if scope.empty?
-        class_method = raw_name.starts_with?("self.")
+        class_method = node.kind == NodeKind::Fun || raw_name.starts_with?("self.")
         name = class_method ? raw_name.lchop("self.") : raw_name
         parameters = node.parameters
         min_arity = parameters.count do |parameter|
@@ -756,7 +757,7 @@ module Facet
         node.text
       end
 
-      private def index_constant_namespaces(qualified : String, target : SyntaxNode) : Nil
+      private def index_namespaces(qualified : String, target : SyntaxNode) : Nil
         parts = qualified.split("::")
         return if parts.size < 2
         (1...parts.size).each do |size|
@@ -796,7 +797,7 @@ module Facet
 
       private def qualify(scope : String, name : String) : String
         normalized = name.lchop("::")
-        return normalized if name.starts_with?("::") || normalized.includes?("::") || scope.empty?
+        return normalized if name.starts_with?("::") || scope.empty?
         "#{scope}::#{normalized}"
       end
     end

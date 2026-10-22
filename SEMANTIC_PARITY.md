@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 384 currently pass Facet exactly and 198 are
+Every contract is classified: 406 currently pass Facet exactly and 176 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 384 contracts. It includes bare zero-argument
+The current exact baseline is 406 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -47,6 +47,28 @@ following the implicit `Object` superclass. The two captured constructor-block
 examples now infer their exact upstream type with complete snapshots, but stay
 classified as injected-primitives because the portable gate never promotes a
 contract carrying that upstream capture flag.
+Explicit instance-variable reads (`object.@value`) use the receiver's field
+types, including inherited fields and unions of separately specialized generic
+receivers. Missing field types remain unknown without undefined-method errors;
+dedicated instance-variable error diagnostics remain deferred.
+Library `fun` declarations participate in method lookup with their declared
+parameter and return types, native-name aliases, and revision-safe bindings.
+Relative type declaration paths stay inside their lexical namespace, creating
+implicit parent modules as needed; leading `::` retains absolute declarations.
+Method and constructor calls validate positional/named argument shape, declared
+argument types across union dispatch, and required or unexpected blocks before
+body inference. Diagnostics use stable codes (`facet.wrong_arity`,
+`facet.argument_mismatch`, `facet.argument_type_mismatch`, `facet.block_required`,
+and `facet.unexpected_block`). A subclass initializer set hides parent
+initializers; synthesized `new` calls bind to the selected initializer.
+Errors inside instantiated methods and initializers are reported at the calling
+expression, including repeated calls to the same erroneous specialization.
+Uncalled method bodies do not publish these errors. Signature edits invalidate
+the results. Unknown arguments, unresolved restrictions, module-valued arguments,
+missing providers, generated signatures without source handles, and unresolved
+argument splats remain conservative rather than producing conclusive mismatches.
+The captured diagnostic oracle now also classifies upstream arity, argument-type,
+and block errors; exact diagnostic codes and source positions remain required.
 Constants are indexed as first-class semantic definitions and lazily inferred
 without leaking top-level local variables into their value environment. Lookup
 covers nested and absolute paths, lexical method scope, superclass and included

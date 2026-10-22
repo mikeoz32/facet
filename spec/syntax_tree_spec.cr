@@ -116,6 +116,15 @@ describe Facet::Compiler::SyntaxTree do
     named.name_span.try { |span| source.text.byte_slice(span.start, span.length) }.should eq("cached")
   end
 
+  it "exposes the method name for receiver calls with bare arguments" do
+    source = Facet::Compiler::Source.new("client.write 'x'")
+    tree = Facet::Compiler::SyntaxTree.new(Facet::Compiler::Parser.new(source).parse_file)
+    call = tree.nodes(Facet::Compiler::NodeKind::Call).first
+    call.call_name.should eq("write")
+    call.receiver.try(&.symbol_name).should eq("client")
+    call.arguments.map(&.text).should eq(["'x'"])
+  end
+
   it "delegates call roles through blocks and member access" do
     source = Facet::Compiler::Source.new(<<-CRYSTAL)
       items.each(limit: 1) do |item|

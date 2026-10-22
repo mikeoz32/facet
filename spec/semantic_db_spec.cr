@@ -19,6 +19,248 @@ private def semantic_fixture(
 end
 
 describe Facet::Compiler::SemanticDb do
+  {
+    "missing positional argument"             => {"def target(x); x; end\ntarget", "facet.wrong_arity"},
+    "extra positional argument"               => {"def target; 1; end\ntarget(1)", "facet.wrong_arity"},
+    "wrong argument type"                     => {"def target(x : Int32); x; end\ntarget('x')", "facet.argument_type_mismatch"},
+    "partially incompatible union"            => {"def target(x : Int32); x; end\ntarget(1 || 'x')", "facet.argument_type_mismatch"},
+    "missing block"                           => {"def target; yield; end\ntarget", "facet.block_required"},
+    "unexpected block"                        => {"def target; 1; end\ntarget {}", "facet.unexpected_block"},
+    "unknown named argument"                  => {"def target(x); x; end\ntarget(y: 1)", "facet.argument_mismatch"},
+    "duplicate positional and named argument" => {"def target(x, y = 2); x; end\ntarget(1, x: 2)", "facet.argument_mismatch"},
+    "missing constructor argument"            => {"class Target; def initialize(x); end; end\nTarget.new", "facet.wrong_arity"},
+    "extra default constructor argument"      => {"class Target; end\nTarget.new(1)", "facet.wrong_arity"},
+    "wrong constructor type"                  => {"class Target; def initialize(@x : Int32); end; end\nTarget.new('x')", "facet.argument_type_mismatch"},
+    "child constructor hides parent arity"    => {"class Parent; def initialize(x); end; end\nclass Target < Parent; def initialize(x, y); end; end\nTarget.new(1)", "facet.wrong_arity"},
+    "inherited constructor arity"             => {"class Parent; def initialize(x); end; end\nclass Target < Parent; end\nTarget.new", "facet.wrong_arity"},
+  }.each do |description, contract|
+    it "diagnoses invalid calls: #{description}" do
+      _, snapshot, _, _ = semantic_fixture({"/workspace/main.cr" => contract[0]}, "/workspace/main.cr", ["/workspace"], nil)
+      snapshot.diagnostics.map(&.code).should eq([contract[1]])
+    end
+  end
+
+  {
+    "default and named arguments" => "def target(x : Int32 = 1, y : Char = 'x'); x; end\ntarget(y: 'y')",
+    "union overload dispatch"     => "def target(x : Int32); x; end\ndef target(x : Char); x; end\ntarget(1 || 'x')",
+    "typed splat"                 => "def target(*args : Int32); 1; end\ntarget(1, 2, 3)",
+    "named-only argument"         => "def target(*, x : Int32); x; end\ntarget(x: 1)",
+    "double splat"                => "def target(**args); 1; end\ntarget(x: 1, y: 'x')",
+    "generic restriction"         => "def target(x : T) forall T; x; end\ntarget(1)",
+    "explicit block parameter"    => "def target(&block); 1; end\ntarget {}",
+  }.each do |description, source|
+    it "retains valid calls: #{description}" do
+      _, snapshot, _, _ = semantic_fixture({"/workspace/main.cr" => source}, "/workspace/main.cr", ["/workspace"], nil)
+      snapshot.diagnostics.should be_empty
+    end
+  end
+
+  it "relocates nested call errors to the instantiating call and rejects strict snapshots" do
+    semantic, _, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def inner(x : Int32); x; end
+        def middle; inner('x'); end
+        def outer; middle; end
+        outer
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    snapshot = semantic.analyze([ids["/workspace/main.cr"]], Facet::Compiler::SemanticMode::Strict)
+    snapshot.success?.should be_false
+    snapshot.diagnostics.map(&.code).should eq(["facet.argument_type_mismatch"])
+    diagnostic = snapshot.diagnostics.first
+    queries.syntax(ids["/workspace/main.cr"]).position_at(diagnostic.span.start).line.should eq(3)
+  end
+
+  it "does not publish argument errors from uncalled method bodies" do
+    _, snapshot, _, _ = semantic_fixture({
+      "/workspace/main.cr" => "def inner(x : Int32); x; end\ndef unused; inner('x'); end\n1",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    snapshot.diagnostics.should be_empty
+  end
+
+  it "reports initializer body failures at the new call" do
+    _, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def consume(x : Int32); x; end
+        class Target
+          def initialize; consume('x'); end
+        end
+        Target.new
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    snapshot.diagnostics.map(&.code).should eq(["facet.argument_type_mismatch"])
+    queries.syntax(ids["/workspace/main.cr"]).position_at(snapshot.diagnostics.first.span.start).line.should eq(4)
+  end
+
+  it "binds synthesized new calls to the selected initializer" do
+    _, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "class Target; def initialize(x : Int32); end; end\nTarget.new(1)",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    call = tree.root.children.last.children.last
+    callee = call.callee.not_nil!
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], callee.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    snapshot.definition_of(ref).not_nil!.name.should eq("initialize")
+  end
+
+  it "requires typed blocks without a yield expression" do
+    _, snapshot, _, _ = semantic_fixture({
+      "/workspace/main.cr" => "def target(&block : -> Int32); block.call; end\ntarget",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    snapshot.diagnostics.map(&.code).should eq(["facet.block_required"])
+  end
+
+  it "does not reject unknown argument types" do
+    _, snapshot, _, _ = semantic_fixture({
+      "/workspace/main.cr" => "def target(x : Int32); x; end\ntarget(unresolved)",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    snapshot.diagnostics.should be_empty
+  end
+
+  it "selects named-argument overloads by applicable parameter names" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "def target(x : Int32); 1; end\ndef target(y : Int32); 'x'; end\ntarget(y: 1)",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    call = queries.syntax(ids["/workspace/main.cr"]).root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], call.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Char")
+    snapshot.diagnostics.should be_empty
+  end
+
+  it "clears call errors after a provider signature changes" do
+    semantic, first, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "require \"./api\"\nService.new.fetch('x')",
+      "/workspace/api.cr"  => "class Service; def fetch(x : Int32); x; end; end",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    first.diagnostics.map(&.code).should eq(["facet.argument_type_mismatch"])
+    queries.update(ids["/workspace/api.cr"], "class Service; def fetch(x : Char); x; end; end")
+    second = semantic.analyze([ids["/workspace/main.cr"]], Facet::Compiler::SemanticMode::Strict)
+    second.diagnostics.should be_empty
+    second.success?.should be_true
+  end
+
+  it "reports invalid method specializations at every call site" do
+    _, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        def inner(x : Int32); x; end
+        def wrapper(x); inner('x'); 1; end
+        wrapper(1)
+        wrapper(2)
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    snapshot.diagnostics.map(&.code).should eq(["facet.argument_type_mismatch", "facet.argument_type_mismatch"])
+    snapshot.diagnostics.map { |diagnostic| queries.syntax(ids["/workspace/main.cr"]).position_at(diagnostic.span.start).line }.should eq([2, 3])
+  end
+
+  it "does not reject calls whose providers are incomplete" do
+    _, snapshot, _, _ = semantic_fixture({
+      "/workspace/main.cr" => "require \"./missing\"\ndef target(x : Int32); x; end\ntarget('x')",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    snapshot.diagnostics.map(&.code).should eq(["facet.missing_require"])
+  end
+
+  it "qualifies relative type declaration paths inside their lexical namespace" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Outer::Item
+          def value; 1; end
+        end
+        module Local
+          class Outer::Item
+            def value; 'x'; end
+          end
+          class ::Outer::Other
+            def value; true; end
+          end
+        end
+        {Outer::Item.new.value, Local::Outer::Item.new.value, Outer::Other.new.value, Local::Outer}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Char, Bool, Local::Outer:Module)")
+    snapshot.diagnostics.should be_empty
+  end
+
+  it "indexes library functions and binds calls to their declared return types" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        lib Foreign
+          fun read : Char
+          fun write(value : Char) : Int32
+        end
+        written = Foreign.write 'x'
+        {Foreign.read, Foreign.write('x'), written}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Char, Int32, Int32)")
+    result.children.first(2).each do |call|
+      call_ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], call.callee.not_nil!.id, queries.manager.revision(ids["/workspace/main.cr"]))
+      definition = snapshot.definition_of(call_ref).not_nil!
+      definition.owner.should eq("Foreign")
+      definition.node.should_not be_nil
+    end
+    snapshot.diagnostics.should be_empty
+  end
+
+  it "refreshes aliased library function types and bindings after required-file edits" do
+    semantic, first, ids, queries = semantic_fixture({
+      "/workspace/main.cr"    => "require \"./foreign\"\nAPI::Foreign.read",
+      "/workspace/foreign.cr" => "module API\nlib Foreign\nfun read = native_read : Char\nend\nend",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    call = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], call.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    callee_ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], call.callee.not_nil!.id, ref.revision)
+    semantic.types.display(first.type_of(ref).not_nil!).should eq("Char")
+    old_definition = first.definition_of(callee_ref).not_nil!
+    queries.update(ids["/workspace/foreign.cr"], "module API\nlib Foreign\nfun read = native_read : Int32\nend\nend")
+    second = semantic.analyze([ids["/workspace/main.cr"]])
+    semantic.types.display(second.type_of(ref).not_nil!).should eq("Int32")
+    second.definition_of(callee_ref).not_nil!.node.not_nil!.revision.should_not eq(old_definition.node.not_nil!.revision)
+    second.diagnostics.should be_empty
+  end
+
+  it "infers explicit instance variable reads across inheritance, unions and generic receivers" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => <<-CR,
+        class Box(T)
+          def initialize(@value : T); end
+        end
+        class Parent
+          def initialize(@value : Int32); end
+        end
+        class Child < Parent; end
+        integer = Box(Int32).new(1)
+        character = Box(Char).new('x')
+        child = Child.new(2)
+        mixed = integer || character
+        {integer.@value, character.@value, child.@value, mixed.@value}
+      CR
+    }, "/workspace/main.cr", ["/workspace"], nil)
+
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    semantic.types.display(snapshot.type_of(ref).not_nil!).should eq("Tuple(Int32, Char, Int32, (Char | Int32))")
+    snapshot.diagnostics.should be_empty
+  end
+
+  it "keeps missing explicit instance variables unknown without method diagnostics" do
+    semantic, snapshot, ids, queries = semantic_fixture({
+      "/workspace/main.cr" => "class Present; end\nPresent.new.@missing",
+    }, "/workspace/main.cr", ["/workspace"], nil)
+    tree = queries.syntax(ids["/workspace/main.cr"])
+    result = tree.root.children.last.children.last
+    ref = Facet::Compiler::NodeRef.new(ids["/workspace/main.cr"], result.id, queries.manager.revision(ids["/workspace/main.cr"]))
+    snapshot.type_of(ref).should eq(semantic.types.unknown)
+    snapshot.diagnostics.should be_empty
+  end
+
   it "analyzes the require-reachable project, dependencies, and prelude" do
     semantic, snapshot, ids, _ = semantic_fixture({
       "/workspace/main.cr"        => %(require "./models/user"\nuser = User.new\nuser.name\nuser.missing\n),

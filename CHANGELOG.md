@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Validate method and constructor argument shape, argument types, and block
+  requirements with coded diagnostics. Preserve unknown/incomplete-call behavior,
+  hide parent initializer sets when overridden, and bind synthesized constructors
+  to their selected initializer. Propagate instantiated-body errors to every call
+  site without letting cached return types hide diagnostics. Upstream semantic
+  parity increases to 406/582, with all 176 deferred contracts classified.
+- Preserve lexical namespaces for relative qualified type declarations and index
+  their implicit parent modules. Semantic parity now covers 390/582 contracts.
+- Index library function declarations for semantic lookup, declared result types,
+  native-name aliases, and revision-safe navigation. Fix method names for receiver
+  calls with bare arguments. Semantic parity now covers 389/582 contracts.
+- Infer explicit instance-variable reads (`object.@value`) using receiver-specific
+  field types across inheritance, unions, and generic instantiations. The semantic
+  corpus now matches 387 contracts with 195 explicitly deferred.
 - Expanded the committed Crystal 1.21 semantic corpus with the official
   constant suite: 582 contracts from 449 examples across nine suites, with 349
   exact matches and all 233 remaining contracts explicitly classified.

@@ -504,6 +504,23 @@ module Facet
       private def infer_binary(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         if receiver = node.receiver
           receiver_type = infer(receiver, file_id, scope, env, record)
+          if field = node.child(1)
+            if field.kind == NodeKind::InstanceVar
+              members = receiver_members(receiver_type)
+              return @types.unknown unless members
+              values = members.map do |instance_type, class_method|
+                owner = @types[instance_type].name
+                if owner && !class_method
+                  instance_variable_type(owner, field.symbol_name || field.text, instance_type) || @types.unknown
+                else
+                  @types.unknown
+                end
+              end
+              value = @types.union(values)
+              remember(field, file_id, value) if record
+              return value
+            end
+          end
           return resolve_call(node, receiver_type, file_id, scope, env, record)
         end
         children = semantic_children(node)
@@ -787,7 +804,35 @@ module Facet
           end
           if name == "new"
             instances.each do |instance_type|
+              owner = @types[instance_type].name
+              if owner && call_facts_complete? && (@type_definitions.has_key?(owner) || owner == "Reference") && lookup_methods(owner, "new", true).empty?
+                initializers = constructor_candidates(owner)
+                if initializers.empty?
+                  unless node.arguments.empty?
+                    report_semantic_error(call_name_node(node), file_id, "facet.wrong_arity", "wrong number of arguments for '#{owner}.new' (given #{arguments.size}, expected 0)")
+                    return @types.error
+                  end
+                elsif invalid_call?(initializers, node, arguments, instance_type, file_id, "#{owner}.new")
+                  return @types.error
+                end
+              end
+              diagnostic_count = @deferred_diagnostics.size
               infer_initializer_effects(node, instance_type, arguments, block_return)
+              if @deferred_diagnostics.size > diagnostic_count
+                diagnostics = @deferred_diagnostics[diagnostic_count..]
+                discard_deferred_diagnostics(diagnostic_count)
+                diagnostics.each do |code, message|
+                  report_semantic_error(call_name_node(node), file_id, code, message)
+                end
+                return @types.error
+              end
+              if record && owner
+                candidates = constructor_candidates(owner)
+                unless candidates.empty?
+                  selected = select_overloads(candidates, node, arguments, instance_type).first?.try(&.[0])
+                  bind(node.callee || node, file_id, selected.id) if selected
+                end
+              end
             end
           end
           return @types.union(instances)
@@ -806,6 +851,7 @@ module Facet
           if candidates.empty?
             missing << type_name
           else
+            return @types.error if invalid_call?(candidates, node, arguments, instance_type, file_id, name)
             applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
             selections = select_overloads(
               applicable.empty? ? candidates : applicable,
@@ -835,7 +881,7 @@ module Facet
                 diagnostics = @deferred_diagnostics[diagnostic_count..]
                 discard_deferred_diagnostics(diagnostic_count)
                 diagnostics.each do |code, message|
-                  emit_semantic_error(node.callee || node, file_id, code, message)
+                  report_semantic_error(call_name_node(node), file_id, code, message)
                 end
                 return @types.error
               end
@@ -911,7 +957,7 @@ module Facet
         parameters = @type_parameters[owner]? || [] of String
         return instance_type if parameters.empty? || !instance.arguments.empty?
         bindings = {} of String => TypeId
-        initializers = lookup_methods(owner, "initialize", false).select do |candidate|
+        initializers = constructor_candidates(owner).select do |candidate|
           arity_matches?(candidate, arguments.size)
         end
         initializers.each do |initializer|
@@ -944,17 +990,23 @@ module Facet
       ) : Nil
         owner = @types[instance_type].name
         return unless owner
-        candidates = lookup_methods(owner, "initialize", false)
+        candidates = constructor_candidates(owner)
         return if candidates.empty?
         applicable = candidates.select { |candidate| arity_matches?(candidate, arguments.size) }
         select_overloads(applicable.empty? ? candidates : applicable, call, arguments, instance_type).each do |definition, aligned|
-          analyze_method(
-            definition,
-            record: false,
-            argument_types: aligned,
-            self_type: instance_type,
-            block_return_type: block_return
-          )
+          next if @inference_stack.includes?(definition.id)
+          @inference_stack << definition.id
+          begin
+            analyze_method(
+              definition,
+              record: false,
+              argument_types: aligned,
+              self_type: instance_type,
+              block_return_type: block_return
+            )
+          ensure
+            @inference_stack.delete(definition.id)
+          end
         end
       end
 
@@ -1111,6 +1163,7 @@ module Facet
           end
         end
         @inference_stack << definition.id
+        diagnostic_count = @deferred_diagnostics.size
         inferred = analyze_method(
           definition,
           record: false,
@@ -1121,6 +1174,9 @@ module Facet
         )
         @inference_stack.delete(definition.id)
         return @types.unknown if inferred == @types.error
+        # A cached successful return must not swallow errors on later calls to
+        # the same specialization. Revisit erroneous bodies at each call site.
+        return inferred if @deferred_diagnostics.size > diagnostic_count
         if parameter_specific || receiver_specific
           @specialized_returns[cache_key] = inferred
         elsif inferred != @types.unknown
@@ -1161,7 +1217,8 @@ module Facet
             values << method if method.name == name && method.class_method == class_method
           end
           if superclass = @superclasses[current]?
-            queue << resolve_type_name(superclass, current)
+            resolved = resolve_type_text(superclass, current)
+            queue << (@types[resolved].name || resolve_type_name(superclass, current))
           elsif definition_id = @type_definitions[current]?
             definition = @definitions[definition_id]
             if definition.kind == SemanticDefinitionKind::Class && current != "Object"
@@ -1251,6 +1308,123 @@ module Facet
         return false if arity < definition.min_arity
         max = definition.max_arity
         max.nil? || arity <= max
+      end
+
+      # A subclass declaring initialize replaces the inherited constructor set.
+      private def constructor_candidates(owner : String) : Array(SemanticDefinition)
+        candidates = lookup_methods(owner, "initialize", false)
+        nearest = candidates.first?.try(&.owner)
+        candidates.select { |candidate| candidate.owner == nearest }
+      end
+
+      private def call_name_node(call : SyntaxNode) : SyntaxNode
+        target = call.callee || call
+        target.kind == NodeKind::Binary ? (target.callee || target) : target
+      end
+
+      private def call_shape_matches?(candidate : SemanticDefinition, call : SyntaxNode) : Bool
+        parameters = method_parameters(candidate)
+        indexes = matched_parameter_indexes(candidate, call)
+        return false if indexes.any?(&.nil?)
+        supplied = Set(Int32).new
+        indexes.each do |index|
+          next unless index
+          parameter = parameters[index]
+          if parameter.kind == NodeKind::Param
+            return false if supplied.includes?(index)
+            supplied << index
+          end
+        end
+        parameters.each_with_index.all? do |parameter, index|
+          parameter.kind != NodeKind::Param || !parameter.value.nil? || supplied.includes?(index)
+        end
+      end
+
+      private def call_types_match?(
+        candidate : SemanticDefinition, call : SyntaxNode,
+        arguments : Array(TypeId), receiver_type : TypeId,
+      ) : Bool
+        indexes = matched_parameter_indexes(candidate, call)
+        arguments.each_with_index.all? do |actual, index|
+          parameter_index = indexes[index]?
+          next true unless parameter_index
+          expected = candidate.parameter_types[parameter_index]? || @types.unknown
+          expected = substitute_type(expected, receiver_type, candidate.owner || "")
+          type_compatible?(actual, effective_parameter_type(expected, receiver_type))
+        end
+      end
+
+      private def invalid_call?(
+        candidates : Array(SemanticDefinition), call : SyntaxNode,
+        arguments : Array(TypeId), receiver_type : TypeId, file_id : FileId,
+        name : String,
+      ) : Bool
+        # Source recovery, missing providers and unexpanded argument lists cannot
+        # establish that every overload is inapplicable.
+        return false unless call_facts_complete?
+        return false if candidates.any? { |candidate| candidate.node.nil? }
+        return false if call.arguments.any? { |argument| {NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(argument.kind) }
+        candidates = collapse_redefinitions(candidates)
+        shaped = candidates.select { |candidate| call_shape_matches?(candidate, call) }
+        if shaped.empty?
+          named = call.arguments.any? { |argument| argument.kind == NodeKind::NamedArg }
+          code = named ? "facet.argument_mismatch" : "facet.wrong_arity"
+          expected = candidates.map do |candidate|
+            max = candidate.max_arity
+            max == candidate.min_arity ? candidate.min_arity.to_s : "#{candidate.min_arity}..#{max || "*"}"
+          end.uniq.join(" or ")
+          report_semantic_error(call_name_node(call), file_id, code, "wrong arguments for '#{name}' (given #{arguments.size}, expected #{expected})")
+          return true
+        end
+        has_block = call_has_block?(call)
+        blocked = shaped.select do |candidate|
+          has_block ? method_consumes_block?(candidate) : !method_requires_block?(candidate)
+        end
+        if blocked.empty?
+          code = has_block ? "facet.unexpected_block" : "facet.block_required"
+          report_semantic_error(call_name_node(call), file_id, code, has_block ? "'#{name}' does not accept a block" : "'#{name}' requires a block")
+          return true
+        end
+        variants = argument_variants(arguments)
+        return false if variants.all? { |variant| blocked.any? { |candidate| call_types_match?(candidate, call, variant, receiver_type) } }
+        # Preserve constant-as-type diagnostics, which are more specific than a
+        # failed overload restriction, and defer facts containing unknown types.
+        return false if blocked.any? { |candidate| !method_constant_type_reference(candidate).nil? }
+        return false if arguments.any? { |argument| argument == @types.error || contains_unknown_type?(argument) }
+        return false if arguments.any? { |argument| open_runtime_type?(argument) }
+        return false if blocked.any? do |candidate|
+                          candidate.parameter_types.any? { |type_id| uncertain_restriction?(type_id) }
+                        end
+        candidate = blocked.first
+        indexes = matched_parameter_indexes(candidate, call)
+        mismatch = arguments.each_index.find do |index|
+          parameter_index = indexes[index]?
+          next false unless parameter_index
+          expected = candidate.parameter_types[parameter_index]? || @types.unknown
+          expected = substitute_type(expected, receiver_type, candidate.owner || "")
+          !type_compatible?(arguments[index], effective_parameter_type(expected, receiver_type))
+        end
+        location = mismatch.try { |index| call.arguments[index]?.try { |argument| argument.value || argument } } || call_name_node(call)
+        report_semantic_error(location, file_id, "facet.argument_type_mismatch", "no overload of '#{name}' accepts (#{arguments.map { |argument| @types.display(argument) }.join(", ")})")
+        true
+      end
+
+      private def call_facts_complete? : Bool
+        !@reasons.any? { |reason| {SemanticCompletenessReason::ParseRecovery, SemanticCompletenessReason::MissingRequire, SemanticCompletenessReason::MacroExpansion}.includes?(reason) }
+      end
+
+      private def uncertain_restriction?(type_id : TypeId) : Bool
+        type = @types[type_id]
+        return true if type.kind == SemanticTypeKind::Nominal && type.name &&
+                       !BUILTIN_TYPE_NAMES.includes?(type.name) && !@type_definitions.has_key?(type.name)
+        type.arguments.any? { |argument| uncertain_restriction?(argument) }
+      end
+
+      private def open_runtime_type?(type_id : TypeId) : Bool
+        type = @types[type_id]
+        definition_id = type.name.try { |owner| @type_definitions[owner]? }
+        return true if definition_id.try { |id| @definitions[id].kind == SemanticDefinitionKind::Module }
+        type.arguments.any? { |argument| open_runtime_type?(argument) }
       end
 
       private def select_overloads(
@@ -1366,6 +1540,7 @@ module Facet
       end
 
       private def method_requires_block?(definition : SemanticDefinition) : Bool
+        return true if @types[definition.block_type].kind == SemanticTypeKind::Proc
         node_ref = definition.node
         return false unless node_ref
         tree = @trees[node_ref.file_id]?
@@ -1636,6 +1811,9 @@ module Facet
         return actual.arguments.all? { |member| type_compatible?(member, expected_id) } if actual.kind == SemanticTypeKind::Union
         expected = @types[expected_id]
         return true if expected.kind == SemanticTypeKind::TypeParameter
+        if expected.kind == SemanticTypeKind::Nominal && expected.name == "Union"
+          return expected.arguments.any? { |member| type_compatible?(actual_id, member) }
+        end
         return expected.arguments.any? { |member| type_compatible?(actual_id, member) } if expected.kind == SemanticTypeKind::Union
         if actual.kind == expected.kind && actual.name == expected.name && actual.arguments.size == expected.arguments.size
           return actual.arguments.zip(expected.arguments).all? do |actual_argument, expected_argument|
@@ -1643,6 +1821,13 @@ module Facet
           end
         end
         return false unless actual.kind == SemanticTypeKind::Nominal && expected.kind == SemanticTypeKind::Nominal
+        if actual_name = actual.name
+          if definition_id = @type_definitions[actual_name]?
+            definition = @definitions[definition_id]
+            return true if expected.name == "Object"
+            return true if expected.name == "Reference" && definition.kind == SemanticDefinitionKind::Class
+          end
+        end
         return true if builtin_subtype?(actual.name, expected.name)
         !matching_ancestor_type(actual_id, expected.name || "").nil?
       end
@@ -2069,7 +2254,7 @@ module Facet
 
       private def qualify(scope : String, name : String) : String
         normalized = name.lchop("::")
-        return normalized if scope.empty? || name.starts_with?("::") || normalized.includes?("::")
+        return normalized if scope.empty? || name.starts_with?("::")
         "#{scope}::#{normalized}"
       end
     end

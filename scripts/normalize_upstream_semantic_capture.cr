@@ -70,6 +70,14 @@ cases = raw.map do |contract|
                       "facet.constant_cycle"
                     elsif message.try(&.includes?("is not a type, it's a constant"))
                       "facet.constant_as_type"
+                    elsif message.try(&.starts_with?("wrong number of arguments"))
+                      "facet.wrong_arity"
+                    elsif message.try(&.starts_with?("expected argument #"))
+                      "facet.argument_type_mismatch"
+                    elsif message.try(&.includes?("is expected to be invoked with a block"))
+                      "facet.block_required"
+                    elsif message.try(&.includes?("is not expected to be invoked with a block"))
+                      "facet.unexpected_block"
                     end
                   end
   SemanticContractCase.new(

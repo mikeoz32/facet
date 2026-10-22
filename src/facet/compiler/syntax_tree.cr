@@ -444,7 +444,9 @@ module Facet
       end
 
       def call_name : String?
-        callee.try(&.symbol_name)
+        target = callee
+        return nil unless target
+        target.kind == NodeKind::Binary && target.receiver ? target.call_name : target.symbol_name
       end
 
       def arguments : Array(SyntaxNode)
