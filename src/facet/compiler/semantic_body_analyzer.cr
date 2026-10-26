@@ -240,6 +240,8 @@ module Facet
                     @types.named("Range", [elements.empty? ? @types.unknown : @types.union(elements)])
                   when NodeKind::If, NodeKind::Unless, NodeKind::Ternary
                     infer_conditional(node, file_id, scope, env, record)
+                  when NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Enum, NodeKind::Lib
+                    @types.named("Nil")
                   when NodeKind::While, NodeKind::Until
                     infer_loop(node, file_id, scope, env, record)
                   when NodeKind::Call, NodeKind::CallWithBlock
@@ -936,6 +938,7 @@ module Facet
                   return @types.error
                 end
               end
+              return @types.error if reject_abstract_instantiation(node, file_id, instance_type)
               diagnostic_count = @deferred_diagnostics.size
               infer_initializer_effects(node, instance_type, arguments, block_return)
               if @deferred_diagnostics.size > diagnostic_count
@@ -954,6 +957,9 @@ module Facet
                 end
               end
             end
+          end
+          if name == "allocate"
+            return @types.error if instances.any? { |instance_type| reject_abstract_instantiation(node, file_id, instance_type) }
           end
           return @types.union(instances)
         end
@@ -1439,6 +1445,16 @@ module Facet
         candidates = lookup_methods(owner, "initialize", false)
         nearest = candidates.first?.try(&.owner)
         candidates.select { |candidate| candidate.owner == nearest }
+      end
+
+      private def reject_abstract_instantiation(call : SyntaxNode, file_id : FileId, instance_type : TypeId) : Bool
+        owner = @types[instance_type].name
+        return false unless owner
+        definition = @type_definitions[owner]?.try { |id| @definitions[id]? }
+        is_abstract = definition.try(&.abstract) || {"Value", "Number", "Int", "Float", "Signed", "Unsigned"}.includes?(owner)
+        return false unless is_abstract
+        report_semantic_error(call_name_node(call), file_id, "facet.abstract_instantiation", "can't instantiate abstract type '#{@types.display(instance_type)}'")
+        true
       end
 
       private def call_name_node(call : SyntaxNode) : SyntaxNode

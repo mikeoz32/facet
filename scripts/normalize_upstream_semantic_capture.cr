@@ -78,6 +78,18 @@ cases = raw.map do |contract|
                       "facet.block_required"
                     elsif message.try(&.includes?("is not expected to be invoked with a block"))
                       "facet.unexpected_block"
+                    elsif message.try(&.starts_with?("superclass mismatch"))
+                      "facet.superclass_mismatch"
+                    elsif message.try(&.starts_with?("can't instantiate abstract"))
+                      "facet.abstract_instantiation"
+                    elsif message.try { |text| text.matches?(/type vars? must be/) || text.includes?("is not a generic class") }
+                      "facet.generic_parameter_mismatch"
+                    elsif message.try { |text| text.starts_with?("can't declare") && text.includes?("dynamically") }
+                      "facet.dynamic_type_declaration"
+                    elsif message.try { |text| text.matches?(/is not a (class|struct|module), it's a/) }
+                      source_line = contract.source.lines[(contract.error_line || 1) - 1]? || ""
+                      prefix = source_line[0, Math.min((contract.error_column || 1) - 1, source_line.size)]
+                      prefix.matches?(/\b(class|struct)\s+[^;<>]+<[^;]*\z/) ? "facet.invalid_superclass" : "facet.type_kind_mismatch"
                     end
                   end
   SemanticContractCase.new(

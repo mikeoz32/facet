@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 408 currently pass Facet exactly and 174 are
+Every contract is classified: 425 currently pass Facet exactly and 157 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 408 contracts. It includes bare zero-argument
+The current exact baseline is 425 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -118,6 +118,23 @@ Structurally growing facts widen to unknown after 16 passes and mark the snapsho
 incomplete. Speculative passes do not populate method return caches or publish
 call diagnostics. Required-provider edits invalidate the resulting loop types.
 The parser also accepts loop expressions in assignment positions.
+
+Declaration validation detects incompatible class/struct/module reopenings,
+changes to generic parameter names, arity or splat positions, superclass changes,
+undefined or invalid superclasses, inheritance cycles and class-like declarations
+inside dynamic control flow. Explicit declarations follow source/require order;
+conflicts carry a related location for the previous declaration. Implicit
+namespaces reuse already-declared types. The first declaration retains canonical
+type facts for tolerant analysis, and missing providers suppress conclusive
+undefined-superclass findings.
+Abstractness is retained across reopenings and provider edits. Synthesized `new`
+and `allocate` reject abstract types, including aliases, generic receivers and
+the builtin abstract roots; argument validation still takes precedence over
+abstract-instantiation diagnostics. Explicit user factories retain normal method
+dispatch. These checks use `facet.type_kind_mismatch`,
+`facet.generic_parameter_mismatch`, `facet.superclass_mismatch`,
+`facet.invalid_superclass`, `facet.inheritance_cycle`,
+`facet.dynamic_type_declaration` and `facet.abstract_instantiation` codes.
 
 The current slice covers class construction/allocation, simple method return
 inference, generic receiver substitution, lexical assignments, unions,

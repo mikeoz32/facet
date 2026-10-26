@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Validate type declaration kinds, generic parameter shapes, superclass
+  compatibility, inheritance cycles and dynamic declarations. Preserve first
+  declaration facts in tolerant snapshots, order declarations through requires,
+  and attach related locations to conflicts. Track abstractness and reject
+  abstract construction/allocation after argument checks. The semantic baseline
+  now covers 425/582 contracts, with 157 explicitly deferred.
 - Add semantic `while`/`until` flow with loop-carried local inference, break-value
   results, next back edges, exit narrowing, nested-loop isolation and bounded
   widening. Treat `NoReturn` as the bottom of unions and stop unreachable

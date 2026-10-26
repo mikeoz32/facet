@@ -220,6 +220,7 @@ module Facet
       getter generated : Bool
       getter free_variables : Array(String)
       getter block_type : TypeId
+      getter abstract : Bool
 
       def initialize(
         @id : DefId,
@@ -238,6 +239,7 @@ module Facet
         @generated : Bool = false,
         @free_variables : Array(String) = [] of String,
         @block_type : TypeId = 0,
+        @abstract : Bool = false,
       )
       end
     end

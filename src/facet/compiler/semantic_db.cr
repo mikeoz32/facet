@@ -1,4 +1,5 @@
 require "set"
+require "./semantic_declaration_validator"
 
 module Facet
   module Compiler
@@ -22,7 +23,10 @@ module Facet
       superclass : String?,
       type_parameters : Array(String),
       generated : Bool,
-      implicit : Bool = false
+      implicit : Bool = false,
+      abstract : Bool = false,
+      dynamic : Bool = false,
+      parameter_shapes : Array(String) = [] of String
 
     record IndexedMethodDecl,
       key : String,
@@ -343,7 +347,9 @@ module Facet
         includes = Hash(String, Array(String)).new { |hash, key| hash[key] = [] of String }
         macro_names = Set(String).new
         alias_targets = {} of String => {String, String}
-        explicit_type_names = indexes.values.flat_map(&.types).reject(&.implicit).map(&.qualified_name).to_set
+        explicit_type_names = indexes.values.flat_map(&.types).reject(&.implicit).reject(&.dynamic).map(&.qualified_name).to_set
+        abstract_names = indexes.values.flat_map(&.types).select(&.abstract).reject(&.dynamic).map(&.qualified_name).to_set
+        declaration_order = DeclarationValidator.ordered_types(indexes, graph)
 
         object_type = @types.named("Object")
         object_id = definition_id("builtin:type:Object")
@@ -353,31 +359,36 @@ module Facet
           "Object",
           "Object",
           Span.new(0, 0),
-          object_type
+          object_type,
+          abstract: true
         )
         type_definitions["Object"] = object_id
 
-        indexes.each do |file_id, index|
+        declaration_order.each do |file_id, declaration|
           revision = @queries.manager.revision(file_id)
-          index.types.each do |declaration|
-            next if declaration.implicit && explicit_type_names.includes?(declaration.qualified_name)
-            type_id = @types.named(declaration.qualified_name)
-            id = definition_id("#{file_id}:#{declaration.key}")
-            definition = SemanticDefinition.new(
-              id,
-              declaration.kind,
-              declaration.name,
-              declaration.qualified_name,
-              declaration.span,
-              type_id,
-              declaration.generated ? nil : NodeRef.new(file_id, declaration.node_id, revision),
-              generated: declaration.generated
-            )
-            definitions[id] = definition
-            type_definitions[declaration.qualified_name] ||= id
+          next if declaration.dynamic
+          next if declaration.implicit && explicit_type_names.includes?(declaration.qualified_name)
+          type_id = @types.named(declaration.qualified_name)
+          id = definition_id("#{file_id}:#{declaration.key}")
+          definition = SemanticDefinition.new(
+            id,
+            declaration.kind,
+            declaration.name,
+            declaration.qualified_name,
+            declaration.span,
+            type_id,
+            declaration.generated ? nil : NodeRef.new(file_id, declaration.node_id, revision),
+            generated: declaration.generated,
+            abstract: abstract_names.includes?(declaration.qualified_name)
+          )
+          definitions[id] ||= definition
+          type_definitions[declaration.qualified_name] ||= id
+          unless type_parameters.has_key?(declaration.qualified_name)
             type_parameters[declaration.qualified_name] = declaration.type_parameters
             superclasses[declaration.qualified_name] = declaration.superclass.not_nil! if declaration.superclass
           end
+        end
+        indexes.each_value do |index|
           index.includes.each { |edge| includes[edge.owner] << edge.target }
           macro_names.concat(index.macros)
         end
@@ -413,6 +424,8 @@ module Facet
             end
           end
         end
+
+        DeclarationValidator.new(@types, type_definitions, definitions, trees, reasons, diagnostics, alias_targets).validate(declaration_order)
 
         indexes.each do |file_id, index|
           revision = @queries.manager.revision(file_id)
@@ -778,7 +791,7 @@ module Facet
         SemanticFileIndex.new(@revision, @types, @methods, @constants, @includes, @macros, @aliases)
       end
 
-      private def walk(node : SyntaxNode, scope : String) : Nil
+      private def walk(node : SyntaxNode, scope : String, dynamic : Bool = false) : Nil
         if node.kind == NodeKind::Alias
           name = node.name
           target = node.child(1)
@@ -811,9 +824,13 @@ module Facet
             node.name_span || node.span,
             superclass,
             generic_parameters,
-            @generated
+            @generated,
+            false,
+            node.semantic_flag?(SemanticFlag::Abstract),
+            dynamic,
+            node.name_node.try { |name_node| name_node.kind == NodeKind::TypeApply ? name_node.child(1).try(&.children).try { |args| args.map { |arg| arg.text.delete(' ') } } : nil } || [] of String
           )
-          node.body.try { |body| walk(body, qualified) }
+          node.body.try { |body| walk(body, qualified, dynamic) } unless dynamic
           return
         end
 
@@ -851,7 +868,8 @@ module Facet
             @includes << IndexedInclude.new(scope, argument.text)
           end
         end
-        node.children.each { |child| walk(child, scope) }
+        dynamic ||= {NodeKind::If, NodeKind::Unless, NodeKind::Ternary, NodeKind::While, NodeKind::Until, NodeKind::Case, NodeKind::Block, NodeKind::CallWithBlock}.includes?(node.kind)
+        node.children.each { |child| walk(child, scope, dynamic) }
       end
 
       private def index_method(node : SyntaxNode, scope : String) : Nil
