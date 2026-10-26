@@ -9,6 +9,7 @@ module Facet
       end
 
       BUILTIN_TYPE_NAMES = TypeStore::BUILTIN_NAMES
+      private alias ReturnKey = {DefId, Array(TypeId), TypeId, TypeId}
 
       getter body_executions : Int32 = 0
 
@@ -40,6 +41,13 @@ module Facet
         @standalone_method_analysis_depth = 0
         @return_type_stack = [] of Array(TypeId)
         @specialized_returns = {} of {DefId, Array(TypeId), TypeId, TypeId} => TypeId
+        @return_estimates = {} of ReturnKey => TypeId
+        @active_returns = Set(ReturnKey).new
+        @evaluated_returns = Set({ReturnKey, Bool}).new
+        @instance_variable_generation = 0_u64
+        @solving_returns = false
+        @return_estimates_changed = false
+        @recursive_returns = false
         @instance_variable_types = {} of {String, String} => TypeId
         @loop_stack = [] of LoopFlow
         @loop_probe_depth = 0
@@ -237,7 +245,7 @@ module Facet
                     )
                   when NodeKind::Range
                     elements = semantic_children(node).map { |child| infer(child, file_id, scope, env, record) }
-                    @types.named("Range", [elements.empty? ? @types.unknown : @types.union(elements)])
+                    elements.includes?(@types.named("NoReturn")) ? @types.named("NoReturn") : @types.named("Range", [elements.empty? ? @types.unknown : @types.union(elements)])
                   when NodeKind::If, NodeKind::Unless, NodeKind::Ternary
                     infer_conditional(node, file_id, scope, env, record)
                   when NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Enum, NodeKind::Lib
@@ -611,8 +619,10 @@ module Facet
           end
           return @types.unknown
         end
-        node.arguments.each { |argument| infer(argument.value || argument, file_id, scope, env, record) }
-        return @types.unknown if @macro_names.includes?(name)
+        if @macro_names.includes?(name)
+          node.arguments.each { |argument| infer(argument.value || argument, file_id, scope, env, record) }
+          return @types.unknown
+        end
         if name == "typeof"
           return @types.metaclass(node.arguments.first?.try { |argument| infer(argument, file_id, scope, env, record) } || @types.unknown)
         end
@@ -646,8 +656,10 @@ module Facet
         children = semantic_children(node)
         left = children.first?.try { |child| infer(child, file_id, scope, env, record) } || @types.unknown
         right = children[1]?.try { |child| infer(child, file_id, scope, env, record) } || @types.unknown
+        return left if left == @types.named("NoReturn")
         operator = node.operator_kind
         return @types.union([left, right]) if {TokenKind::AndAnd, TokenKind::OrOr}.includes?(operator)
+        return right if right == @types.named("NoReturn")
         return @types.named("Bool") if {
                                          TokenKind::EqualEqual,
                                          TokenKind::BangEqual,
@@ -663,6 +675,7 @@ module Facet
       private def infer_unary(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         child = semantic_children(node).first?
         value = child ? infer(child, file_id, scope, env, record) : @types.unknown
+        return value if value == @types.named("NoReturn")
         node.operator_kind == TokenKind::Bang ? @types.named("Bool") : value
       end
 
@@ -877,6 +890,8 @@ module Facet
         receiver = semantic_children(node).first?
         return @types.unknown unless receiver
         receiver_type = infer(receiver, file_id, scope, env, record)
+        arguments = semantic_children(node).skip(1).map { |argument| infer(argument, file_id, scope, env, record) }
+        return @types.named("NoReturn") if receiver_type == @types.named("NoReturn") || arguments.includes?(@types.named("NoReturn"))
         type = @types[receiver_type]
         return type.arguments.first if type.kind == SemanticTypeKind::Nominal && {"Array", "Slice", "StaticArray"}.includes?(type.name) && type.arguments.first?
         return type.arguments[1] if type.kind == SemanticTypeKind::Nominal && type.name == "Hash" && type.arguments.size > 1
@@ -1282,26 +1297,55 @@ module Facet
         unless definition.return_type == @types.unknown
           return substitute_free_type(definition.return_type, free_bindings)
         end
-        return @types.unknown if definition.generated || @inference_stack.includes?(definition.id)
+        return @types.unknown if definition.generated
         parameter_specific = !definition.parameter_types.empty?
         receiver_specific = definition.owner.try { |owner| self_type != @types.named(owner) } || false
         cache_key = {definition.id, arguments, self_type, block_return || @types.unknown}
+        if @solving_returns
+          return infer_return_component(definition, arguments, self_type, block_return, free_bindings, cache_key)
+        end
         if @loop_probe_depth == 0 && (parameter_specific || receiver_specific)
           if cached = @specialized_returns[cache_key]?
             return cached
           end
         end
-        @inference_stack << definition.id
         diagnostic_count = @deferred_diagnostics.size
-        inferred = analyze_method(
-          definition,
-          record: false,
-          argument_types: arguments,
-          self_type: self_type,
-          free_bindings: free_bindings,
-          block_return_type: block_return
-        )
-        @inference_stack.delete(definition.id)
+        owns_solver = true
+        @solving_returns = true
+        @return_estimates.clear
+        @evaluated_returns.clear
+        @recursive_returns = false
+        inferred = infer_return_component(definition, arguments, self_type, block_return, free_bindings, cache_key)
+        converged = true
+        # Start recursive edges at bottom, then grow the whole reachable call
+        # component. Never publish a nested method's provisional return cache.
+        if @recursive_returns
+          discard_deferred_diagnostics(diagnostic_count)
+          converged = false
+          @loop_probe_depth += 1
+          begin
+            16.times do
+              @return_estimates_changed = false
+              @evaluated_returns.clear
+              infer_return_component(definition, arguments, self_type, block_return, free_bindings, cache_key)
+              unless @return_estimates_changed
+                converged = true
+                break
+              end
+            end
+          ensure
+            @loop_probe_depth -= 1
+          end
+          unless converged
+            @reasons << SemanticCompletenessReason::UnknownType
+            @return_estimates.keys.each { |key| @return_estimates[key] = @types.unknown }
+          end
+          # Replay with stable recursive edges to report body errors at the real
+          # call site, not during a speculative fixed-point pass.
+          @evaluated_returns.clear
+          inferred = infer_return_component(definition, arguments, self_type, block_return, free_bindings, cache_key)
+        end
+        inferred = @types.unknown unless converged
         return @types.unknown if inferred == @types.error
         # A cached successful return must not swallow errors on later calls to
         # the same specialization. Revisit erroneous bodies at each call site.
@@ -1330,7 +1374,55 @@ module Facet
         end
         inferred
       ensure
-        @inference_stack.delete(definition.id)
+        if owns_solver
+          @solving_returns = false
+          @return_estimates.clear
+          @active_returns.clear
+          @evaluated_returns.clear
+        end
+      end
+
+      private def infer_return_component(
+        definition : SemanticDefinition,
+        arguments : Array(TypeId),
+        self_type : TypeId,
+        block_return : TypeId?,
+        free_bindings : Hash(String, TypeId),
+        key : ReturnKey,
+      ) : TypeId
+        if @active_returns.includes?(key)
+          @recursive_returns = true
+          return @return_estimates[key]? || @types.named("NoReturn")
+        end
+        # A diagnostic-suppressed loop pass cannot satisfy a reporting pass.
+        memo_key = {key, @loop_probe_depth > 0}
+        return @return_estimates[key] if @evaluated_returns.includes?(memo_key)
+        # Polymorphic recursion can grow argument types without repeating a key.
+        # Bound both call depth and the number of specializations for the LSP.
+        if @active_returns.size >= 32 || (!@return_estimates.has_key?(key) && @return_estimates.size >= 64)
+          @reasons << SemanticCompletenessReason::UnknownType
+          return @types.unknown
+        end
+        active = true
+        owns_guard = !@inference_stack.includes?(definition.id)
+        @inference_stack << definition.id
+        @active_returns << key
+        previous = @return_estimates[key]? || @types.named("NoReturn")
+        @return_estimates[key] = previous
+        diagnostic_count = @deferred_diagnostics.size
+        field_generation = @instance_variable_generation
+        inferred = analyze_method(definition, record: false, argument_types: arguments,
+          self_type: self_type, free_bindings: free_bindings, block_return_type: block_return)
+        result = inferred == @types.error ? @types.unknown : @types.union([previous, inferred])
+        @return_estimates_changed = true if result != previous
+        @return_estimates[key] = result
+        if @deferred_diagnostics.size == diagnostic_count && field_generation == @instance_variable_generation
+          @evaluated_returns << memo_key
+        end
+        result
+      ensure
+        @active_returns.delete(key) if active
+        @inference_stack.delete(definition.id) if owns_guard
       end
 
       private def lookup_methods(type_name : String, name : String, class_method : Bool) : Array(SemanticDefinition)
@@ -2169,6 +2261,7 @@ module Facet
         return @types.unknown unless value
 
         @constant_inference_stack << definition_id
+        diagnostic_count = @deferred_diagnostics.size
         owner = definition.owner || ""
         owner_definition = @type_definitions[owner]?.try { |id| @definitions[id] }
         env = {"self" => owner.empty? ? @types.named("Object") : @types.metaclass(@types.named(owner))}
@@ -2177,7 +2270,9 @@ module Facet
                   else
                     infer(value, node_ref.file_id, owner, env, false)
                   end
-        @constant_types[definition_id] = type_id
+        if !@solving_returns && @loop_probe_depth == 0 && type_id != @types.error && @deferred_diagnostics.size == diagnostic_count
+          @constant_types[definition_id] = type_id
+        end
         @definitions[definition_id] = SemanticDefinition.new(
           definition.id,
           definition.kind,
@@ -2301,9 +2396,15 @@ module Facet
         return unless owner
         return if type_id == @types.error || contains_unknown_type?(type_id)
         key = {instance_variable_owner_key(owner, self_type), name}
-        @instance_variable_types[key] = @instance_variable_types[key]?.try do |current|
+        previous = @instance_variable_types[key]?
+        widened = previous.try do |current|
           @types.union([current, type_id])
         end || type_id
+        if widened != previous
+          @instance_variable_generation += 1
+          @evaluated_returns.clear
+          @instance_variable_types[key] = widened
+        end
       end
 
       private def instance_variable_type(owner : String, name : String, self_type : TypeId? = nil) : TypeId?

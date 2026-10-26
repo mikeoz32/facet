@@ -32,12 +32,9 @@
 85	incomplete	class_spec.cr:1182:type:0
 86	incomplete	class_spec.cr:1194:type:0
 87	incomplete	class_spec.cr:1211:type:0
-95	type_mismatch	def_spec.cr:49:type:0
-96	type_mismatch	def_spec.cr:53:type:0
 97	inject_primitives	def_spec.cr:57:type:0
 98	inject_primitives	def_spec.cr:61:type:0
 99	inject_primitives	def_spec.cr:65:type:0
-101	type_mismatch	def_spec.cr:73:type:0
 103	incomplete	def_spec.cr:81:type:0
 111	incomplete	def_spec.cr:158:error:0
 112	unsupported_error	def_spec.cr:170:error:0

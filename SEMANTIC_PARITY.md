@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 425 currently pass Facet exactly and 157 are
+Every contract is classified: 428 currently pass Facet exactly and 154 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 425 contracts. It includes bare zero-argument
+The current exact baseline is 428 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -136,7 +136,23 @@ dispatch. These checks use `facet.type_kind_mismatch`,
 `facet.invalid_superclass`, `facet.inheritance_cycle`,
 `facet.dynamic_type_declaration` and `facet.abstract_instantiation` codes.
 
-The current slice covers class construction/allocation, simple method return
+Recursive method returns are solved as a reachable call component, with separate
+facts for argument, receiver and block-result specializations. Direct and mutual
+cycles without an exit infer `NoReturn`; reachable base branches contribute their
+return types until the component stabilizes. Provisional nested returns are not
+published as method caches, and a final pass replays body errors at each real
+call site. Analysis bounds both fixed-point iterations and polymorphic call
+growth, exposing unresolved growth as incomplete rather than hanging the editor.
+Per-pass memoization distinguishes suppressed probes from reporting passes and
+invalidates after instance-variable facts widen. Provisional constant types and
+initializer errors are not cached across recursive replay.
+`NoReturn` also propagates through eager operators, range construction, call
+arguments and indexing while still checking operand diagnostics. Collection
+and tuple literals retain their element types, including `NoReturn`, matching
+Crystal's type inference rather than collapsing the whole literal to bottom.
+Primitive-injected recursion contracts remain explicitly deferred.
+
+The current slice covers class construction/allocation, recursive method return
 inference, generic receiver substitution, lexical assignments, unions,
 inheritance/includes, and conservative undefined-method reporting. It is not a
 claim of complete Crystal semantic compatibility. The committed denominator

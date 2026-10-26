@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Infer direct and mutually recursive method returns with bounded,
+  specialization-aware fixed points. Preserve recursive base-branch unions,
+  isolate provisional caches, replay body diagnostics at each call site and fix
+  premature recursion-guard removal. Propagate `NoReturn` through eager operands,
+  range construction and indexing, retaining Crystal's collection element types.
+  Semantic parity now covers 428/582 contracts, with 154 explicitly deferred.
 - Validate type declaration kinds, generic parameter shapes, superclass
   compatibility, inheritance cycles and dynamic declarations. Preserve first
   declaration facts in tolerant snapshots, order declarations through requires,
