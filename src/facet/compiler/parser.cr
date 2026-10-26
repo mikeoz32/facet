@@ -2222,6 +2222,10 @@ module Facet
           parse_if
         when TokenKind::KeywordUnless
           parse_unless
+        when TokenKind::KeywordWhile
+          parse_while
+        when TokenKind::KeywordUntil
+          parse_until
         when TokenKind::KeywordCase
           parse_case
         when TokenKind::KeywordBegin

@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 407 currently pass Facet exactly and 175 are
+Every contract is classified: 408 currently pass Facet exactly and 174 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 407 contracts. It includes bare zero-argument
+The current exact baseline is 408 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -103,6 +103,21 @@ surviving branches, removes terminated return-guard branches from the following
 environment, and combines explicit return values with fallthrough results.
 This includes narrowing from concrete unions as well as from an ancestor type
 to multiple possible descendants.
+
+`while` and `until` compute loop-carried local types with a bounded fixed point,
+then publish node facts and call diagnostics from the converged state. `break`
+captures exit values and environments, `next` contributes back edges, and nested
+loops, method calls and analyzed blocks keep their control-flow contexts separate.
+Loop expressions return `Nil`, break-value unions, or `NoReturn` for literal
+infinite loops without exits. `NoReturn` is the bottom of type unions and stops
+sequential fallthrough, including through call arguments and receivers.
+Exit environments combine normal condition narrowing with break exits; locals
+introduced in possibly empty loops become nilable. As in the captured upstream
+contract, assignments in a literal-false loop still contribute local type facts.
+Structurally growing facts widen to unknown after 16 passes and mark the snapshot
+incomplete. Speculative passes do not populate method return caches or publish
+call diagnostics. Required-provider edits invalidate the resulting loop types.
+The parser also accepts loop expressions in assignment positions.
 
 The current slice covers class construction/allocation, simple method return
 inference, generic receiver substitution, lexical assignments, unions,

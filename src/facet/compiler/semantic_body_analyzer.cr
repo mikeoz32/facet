@@ -1,6 +1,13 @@
 module Facet
   module Compiler
     private class BodyAnalyzer
+      private class LoopFlow
+        getter break_types = [] of TypeId
+        getter break_envs = [] of Hash(String, TypeId)
+        getter next_envs = [] of Hash(String, TypeId)
+        property condition_type : TypeId? = nil
+      end
+
       BUILTIN_TYPE_NAMES = TypeStore::BUILTIN_NAMES
 
       getter body_executions : Int32 = 0
@@ -34,6 +41,8 @@ module Facet
         @return_type_stack = [] of Array(TypeId)
         @specialized_returns = {} of {DefId, Array(TypeId), TypeId, TypeId} => TypeId
         @instance_variable_types = {} of {String, String} => TypeId
+        @loop_stack = [] of LoopFlow
+        @loop_probe_depth = 0
       end
 
       def analyze_file(file_id : FileId) : Nil
@@ -69,6 +78,8 @@ module Facet
         free_bindings : Hash(String, TypeId) = {} of String => TypeId,
         block_return_type : TypeId? = nil,
       ) : TypeId
+        outer_loops = @loop_stack
+        @loop_stack = [] of LoopFlow
         node_ref = definition.node
         return @types.unknown unless node_ref
         tree = @trees[node_ref.file_id]?
@@ -128,6 +139,7 @@ module Facet
         @types.union(return_types)
       ensure
         @return_type_stack.pop if return_types
+        @loop_stack = outer_loops if outer_loops
       end
 
       private def analyze_top_level(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId)) : Nil
@@ -228,6 +240,8 @@ module Facet
                     @types.named("Range", [elements.empty? ? @types.unknown : @types.union(elements)])
                   when NodeKind::If, NodeKind::Unless, NodeKind::Ternary
                     infer_conditional(node, file_id, scope, env, record)
+                  when NodeKind::While, NodeKind::Until
+                    infer_loop(node, file_id, scope, env, record)
                   when NodeKind::Call, NodeKind::CallWithBlock
                     infer_call(node, file_id, scope, env, record)
                   when NodeKind::Binary
@@ -241,7 +255,18 @@ module Facet
                     value
                   when NodeKind::Next, NodeKind::Break
                     child = semantic_children(node).first?
-                    child ? infer(child, file_id, scope, env, record) : @types.named("Nil")
+                    value = child ? infer(child, file_id, scope, env, record) : @types.named("Nil")
+                    if frame = @loop_stack.last?
+                      if node.kind == NodeKind::Break
+                        frame.break_types << value
+                        frame.break_envs << env.dup
+                      else
+                        frame.next_envs << env.dup
+                      end
+                      @types.named("NoReturn")
+                    else
+                      value
+                    end
                   when NodeKind::NamedArg
                     node.value.try { |value| infer(value, file_id, scope, env, record) } || @types.unknown
                   when NodeKind::Index
@@ -461,7 +486,7 @@ module Facet
         result = @types.named("Nil")
         nodes.each do |child|
           result = infer(child, file_id, scope, env, record)
-          break if flow_terminates?(child)
+          break if flow_terminates?(child) || result == @types.named("NoReturn")
         end
         result
       end
@@ -494,14 +519,72 @@ module Facet
         else_type = else_node ? infer(else_node, file_id, scope, else_env, record) : @types.named("Nil")
 
         surviving = [] of Hash(String, TypeId)
-        surviving << then_env if then_seed && !then_node.try { |body| flow_terminates?(body) }
-        surviving << else_env if else_seed && !else_node.try { |body| flow_terminates?(body) }
+        surviving << then_env if then_seed && then_type != @types.named("NoReturn") && !then_node.try { |body| flow_terminates?(body) }
+        surviving << else_env if else_seed && else_type != @types.named("NoReturn") && !else_node.try { |body| flow_terminates?(body) }
         merge_flow_envs_into(env, surviving)
 
         branch_types = [] of TypeId
         branch_types << then_type if then_seed
         branch_types << else_type if else_seed
         @types.union(branch_types)
+      end
+
+      private def loop_pass(node : SyntaxNode, file_id : FileId, scope : String, head : Hash(String, TypeId), record : Bool)
+        frame = LoopFlow.new
+        @loop_stack << frame
+        condition_env = head.dup
+        condition = node.condition
+        frame.condition_type = infer(condition, file_id, scope, condition_env, record) if condition
+        if frame.condition_type == @types.named("NoReturn")
+          return {frame, condition_env, condition_env.dup, @types.named("NoReturn")}
+        end
+        body_env = condition ? (condition_env(condition, condition_env, node.kind == NodeKind::While, scope) || condition_env.dup) : condition_env.dup
+        body_type = node.body.try { |body| infer(body, file_id, scope, body_env, record) } || @types.named("Nil")
+        {frame, condition_env, body_env, body_type}
+      ensure
+        @loop_stack.pop if frame
+      end
+
+      private def infer_loop(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
+        entry = env.dup
+        head = entry.dup
+        # Solve loop-carried locals before publishing node facts or diagnostics.
+        # Structural type growth can be unbounded, so widen unstable facts after
+        # a bounded number of passes rather than hanging an editor analysis.
+        16.times do |iteration|
+          @loop_probe_depth += 1
+          @return_type_stack << [] of TypeId
+          begin
+            frame, _, body_env, body_type = loop_pass(node, file_id, scope, head, false)
+          ensure
+            @return_type_stack.pop
+            @loop_probe_depth -= 1
+          end
+          back_edges = frame.next_envs.dup
+          body = node.body
+          back_edges << body_env unless body_type == @types.named("NoReturn") || body.try { |value| flow_terminates?(value) }
+          next_head = merge_flow_envs([entry] + back_edges) || entry.dup
+          break if next_head == head
+          if iteration == 15
+            @reasons << SemanticCompletenessReason::UnknownType
+            next_head.each { |name, value| next_head[name] = @types.unknown if head[name]? != value }
+          end
+          head = next_head
+        end
+        frame, condition_state, _, _ = loop_pass(node, file_id, scope, head, record)
+        return @types.named("NoReturn") if frame.condition_type == @types.named("NoReturn")
+        condition = node.condition
+        infinite = condition && condition.kind == NodeKind::LiteralBool &&
+                   ((node.kind == NodeKind::While && condition.text == "true") || (node.kind == NodeKind::Until && condition.text == "false"))
+        exits = frame.break_envs.dup
+        results = frame.break_types.dup
+        unless infinite
+          exit_env = condition ? condition_env(condition, condition_state, node.kind != NodeKind::While, scope) : condition_state
+          exits << exit_env if exit_env
+          results << @types.named("Nil")
+        end
+        merge_flow_envs_into(env, exits)
+        results.empty? ? @types.named("NoReturn") : @types.union(results)
       end
 
       private def infer_call(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
@@ -807,10 +890,12 @@ module Facet
         record : Bool,
         explicit_name : String? = nil,
       ) : TypeId
+        return receiver_type if receiver_type == @types.named("NoReturn")
         return @types.error if receiver_type == @types.error
         name = explicit_name || node.call_name
         return @types.unknown unless name
         arguments = node.arguments.map { |argument| infer(argument.value || argument, file_id, scope, env, record) }
+        return @types.named("NoReturn") if arguments.includes?(@types.named("NoReturn"))
         block_return = nil.as(TypeId?)
 
         if name == "as" || name == "as?"
@@ -947,6 +1032,8 @@ module Facet
         env : Hash(String, TypeId),
         record : Bool,
       ) : TypeId
+        outer_loops = @loop_stack
+        @loop_stack = [] of LoopFlow
         body = node.body
         body ||= node.child(1).try(&.body) if node.kind == NodeKind::Binary
         return @types.unknown unless body
@@ -956,6 +1043,7 @@ module Facet
         infer(body, file_id, scope, env.dup, record)
       ensure
         @block_inference_stack.delete(key) if key
+        @loop_stack = outer_loops if outer_loops
       end
 
       private def substitute_type(type_id : TypeId, instance_type : TypeId, owner : String) : TypeId
@@ -1192,7 +1280,7 @@ module Facet
         parameter_specific = !definition.parameter_types.empty?
         receiver_specific = definition.owner.try { |owner| self_type != @types.named(owner) } || false
         cache_key = {definition.id, arguments, self_type, block_return || @types.unknown}
-        if parameter_specific || receiver_specific
+        if @loop_probe_depth == 0 && (parameter_specific || receiver_specific)
           if cached = @specialized_returns[cache_key]?
             return cached
           end
@@ -1213,8 +1301,8 @@ module Facet
         # the same specialization. Revisit erroneous bodies at each call site.
         return inferred if @deferred_diagnostics.size > diagnostic_count
         if parameter_specific || receiver_specific
-          @specialized_returns[cache_key] = inferred
-        elsif inferred != @types.unknown
+          @specialized_returns[cache_key] = inferred if @loop_probe_depth == 0
+        elsif @loop_probe_depth == 0 && inferred != @types.unknown
           @definitions[definition.id] = SemanticDefinition.new(
             definition.id,
             definition.kind,
@@ -2143,6 +2231,7 @@ module Facet
         message : String,
         defer_in_method : Bool = true,
       ) : Nil
+        return if @loop_probe_depth > 0
         if defer_in_method && (!@inference_stack.empty? || @standalone_method_analysis_depth > 0)
           @deferred_diagnostics << {code, message}
         else

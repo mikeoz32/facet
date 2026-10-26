@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add semantic `while`/`until` flow with loop-carried local inference, break-value
+  results, next back edges, exit narrowing, nested-loop isolation and bounded
+  widening. Treat `NoReturn` as the bottom of unions and stop unreachable
+  sequential inference. Keep speculative loop passes out of method return caches.
+  Accept loop expressions on assignment right-hand sides. Semantic parity now
+  covers 408/582 contracts, with 174 explicitly deferred.
 - Add first-class semantic type aliases with canonical targets, forward chains,
   lexical/absolute resolution, generics, composite types, signature navigation,
   inherited/include lookup and cycle/undefined-target diagnostics. Refresh aliases

@@ -123,7 +123,10 @@ module Facet
             members << type_id
           end
         end
-        members = members.uniq.sort_by do |type_id|
+        members = members.uniq
+        bottom = named("NoReturn")
+        members.reject! { |member| member == bottom } if members.any? { |member| member != bottom }
+        members = members.sort_by do |type_id|
           type = self[type_id]
           nil_type = type.kind == SemanticTypeKind::Nominal && type.name == "Nil"
           {nil_type ? 1 : 0, display(type_id)}

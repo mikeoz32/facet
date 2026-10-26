@@ -114,7 +114,6 @@
 452	inject_primitives	union_spec.cr:131:type:0
 453	inject_primitives	union_spec.cr:135:type:0
 454	inject_primitives	union_spec.cr:139:type:0
-456	type_mismatch	union_spec.cr:147:type:0
 458	target_flags	union_spec.cr:173:type:0
 463	incomplete	union_spec.cr:223:type:0
 464	unsupported_error	union_spec.cr:240:error:0
