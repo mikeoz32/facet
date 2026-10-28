@@ -5,11 +5,18 @@ module Facet
         getter break_types = [] of TypeId
         getter break_envs = [] of Hash(String, TypeId)
         getter next_envs = [] of Hash(String, TypeId)
+        getter entry_unassigned = Set(String).new
         property condition_type : TypeId? = nil
       end
 
       BUILTIN_TYPE_NAMES = TypeStore::BUILTIN_NAMES
       private alias ReturnKey = {DefId, Array(TypeId), TypeId, TypeId}
+      # Reserved keys cannot collide with source names and travel with flow
+      # copies. Assignment state is Bool (assigned), Nil (unassigned), or their
+      # union (only some paths assign); restrictions never gain an implicit Nil.
+      LOCAL_RESTRICTION = "\0local:"
+      LOCAL_ASSIGNED    = "\0assigned:"
+      LOCAL_SCOPES      = {NodeKind::File, NodeKind::Def, NodeKind::MacroDef, NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Enum, NodeKind::Lib, NodeKind::Fun, NodeKind::Block}
 
       getter body_executions : Int32 = 0
 
@@ -46,6 +53,7 @@ module Facet
         @evaluated_returns = Set({ReturnKey, Bool}).new
         @instance_variable_generation = 0_u64
         @annotated_returns = Set(ReturnKey).new
+        @local_binding_sites = {} of {FileId, NodeId} => Hash(String, Array(SyntaxNode))
         @solving_returns = false
         @return_estimates_changed = false
         @recursive_returns = false
@@ -301,6 +309,33 @@ module Facet
 
       private def infer_name(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         name = node.symbol_name || node.text
+        if node.kind == NodeKind::Ident && !constant_name?(name)
+          if name == "_"
+            report_semantic_error(node, file_id, "facet.discard_read", "can't read from _")
+            return @types.error
+          end
+          if state = env[LOCAL_ASSIGNED + name]?
+            if state == @types.named("Nil")
+              report_semantic_error(node, file_id, "facet.read_before_assignment", "read before assignment to local variable '#{name}'")
+              return @types.error
+            elsif state != @types.named("Bool") && state != @types.unknown
+              if @loop_stack.any? { |frame| frame.entry_unassigned.includes?(name) }
+                report_semantic_error(node, file_id, "facet.read_before_assignment", "read before assignment to local variable '#{name}'")
+                return @types.error
+              end
+              if expected = env[LOCAL_RESTRICTION + name]?
+                unless type_compatible?(@types.named("Nil"), expected)
+                  site = local_binding_sites(node, file_id)[name]?.try(&.find { |entry| entry.kind == NodeKind::Assign })
+                  report_semantic_error(site.try(&.target) || node, file_id, "facet.local_type_mismatch", "type must be #{@types.display(expected)}")
+                  return @types.error
+                end
+              end
+            end
+          elsif !env.has_key?(name) && @constant_inference_stack.empty? && earlier_local_binding?(node, file_id, name)
+            report_semantic_error(node, file_id, "facet.read_before_assignment", "read before assignment to local variable '#{name}'")
+            return @types.error
+          end
+        end
         return env[name] if env.has_key?(name)
         if node.kind == NodeKind::InstanceVar
           if type_id = instance_variable_type(scope, name, env["self"]?)
@@ -476,7 +511,16 @@ module Facet
         end
         value = node.value
         type_id = value ? infer(value, file_id, scope, env, record) : @types.unknown
+        return type_id if type_id == @types.named("NoReturn")
         if target = node.target
+          if value.try(&.call_name) == "uninitialized" && target.kind == NodeKind::Ident
+            name = target.symbol_name || target.text
+            if earlier_local_binding?(node, file_id, name)
+              report_semantic_error(target, file_id, "facet.duplicate_local", "variable '#{name}' already declared")
+              return @types.error
+            end
+          end
+          type_id = check_local_assignment(target, value, type_id, file_id, env, scope)
           assign_target(target, type_id, env)
           record_instance_variable_target(scope, target, type_id, env["self"]?)
           remember(target, file_id, type_id) if record
@@ -490,17 +534,129 @@ module Facet
             report_constant_as_type(reference, file_id)
             @types.error
           else
-            resolve_type_text(type.text, scope)
+            resolve_local_type(type, scope, env)
           end
         end
         type_id ||= node.value.try { |value| infer(value, file_id, scope, env, record) }
         type_id ||= @types.unknown
         if target = node.target
+          if target.kind == NodeKind::Ident
+            name = target.symbol_name || target.text
+            if earlier_local_binding?(node, file_id, name)
+              report_semantic_error(target, file_id, "facet.duplicate_local", "variable '#{name}' already declared")
+              return @types.error
+            end
+            if noninstantiated_generic?(type_id)
+              report_semantic_error(target, file_id, "facet.generic_type_required", "can't declare variable of generic non-instantiated type #{@types.display(type_id)}")
+              return @types.error
+            end
+            env[LOCAL_RESTRICTION + name] = type_id
+            if value = node.value
+              actual = infer(value, file_id, scope, env, record)
+              type_id = check_local_assignment(target, value, actual, file_id, env, scope)
+              env[LOCAL_ASSIGNED + name] = @types.named("Bool")
+            else
+              type_id = @types.named("Nil")
+              env[LOCAL_ASSIGNED + name] = @types.named("Nil")
+            end
+            node.declared_type.try { |type| record_type_reference(type, file_id, scope) } if record
+          end
           assign_target(target, type_id, env)
           record_instance_variable_target(scope, target, type_id, env["self"]?)
           remember(target, file_id, type_id) if record
         end
         type_id
+      end
+
+      private def noninstantiated_generic?(type_id : TypeId) : Bool
+        type = @types[type_id]
+        return true if type.kind == SemanticTypeKind::Nominal && type.arguments.empty? &&
+                       !(@type_parameters[type.name || ""]? || [] of String).empty?
+        type.arguments.any? { |argument| noninstantiated_generic?(argument) }
+      end
+
+      private def resolve_local_type(type : SyntaxNode, scope : String, env : Hash(String, TypeId)) : TypeId
+        parameters = (@type_parameters[scope]? || [] of String).to_set
+        bindings = {} of String => TypeId
+        env.each do |name, value|
+          if constant_name?(name) && @types[value].kind == SemanticTypeKind::Metaclass
+            parameters << name
+            bindings[name] = @types[value].arguments.first
+          end
+        end
+        resolved = TypeTextResolver.new(@types, @type_definitions, parameters, @alias_targets).resolve(type.text, scope)
+        resolved = substitute_free_type(resolved, bindings)
+        env["self"]?.try { |instance| substitute_type(resolved, instance, scope) } || resolved
+      end
+
+      private def check_local_assignment(target : SyntaxNode, value : SyntaxNode?, actual : TypeId, file_id : FileId, env : Hash(String, TypeId), scope : String) : TypeId
+        if {NodeKind::Tuple, NodeKind::Destructure}.includes?(target.kind)
+          type = @types[actual]
+          values = value.try { |source| semantic_children(source) } || [] of SyntaxNode
+          elements = semantic_children(target).map_with_index do |child, index|
+            check_local_assignment(child, values[index]?, type.arguments[index]? || @types.unknown, file_id, env, scope)
+          end
+          return type.kind == SemanticTypeKind::Tuple ? @types.tuple(elements) : actual
+        end
+        return actual unless target.kind == NodeKind::Ident
+        name = target.symbol_name || target.text
+        expected = env[LOCAL_RESTRICTION + name]?
+        unless expected
+          # Restrictions belong to the lexical scope even if the declaring
+          # branch terminated and its flow environment no longer survives.
+          declaration = local_binding_sites(target, file_id)[name]?.try(&.find do |site|
+            site.kind == NodeKind::VarDecl && site.span.start < target.span.start
+          end)
+          if type = declaration.try(&.declared_type)
+            expected = resolve_local_type(type, scope, env)
+            env[LOCAL_RESTRICTION + name] = expected
+          end
+        end
+        return actual unless expected
+        env[LOCAL_ASSIGNED + name] = @types.named("Bool")
+        return actual if actual == @types.named("NoReturn") || type_compatible?(actual, expected)
+        actual = restrict_numeric_default(value, actual, expected) if value
+        if contract_types_known?(actual, expected) && !type_compatible?(actual, expected)
+          report_semantic_error(target, file_id, "facet.local_type_mismatch", "type must be #{@types.display(expected)}, not #{@types.display(actual)}")
+          return @types.error
+        end
+        actual
+      end
+
+      private def earlier_local_binding?(node : SyntaxNode, file_id : FileId, name : String) : Bool
+        local_binding_sites(node, file_id)[name]?.try(&.any? do |site|
+          site.kind == NodeKind::Assign ? site.span.finish <= node.span.start : site.span.start < node.span.start
+        end) || false
+      end
+
+      private def local_binding_sites(node : SyntaxNode, file_id : FileId) : Hash(String, Array(SyntaxNode))
+        root = node.ancestors.find { |ancestor| LOCAL_SCOPES.includes?(ancestor.kind) } || @trees[file_id].root
+        @local_binding_sites[{file_id, root.id}] ||= begin
+          sites = {} of String => Array(SyntaxNode)
+          collect_local_bindings(root, sites, true)
+          sites
+        end
+      end
+
+      private def collect_local_bindings(node : SyntaxNode, sites : Hash(String, Array(SyntaxNode)), root : Bool = false) : Nil
+        return if !root && LOCAL_SCOPES.includes?(node.kind)
+        if {NodeKind::Assign, NodeKind::VarDecl}.includes?(node.kind)
+          if target = node.target
+            collect_local_targets(target, node, sites)
+          end
+        elsif {NodeKind::Param, NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(node.kind) && (name = node.name)
+          name = name.lchop('@')
+          (sites[name] ||= [] of SyntaxNode) << node
+        end
+        node.children.each { |child| collect_local_bindings(child, sites) }
+      end
+
+      private def collect_local_targets(target : SyntaxNode, site : SyntaxNode, sites : Hash(String, Array(SyntaxNode))) : Nil
+        if {NodeKind::Tuple, NodeKind::Destructure}.includes?(target.kind)
+          semantic_children(target).each { |child| collect_local_targets(child, site, sites) }
+        elsif target.kind == NodeKind::Ident && (name = target.symbol_name) && !constant_name?(name)
+          (sites[name] ||= [] of SyntaxNode) << site
+        end
       end
 
       private def infer_sequence(nodes : Array(SyntaxNode), file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
@@ -550,8 +706,9 @@ module Facet
         @types.union(branch_types)
       end
 
-      private def loop_pass(node : SyntaxNode, file_id : FileId, scope : String, head : Hash(String, TypeId), record : Bool)
+      private def loop_pass(node : SyntaxNode, file_id : FileId, scope : String, head : Hash(String, TypeId), record : Bool, entry_unassigned : Set(String) = Set(String).new)
         frame = LoopFlow.new
+        entry_unassigned.each { |name| frame.entry_unassigned << name }
         @loop_stack << frame
         condition_env = head.dup
         condition = node.condition
@@ -568,6 +725,10 @@ module Facet
 
       private def infer_loop(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         entry = env.dup
+        entry_unassigned = Set(String).new
+        entry.each do |name, value|
+          entry_unassigned << name.lchop(LOCAL_ASSIGNED) if name.starts_with?(LOCAL_ASSIGNED) && value == @types.named("Nil")
+        end
         head = entry.dup
         # Solve loop-carried locals before publishing node facts or diagnostics.
         # Structural type growth can be unbounded, so widen unstable facts after
@@ -592,7 +753,7 @@ module Facet
           end
           head = next_head
         end
-        frame, condition_state, _, _ = loop_pass(node, file_id, scope, head, record)
+        frame, condition_state, _, _ = loop_pass(node, file_id, scope, head, record, entry_unassigned)
         return @types.named("NoReturn") if frame.condition_type == @types.named("NoReturn")
         condition = node.condition
         infinite = condition && condition.kind == NodeKind::LiteralBool &&
@@ -864,7 +1025,7 @@ module Facet
         result = {} of String => TypeId
         envs.flat_map(&.keys).uniq.each do |name|
           values = envs.compact_map { |env| env[name]? }
-          values << @types.named("Nil") if values.size < envs.size
+          values << @types.named("Nil") if values.size < envs.size && !name.starts_with?(LOCAL_RESTRICTION)
           result[name] = @types.union(values)
         end
         result
@@ -2466,6 +2627,7 @@ module Facet
             assign_target(child, element_types[index]? || @types.unknown, env)
           end
         elsif name = target.symbol_name
+          return if target.kind == NodeKind::Ident && name == "_"
           env[name] = type_id
           env[name.lchop('@')] = type_id if name.starts_with?('@')
         end

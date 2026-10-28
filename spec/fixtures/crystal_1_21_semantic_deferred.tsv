@@ -101,15 +101,9 @@
 475	unsupported_error	var_spec.cr:44:error:0
 476	inject_primitives	var_spec.cr:48:error:0
 477	inject_primitives	var_spec.cr:53:type:0
-478	unsupported_error	var_spec.cr:60:error:0
-479	unsupported_error	var_spec.cr:67:error:0
-482	unsupported_error	var_spec.cr:88:error:0
 483	inject_primitives	var_spec.cr:95:type:0
 484	inject_primitives	var_spec.cr:107:error:0
-485	unsupported_error	var_spec.cr:117:error:0
 486	diagnostic_mismatch	var_spec.cr:124:error:0
-487	unsupported_error	var_spec.cr:134:error:0
-488	unsupported_error	var_spec.cr:141:error:0
 489	inject_primitives	if_spec.cr:5:type:0
 490	inject_primitives	if_spec.cr:9:type:0
 491	inject_primitives	if_spec.cr:13:type:0

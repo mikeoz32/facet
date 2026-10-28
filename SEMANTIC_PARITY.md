@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 433 currently pass Facet exactly and 149 are
+Every contract is classified: 439 currently pass Facet exactly and 143 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 433 contracts. It includes bare zero-argument
+The current exact baseline is 439 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -164,6 +164,17 @@ call with `facet.return_type_mismatch` or `facet.default_type_mismatch`.
 Inherited generic signatures and type expressions use the instantiated declaring
 ancestor rather than the subclass's parameter positions. Numeric defaults also
 support explicit suffixes and restriction against individual union members.
+
+Local declarations now separate lexical type restrictions from flow-sensitive
+assignment facts. Reads before assignment, incompatible writes, duplicate
+declarations, discard reads and non-instantiated generic declarations produce
+coded diagnostics. Initializer results stay narrow and numeric literals respect
+the restriction. Conditional/loop merges retain definite assignment, including
+the first loop entry; terminated branches do not erase lexical restrictions.
+Destructuring validates each target. Binding-site discovery respects lexical
+scopes, shorthand/splat parameters and RHS-before-target evaluation. Local type
+references support alias navigation and refresh after required-file edits.
+Constant initializer scopes remain isolated from surrounding locals.
 
 The current slice covers class construction/allocation, recursive method return
 inference, generic receiver substitution, lexical assignments, unions,

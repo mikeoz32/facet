@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Track typed local restrictions separately from definite assignment, validate
+  initializers/writes and destructuring, and diagnose uninitialized/discard reads,
+  duplicate declarations and bare generic local types. Preserve first-loop-entry
+  checks and restrictions from terminated branches; handle shorthand/splat
+  bindings and nested assignment order. Add local type navigation and edit
+  invalidation coverage. Semantic parity now covers 439/582 contracts, with 143
+  explicitly deferred.
 - Validate instantiated method return annotations and omitted typed defaults,
   including generic/free-variable substitutions, early returns, narrower result
   types, Nil/Void discards and bounded recursive annotations. Preserve numeric

@@ -78,6 +78,16 @@ cases = raw.map do |contract|
                       "facet.return_type_mismatch"
                     elsif message.try(&.starts_with?("can't restrict "))
                       "facet.default_type_mismatch"
+                    elsif message.try(&.starts_with?("read before assignment to local variable"))
+                      "facet.read_before_assignment"
+                    elsif message.try { |text| text.starts_with?("variable '") && text.includes?("already declared") }
+                      "facet.duplicate_local"
+                    elsif message == "can't read from _"
+                      "facet.discard_read"
+                    elsif message.try(&.starts_with?("type must be "))
+                      "facet.local_type_mismatch"
+                    elsif message.try(&.starts_with?("can't declare variable of generic non-instantiated type"))
+                      "facet.generic_type_required"
                     elsif message.try(&.includes?("is expected to be invoked with a block"))
                       "facet.block_required"
                     elsif message.try(&.includes?("is not expected to be invoked with a block"))
