@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Resolve qualified method declarations, lexical/canonical alias owners, root
+  calls and metaclass `Class` fallback through shared lookup. Preserve argument
+  scope for absolute calls, reject invalid/dynamic method declarations and
+  out-of-scope `self`, and replay undefined-name/method errors from instantiated
+  bodies. Check missing dispatch per union member and preserve raise overrides.
+  Semantic parity now covers 459/582 contracts, with 123 explicitly deferred.
 - Track typed local restrictions separately from definite assignment, validate
   initializers/writes and destructuring, and diagnose uninitialized/discard reads,
   duplicate declarations and bare generic local types. Preserve first-loop-entry

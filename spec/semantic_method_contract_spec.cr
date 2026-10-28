@@ -66,7 +66,7 @@ describe "Semantic method contracts" do
     "inherited generic default"         => {"class Parent(T); def target(x : T = 1); x; end; end; class Child(U) < Parent(Int64); end; Child(Char).new.target", "Int64"},
     "inherited generic type expression" => {"class Parent(T); def target; T; end; end; class Child(U) < Parent(Int32); end; Child(Char).new.target", "Int32.class"},
     "uninstantiated bad method"         => {"def target : Int32; 'x'; end; 1", "Int32"},
-    "unknown body remains conservative" => {"def target : Int32; unknown_value; end; target", "Int32"},
+    "unknown body remains conservative" => {"def target : Int32; {1}[0]; end; target", "Int32"},
   }.each do |description, contract|
     it "preserves #{description}" do
       semantic, snapshot, entry, queries = method_contract_fixture(contract[0])

@@ -66,6 +66,14 @@ cases = raw.map do |contract|
                       "facet.undefined_constant"
                     elsif message.try(&.includes?("undefined local variable or method"))
                       "facet.undefined_local"
+                    elsif message == "there's no self in this scope"
+                      "facet.no_self"
+                    elsif message.try(&.starts_with?("compile-time type is "))
+                      "facet.undefined_method"
+                    elsif message == "def receiver can only be a Type or self"
+                      "facet.invalid_method_receiver"
+                    elsif message == "can't define method in generic instance"
+                      "facet.generic_method_receiver"
                     elsif message.try(&.includes?("can't infer type of constant"))
                       "facet.constant_cycle"
                     elsif message.try(&.includes?("is not a type, it's a constant"))

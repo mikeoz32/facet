@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 439 currently pass Facet exactly and 143 are
+Every contract is classified: 459 currently pass Facet exactly and 123 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 439 contracts. It includes bare zero-argument
+The current exact baseline is 459 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -175,6 +175,18 @@ Destructuring validates each target. Binding-site discovery respects lexical
 scopes, shorthand/splat parameters and RHS-before-target evaluation. Local type
 references support alias navigation and refresh after required-file edits.
 Constant initializer scopes remain isolated from surrounding locals.
+
+Qualified `def Type.method` declarations use lexical type lookup and canonical
+alias owners; invalid value receivers, generic-instance receivers and dynamic
+method declarations are rejected. Bare and explicit calls share root/metaclass
+lookup rules, including `Class` fallback. Absolute `::method` calls select only
+root methods while retaining lexical argument scope. Instantiated bodies replay
+undefined-name/method errors at every call site, and each closed union member
+must provide a method or its own `method_missing`. Unknown receiver types and
+incomplete providers remain conservative. Explicit `self` is rejected outside
+an instance/metaclass context. Root `raise` supplies `NoReturn` only when normal
+lookup finds no override. Qualified call bindings and provider edits are covered
+by revision-safe navigation/invalidation tests.
 
 The current slice covers class construction/allocation, recursive method return
 inference, generic receiver substitution, lexical assignments, unions,

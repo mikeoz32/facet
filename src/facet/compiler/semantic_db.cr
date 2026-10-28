@@ -450,26 +450,70 @@ module Facet
         indexes.each do |file_id, index|
           revision = @queries.manager.revision(file_id)
           index.methods.each do |declaration|
+            owner = declaration.owner
+            unless declaration.generated
+              source = trees[file_id].node(declaration.node_id)
+              raw_name = source.name || ""
+              ancestors = source.ancestors.take_while { |ancestor| !{NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Lib}.includes?(ancestor.kind) }
+              if source.kind == NodeKind::Def && ancestors.any? { |ancestor| {NodeKind::Def, NodeKind::If, NodeKind::Unless, NodeKind::Ternary, NodeKind::While, NodeKind::Until, NodeKind::Case, NodeKind::Block, NodeKind::CallWithBlock}.includes?(ancestor.kind) }
+                diagnostics << SemanticDiagnostic.new("facet.dynamic_type_declaration", file_id, source.name_span || source.span, "can't declare def dynamically")
+                next
+              end
+              if declaration.class_method && raw_name.includes?('.') && !raw_name.starts_with?("self.")
+                receiver_text = raw_name.rpartition('.')[0]
+                receiver_node = source.name_node.try(&.child(0)) || source
+                unless receiver_text.lchop("::")[0]?.try(&.uppercase?)
+                  diagnostics << SemanticDiagnostic.new("facet.invalid_method_receiver", file_id, receiver_node.span, "def receiver can only be a Type or self")
+                  next
+                end
+                unless type_definitions.has_key?(owner) || TypeStore::BUILTIN_NAMES.includes?(owner)
+                  suffix = "::#{receiver_text}"
+                  lexical_scope = owner.ends_with?(suffix) ? owner[0...-suffix.size] : ""
+                  resolved = resolve_type_text(receiver_text, lexical_scope, type_definitions, aliases: alias_targets)
+                  target = @types[resolved]
+                  if target.kind == SemanticTypeKind::Nominal && !target.arguments.empty?
+                    diagnostics << SemanticDiagnostic.new("facet.generic_method_receiver", file_id, receiver_node.span, "can't define method in generic instance")
+                    next
+                  end
+                  owner = target.name || owner
+                end
+                unless type_definitions.has_key?(owner) || TypeStore::BUILTIN_NAMES.includes?(owner)
+                  diagnostics << SemanticDiagnostic.new("facet.undefined_constant", file_id, receiver_node.span, "undefined constant #{receiver_text}")
+                  next
+                end
+                if receiver_id = type_definitions[owner]?
+                  receiver = definitions[receiver_id]
+                  if receiver.kind == SemanticDefinitionKind::Alias
+                    target = @types[receiver.type_id]
+                    if target.kind != SemanticTypeKind::Nominal || !target.arguments.empty?
+                      diagnostics << SemanticDiagnostic.new("facet.generic_method_receiver", file_id, receiver_node.span, "can't define method in generic instance")
+                      next
+                    end
+                    owner = target.name || owner
+                  end
+                end
+              end
+            end
             free_variables = declaration.free_variables.to_set
             parameter_types = declaration.parameter_types.map do |name|
-              name ? resolve_type_text(name, declaration.owner, type_definitions, free_variables, alias_targets) : @types.unknown
+              name ? resolve_type_text(name, owner, type_definitions, free_variables, alias_targets) : @types.unknown
             end
             return_type = declaration.return_type.try do |name|
-              resolve_type_text(name, declaration.owner, type_definitions, free_variables, alias_targets)
+              resolve_type_text(name, owner, type_definitions, free_variables, alias_targets)
             end || @types.unknown
             block_type = declaration.block_type.try do |name|
-              resolve_type_text(name, declaration.owner, type_definitions, free_variables, alias_targets)
+              resolve_type_text(name, owner, type_definitions, free_variables, alias_targets)
             end || @types.unknown
             id = definition_id("#{file_id}:#{declaration.key}")
             definition = SemanticDefinition.new(
               id,
               SemanticDefinitionKind::Method,
               declaration.name,
-              declaration.owner.empty? ? declaration.name : "#{declaration.owner}##{declaration.name}",
+              owner.empty? ? declaration.name : "#{owner}##{declaration.name}",
               declaration.span,
               @types.unknown,
               declaration.generated ? nil : NodeRef.new(file_id, declaration.node_id, revision),
-              declaration.owner,
+              owner,
               declaration.class_method,
               declaration.min_arity,
               declaration.max_arity,
@@ -480,7 +524,7 @@ module Facet
               block_type
             )
             definitions[id] = definition
-            methods_by_owner[declaration.owner] << id
+            methods_by_owner[owner] << id
           end
         end
 
@@ -874,9 +918,15 @@ module Facet
 
       private def index_method(node : SyntaxNode, scope : String) : Nil
         raw_name = node.name || return
+        name = raw_name
+        class_method = node.kind == NodeKind::Fun
+        if dot = raw_name.rindex('.')
+          receiver = raw_name[0...dot]
+          name = raw_name[(dot + 1)..]
+          scope = qualify(scope, receiver) unless receiver == "self"
+          class_method = true
+        end
         scope = "Object" if scope.empty?
-        class_method = node.kind == NodeKind::Fun || raw_name.starts_with?("self.")
-        name = class_method ? raw_name.lchop("self.") : raw_name
         parameters = node.parameters
         min_arity = parameters.count do |parameter|
           !{NodeKind::Splat, NodeKind::DoubleSplat, NodeKind::BlockParam}.includes?(parameter.kind) && parameter.value.nil?

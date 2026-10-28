@@ -266,7 +266,8 @@ module Facet
                     elements.includes?(@types.named("NoReturn")) ? @types.named("NoReturn") : @types.named("Range", [elements.empty? ? @types.unknown : @types.union(elements)])
                   when NodeKind::If, NodeKind::Unless, NodeKind::Ternary
                     infer_conditional(node, file_id, scope, env, record)
-                  when NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Enum, NodeKind::Lib
+                  when NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Enum, NodeKind::Lib,
+                       NodeKind::Def, NodeKind::MacroDef, NodeKind::Fun, NodeKind::TypeDef
                     @types.named("Nil")
                   when NodeKind::While, NodeKind::Until
                     infer_loop(node, file_id, scope, env, record)
@@ -309,6 +310,13 @@ module Facet
 
       private def infer_name(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
         name = node.symbol_name || node.text
+        if name == "self" && !self_available?(node, scope)
+          report_semantic_error(node, file_id, "facet.no_self", "there's no self in this scope")
+          return @types.error
+        end
+        if name.starts_with?("::") && !constant_name?(name)
+          return resolve_call(node, @types.named("Object"), file_id, scope, env, record, name.lchop("::"), rooted: true)
+        end
         if node.kind == NodeKind::Ident && !constant_name?(name)
           if name == "_"
             report_semantic_error(node, file_id, "facet.discard_read", "can't read from _")
@@ -395,12 +403,15 @@ module Facet
         end
         if self_type = env["self"]?
           return @types.unknown if @macro_names.includes?(name)
-          if callable_without_receiver?(self_type, name)
+          if callable_without_receiver?(self_type, name, !self_available?(node, scope))
             return resolve_call(node, self_type, file_id, scope, env, record, name)
           end
         end
-        if node.kind == NodeKind::Ident && !@constant_inference_stack.empty?
-          emit_semantic_error(
+        if name == "raise"
+          return resolve_call(node, env["self"]? || @types.named("Object"), file_id, scope, env, record, name)
+        end
+        if node.kind == NodeKind::Ident && (@constant_inference_stack.empty? ? call_facts_complete? : true)
+          report_semantic_error(
             node,
             file_id,
             "facet.undefined_local",
@@ -411,14 +422,45 @@ module Facet
         @types.unknown
       end
 
-      private def callable_without_receiver?(receiver_type : TypeId, name : String) : Bool
+      private def callable_without_receiver?(receiver_type : TypeId, name : String, rooted : Bool = false) : Bool
         members = receiver_members(receiver_type)
         return false unless members
         members.any? do |instance_type, class_method|
           type_name = @types[instance_type].name
           next false unless type_name
-          !lookup_methods(type_name, name, class_method).empty? || method_missing?(instance_type, class_method)
+          !call_methods(type_name, name, class_method, true, rooted).empty? || (!rooted && method_missing?(instance_type, class_method))
         end
+      end
+
+      private def call_methods(owner : String, name : String, class_method : Bool, implicit : Bool, rooted : Bool) : Array(SemanticDefinition)
+        return root_methods(name) if rooted
+        candidates = lookup_methods(owner, name, class_method)
+        if candidates.empty? && class_method && owner != "Class"
+          candidates = lookup_methods("Class", name, false) + lookup_methods("Class", name, true)
+        end
+        candidates = root_methods(name) if candidates.empty? && implicit
+        candidates
+      end
+
+      private def top_level_method?(definition : SemanticDefinition) : Bool
+        return false unless definition.owner == "Object" && !definition.class_method
+        node_ref = definition.node
+        return definition.generated unless node_ref
+        node = @trees[node_ref.file_id].node(node_ref.node_id)
+        !node.ancestors.any? { |ancestor| {NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Lib}.includes?(ancestor.kind) }
+      end
+
+      private def root_methods(name : String) : Array(SemanticDefinition)
+        lookup_methods("Object", name, false).select { |definition| top_level_method?(definition) }
+      end
+
+      private def self_available?(node : SyntaxNode, scope : String) : Bool
+        return false if scope.empty?
+        return true unless scope == "Object"
+        method = node.ancestors.find { |ancestor| ancestor.kind == NodeKind::Def }
+        return true unless method
+        return true if method.name.try(&.includes?('.'))
+        method.ancestors.any? { |ancestor| {NodeKind::Class, NodeKind::Struct, NodeKind::Module, NodeKind::Lib}.includes?(ancestor.kind) }
       end
 
       private def infer_type_apply(node : SyntaxNode, file_id : FileId, scope : String, env : Hash(String, TypeId), record : Bool) : TypeId
@@ -776,6 +818,9 @@ module Facet
         end
         name = node.call_name
         return @types.unknown unless name
+        if name.starts_with?("::")
+          return resolve_call(node, @types.named("Object"), file_id, scope, env, record, name.lchop("::"), rooted: true)
+        end
         if name == "Union"
           members = node.arguments.map do |argument|
             infer_type_expression(argument, file_id, scope, env, record)
@@ -1078,11 +1123,13 @@ module Facet
         env : Hash(String, TypeId),
         record : Bool,
         explicit_name : String? = nil,
+        rooted : Bool = false,
       ) : TypeId
         return receiver_type if receiver_type == @types.named("NoReturn")
         return @types.error if receiver_type == @types.error
         name = explicit_name || node.call_name
         return @types.unknown unless name
+        rooted ||= node.receiver.nil? && !self_available?(node, scope)
         arguments = node.arguments.map { |argument| infer(argument.value || argument, file_id, scope, env, record) }
         return @types.named("NoReturn") if arguments.includes?(@types.named("NoReturn"))
         block_return = nil.as(TypeId?)
@@ -1105,6 +1152,12 @@ module Facet
 
         receiver_members = receiver_members(receiver_type)
         return unknown_call unless receiver_members
+        if name == "raise" && node.receiver.nil? && receiver_members.all? do |instance_type, class_method|
+             owner = @types[instance_type].name
+             owner && call_methods(owner, name, class_method, true, rooted).empty?
+           end
+          return @types.named("NoReturn")
+        end
         if {"new", "allocate"}.includes?(name) && receiver_members.all? { |member| member[1] } &&
            (name == "allocate" || receiver_members.all? { |member| !declares_class_method?(member[0], "new") })
           block_return = infer_call_block_return(node, file_id, scope, env, record) if name == "new" && call_has_block?(node)
@@ -1157,10 +1210,10 @@ module Facet
         receiver_members.each do |instance_type, class_method|
           type = @types[instance_type]
           type_name = type.name
-          unless type_name && @type_definitions.has_key?(type_name)
+          unless type_name && (@type_definitions.has_key?(type_name) || BUILTIN_TYPE_NAMES.includes?(type_name))
             return unknown_call
           end
-          candidates = lookup_methods(type_name, name, class_method)
+          candidates = call_methods(type_name, name, class_method, node.receiver.nil?, rooted)
           if candidates.empty?
             missing << type_name
           else
@@ -1189,7 +1242,14 @@ module Facet
                 return @types.error
               end
               diagnostic_count = @deferred_diagnostics.size
-              return_type = inferred_return_type(candidate, candidate_arguments, instance_type, block_return)
+              actual_receiver = if top_level_method?(candidate)
+                                  @types.named("Object")
+                                elsif class_method && candidate.owner == "Class" && !candidate.class_method
+                                  @types.metaclass(instance_type)
+                                else
+                                  instance_type
+                                end
+              return_type = inferred_return_type(candidate, candidate_arguments, actual_receiver, block_return)
               if @deferred_diagnostics.size > diagnostic_count
                 diagnostics = @deferred_diagnostics[diagnostic_count..]
                 discard_deferred_diagnostics(diagnostic_count)
@@ -1203,9 +1263,18 @@ module Facet
           end
         end
 
-        if missing.size == receiver_members.size
-          unless receiver_members.any? { |member| method_missing?(member[0], member[1]) }
-            emit_undefined_method(node, file_id, receiver_type, name) if record && @emit_diagnostics
+        unless missing.empty?
+          covered = receiver_members.all? do |member|
+            !missing.includes?(@types[member[0]].name || "") || (!rooted && method_missing?(member[0], member[1]))
+          end
+          unless covered
+            if @loop_probe_depth == 0
+              if !@inference_stack.empty? || @standalone_method_analysis_depth > 0
+                report_semantic_error(call_name_node(node), file_id, "facet.undefined_method", "undefined method '#{name}' for #{@types.display(receiver_type)}")
+              elsif @emit_diagnostics
+                emit_undefined_method(node, file_id, receiver_type, name)
+              end
+            end
           end
           return @types.error
         end

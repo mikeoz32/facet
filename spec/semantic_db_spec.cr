@@ -112,7 +112,7 @@ describe Facet::Compiler::SemanticDb do
 
   it "does not reject unknown argument types" do
     _, snapshot, _, _ = semantic_fixture({
-      "/workspace/main.cr" => "def target(x : Int32); x; end\ntarget(unresolved)",
+      "/workspace/main.cr" => "def target(x : Int32); x; end\ntarget({1}[0])",
     }, "/workspace/main.cr", ["/workspace"], nil)
     snapshot.diagnostics.should be_empty
   end
@@ -340,7 +340,8 @@ describe Facet::Compiler::SemanticDb do
   it "suppresses undefined-method diagnostics for unknown receivers and method_missing" do
     _, snapshot, ids, _ = semantic_fixture({
       "/workspace/main.cr" => <<-CR,
-        unknown.value
+        unknown = {Dynamic.new}[0]
+        unknown.generated
 
         class Dynamic
           def method_missing(call)
@@ -452,13 +453,13 @@ describe Facet::Compiler::SemanticDb do
     semantic, snapshot, ids, queries = semantic_fixture({
       "/workspace/main.cr" => <<-CR,
         class Box(T)
-          def value : T
-            raise "abstract"
+          def value(item : T) : T
+            item
           end
         end
 
         box = Box(String).new
-        box.value
+        box.value("abc")
       CR
       "/stdlib/prelude.cr" => "class String; end\n",
     }, "/workspace/main.cr")
@@ -1200,7 +1201,7 @@ describe Facet::Compiler::SemanticDb do
     )
   end
 
-  it "diagnoses only when every closed member of a union lacks the method" do
+  it "diagnoses when any closed member of a union lacks the method" do
     _, snapshot, ids, _ = semantic_fixture({
       "/workspace/main.cr" => <<-CR,
         class A
@@ -1208,6 +1209,7 @@ describe Facet::Compiler::SemanticDb do
         end
         class B; end
 
+        flag = true
         both = flag ? A.new : B.new
         both.shared
         both.absent
@@ -1215,6 +1217,7 @@ describe Facet::Compiler::SemanticDb do
     }, "/workspace/main.cr", ["/workspace"], nil)
 
     snapshot.diagnostics_for(ids["/workspace/main.cr"]).map(&.message).should eq([
+      "undefined method 'shared' for (A | B)",
       "undefined method 'absent' for (A | B)",
     ])
   end
