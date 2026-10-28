@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 428 currently pass Facet exactly and 154 are
+Every contract is classified: 433 currently pass Facet exactly and 149 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 428 contracts. It includes bare zero-argument
+The current exact baseline is 433 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -151,6 +151,19 @@ arguments and indexing while still checking operand diagnostics. Collection
 and tuple literals retain their element types, including `NoReturn`, matching
 Crystal's type inference rather than collapsing the whole literal to bottom.
 Primitive-injected recursion contracts remain explicitly deferred.
+
+Explicit method return annotations are checked against instantiated bodies,
+including explicit returns, branch unions, receiver type parameters and free
+variables. Successful results retain their inferred narrower type; `Nil`/`Void`
+annotations discard returning values without hiding `NoReturn`. Annotations
+close recursive edges but do not exempt method bodies from validation. Omitted
+defaults are inferred in parameter order and checked against their restrictions;
+numeric literals use bounded numeric restriction, and supplied arguments do not
+evaluate unused defaults. Errors are reported at each real method/constructor
+call with `facet.return_type_mismatch` or `facet.default_type_mismatch`.
+Inherited generic signatures and type expressions use the instantiated declaring
+ancestor rather than the subclass's parameter positions. Numeric defaults also
+support explicit suffixes and restriction against individual union members.
 
 The current slice covers class construction/allocation, recursive method return
 inference, generic receiver substitution, lexical assignments, unions,

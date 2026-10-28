@@ -74,6 +74,10 @@ cases = raw.map do |contract|
                       "facet.wrong_arity"
                     elsif message.try(&.starts_with?("expected argument #"))
                       "facet.argument_type_mismatch"
+                    elsif message.try { |text| text.starts_with?("method ") && text.includes?(" must return ") }
+                      "facet.return_type_mismatch"
+                    elsif message.try(&.starts_with?("can't restrict "))
+                      "facet.default_type_mismatch"
                     elsif message.try(&.includes?("is expected to be invoked with a block"))
                       "facet.block_required"
                     elsif message.try(&.includes?("is not expected to be invoked with a block"))

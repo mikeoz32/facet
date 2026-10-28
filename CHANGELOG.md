@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Validate instantiated method return annotations and omitted typed defaults,
+  including generic/free-variable substitutions, early returns, narrower result
+  types, Nil/Void discards and bounded recursive annotations. Preserve numeric
+  literal restriction for defaults and replay contract errors at every call.
+  Semantic parity now covers 433/582 contracts, with 149 explicitly deferred.
 - Infer direct and mutually recursive method returns with bounded,
   specialization-aware fixed points. Preserve recursive base-branch unions,
   isolate provisional caches, replay body diagnostics at each call site and fix

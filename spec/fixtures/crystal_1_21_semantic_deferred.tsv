@@ -37,15 +37,10 @@
 99	inject_primitives	def_spec.cr:65:type:0
 103	incomplete	def_spec.cr:81:type:0
 111	incomplete	def_spec.cr:158:error:0
-112	unsupported_error	def_spec.cr:170:error:0
-113	unsupported_error	def_spec.cr:179:error:0
 114	type_mismatch	def_spec.cr:188:type:0
 115	incomplete	def_spec.cr:208:type:0
 116	inject_primitives	def_spec.cr:245:error:0
 117	unsupported_error	def_spec.cr:259:error:0
-118	unsupported_error	def_spec.cr:270:error:0
-119	unsupported_error	def_spec.cr:280:error:0
-120	unsupported_error	def_spec.cr:292:error:0
 121	inject_primitives	def_spec.cr:304:type:0
 122	unsupported_error	def_spec.cr:317:error:0
 123	diagnostic_mismatch	def_spec.cr:336:error:0

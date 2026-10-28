@@ -45,6 +45,7 @@ module Facet
         @active_returns = Set(ReturnKey).new
         @evaluated_returns = Set({ReturnKey, Bool}).new
         @instance_variable_generation = 0_u64
+        @annotated_returns = Set(ReturnKey).new
         @solving_returns = false
         @return_estimates_changed = false
         @recursive_returns = false
@@ -116,10 +117,19 @@ module Facet
           next unless name
           declared_type = definition.parameter_types[index]? || @types.unknown
           declared_type = substitute_free_type(declared_type, free_bindings)
+          declared_type = substitute_type(declared_type, instance, definition.owner || "") if instance
+          declared_type = effective_parameter_type(declared_type, instance) if instance
           argument_type = argument_types.try { |types| types[index]? }
           type_id = argument_type && argument_type != @types.unknown ? argument_type : declared_type
-          if type_id == @types.unknown
-            type_id = parameter.value.try { |value| infer(value, node_ref.file_id, definition.owner || "", env, false) } || @types.unknown
+          if (!argument_type || argument_type == @types.unknown) && (value = parameter.value)
+            type_id = infer(value, node_ref.file_id, definition.owner || "", env, false)
+            unless type_compatible?(type_id, declared_type)
+              type_id = restrict_numeric_default(value, type_id, declared_type)
+              if contract_types_known?(type_id, declared_type) && !type_compatible?(type_id, declared_type)
+                report_semantic_error(parameter, node_ref.file_id, "facet.default_type_mismatch",
+                  "can't restrict #{@types.display(type_id)} to #{@types.display(declared_type)}")
+              end
+            end
           end
           env[name.lchop('@')] = type_id
           env[name] = type_id if name.starts_with?('@')
@@ -302,6 +312,7 @@ module Facet
             self_value = @types[self_type]
             instance_id = self_value.kind == SemanticTypeKind::Metaclass ? self_value.arguments.first? : self_type
             if instance_id
+              instance_id = matching_ancestor_type(instance_id, scope) || instance_id
               instance = @types[instance_id]
               if argument = instance.arguments[parameter_index]?
                 return type_parameter_expression_type(argument)
@@ -1073,6 +1084,11 @@ module Facet
         if type.kind == SemanticTypeKind::TypeParameter
           parameters = @type_parameters[owner]? || [] of String
           if index = parameters.index(type.name || "")
+            if instance.name != owner
+              ancestor = matching_ancestor_type(instance_type, owner)
+              return @types.unknown unless ancestor
+              instance = @types[ancestor]
+            end
             return instance.arguments[index]? || @types.unknown
           end
           return @types.unknown
@@ -1295,7 +1311,18 @@ module Facet
       ) : TypeId
         free_bindings = infer_free_bindings(definition, arguments, block_return)
         unless definition.return_type == @types.unknown
-          return substitute_free_type(definition.return_type, free_bindings)
+          expected = substitute_free_type(definition.return_type, free_bindings)
+          if node_ref = definition.node
+            if tree = @trees[node_ref.file_id]?
+              node = tree.node(node_ref.node_id)
+              if node.kind == NodeKind::Def && node.return_type && !definition.generated
+                expected = substitute_type(expected, self_type, definition.owner || "")
+                expected = effective_parameter_type(expected, self_type)
+                return check_annotated_return(definition, arguments, self_type, block_return, free_bindings, expected, node, node_ref.file_id)
+              end
+            end
+          end
+          return expected
         end
         return @types.unknown if definition.generated
         parameter_specific = !definition.parameter_types.empty?
@@ -1423,6 +1450,74 @@ module Facet
       ensure
         @active_returns.delete(key) if active
         @inference_stack.delete(definition.id) if owns_guard
+      end
+
+      private def contract_types_known?(actual : TypeId, expected : TypeId) : Bool
+        call_facts_complete? && actual != @types.error && expected != @types.error &&
+          !contains_unknown_type?(actual) && expected != @types.unknown &&
+          !uncertain_restriction?(expected)
+      end
+
+      private def check_annotated_return(
+        definition : SemanticDefinition, arguments : Array(TypeId), self_type : TypeId,
+        block_return : TypeId?, free_bindings : Hash(String, TypeId), expected : TypeId,
+        node : SyntaxNode, file_id : FileId,
+      ) : TypeId
+        key = {definition.id, arguments, self_type, block_return || @types.unknown}
+        discarded = {"Void", "Nil"}.includes?(@types[expected].name)
+        boundary = discarded ? @types.named("Nil") : expected
+        return boundary if @annotated_returns.includes?(key)
+        if @annotated_returns.size >= 32
+          @reasons << SemanticCompletenessReason::UnknownType
+          return boundary
+        end
+        # An annotation closes a recursive edge, but must not exempt the body
+        # from checking. Keep errors deferred until the actual calling node.
+        active = true
+        owns_guard = !@inference_stack.includes?(definition.id)
+        @inference_stack << definition.id
+        @annotated_returns << key
+        actual = analyze_method(definition, record: false, argument_types: arguments,
+          self_type: self_type, free_bindings: free_bindings, block_return_type: block_return)
+        return actual if actual == @types.named("NoReturn")
+        return @types.named("Nil") if discarded
+        return boundary unless contract_types_known?(actual, expected)
+        return actual if actual == @types.named("NoReturn") || type_compatible?(actual, expected)
+        report_semantic_error(node, file_id, "facet.return_type_mismatch",
+          "method #{definition.qualified_name} must return #{@types.display(expected)} but it is returning #{@types.display(actual)}")
+        boundary
+      ensure
+        @annotated_returns.delete(key) if active
+        @inference_stack.delete(definition.id) if owns_guard
+      end
+
+      private def restrict_numeric_default(node : SyntaxNode, actual : TypeId, expected : TypeId) : TypeId
+        return actual unless node.kind == NodeKind::LiteralNumber
+        expected_type = @types[expected]
+        if expected_type.kind == SemanticTypeKind::Union
+          expected_type.arguments.each do |member|
+            restricted = restrict_numeric_default(node, actual, member)
+            return restricted if restricted != actual
+          end
+          return actual
+        end
+        text = node.text.sub(/_?[iu](8|16|32|64|128)\z/i, "")
+        text = text.sub(/_?f(32|64)\z/i, "") unless text.matches?(/\A[+-]?0x/i)
+        text = text.delete('_')
+        name = @types[expected].name || return actual
+        if name == "Float32" || name == "Float64"
+          number = text.to_f64? || text.to_i128?(prefix: true).try(&.to_f64) || text.to_u128?(prefix: true).try(&.to_f64)
+          return expected if number && number.finite? && (name != "Float32" || number.to_f32.finite?)
+        elsif name.starts_with?("UInt")
+          bits = name.lchop("UInt").to_i?
+          number = text.to_u128?(prefix: true)
+          return expected if bits && number && (bits == 128 || number < (1_u128 << bits))
+        elsif name.starts_with?("Int")
+          bits = name.lchop("Int").to_i?
+          number = text.to_i128?(prefix: true)
+          return expected if bits && number && (bits == 128 || (number >= -(1_i128 << (bits - 1)) && number < (1_i128 << (bits - 1))))
+        end
+        actual
       end
 
       private def lookup_methods(type_name : String, name : String, class_method : Bool) : Array(SemanticDefinition)
