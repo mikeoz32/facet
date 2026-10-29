@@ -3,7 +3,7 @@
 Facet 0.2.0 starts a compiler-grade semantic layer over its native AST. The
 committed upstream slice comes from nine Crystal 1.21 compiler semantic suites
 and contains 582 contracts executed by 449 examples (two upstream pending).
-Every contract is classified: 459 currently pass Facet exactly and 123 are
+Every contract is classified: 475 currently pass Facet exactly and 107 are
 listed with a deferred reason. A passing type contract requires the
 same inferred type. A passing diagnostic contract requires the same semantic
 decision, Facet diagnostic code, and source line/column; Facet intentionally
@@ -12,7 +12,7 @@ without a semantic diagnostic; the 16 captured primitive-injection contracts
 remain explicitly deferred because the portable replay does not inject the
 Crystal prelude.
 
-The current exact baseline is 459 contracts. It includes bare zero-argument
+The current exact baseline is 475 contracts. It includes bare zero-argument
 method calls, call-site specialization of untyped and defaulted parameters,
 structural explicit generic and union arguments, canonical union presentation,
 typed overload selection, and the complete captured preview-overload
@@ -187,6 +187,18 @@ incomplete providers remain conservative. Explicit `self` is rejected outside
 an instance/metaclass context. Root `raise` supplies `NoReturn` only when normal
 lookup finds no override. Qualified call bindings and provider edits are covered
 by revision-safe navigation/invalidation tests.
+
+Generic call restrictions now keep the first binding of a free variable across
+parameters while retaining the full residual union from its first argument.
+Dispatch variants use those original bindings for applicability. Absolute type
+paths cannot be captured by a same-named `forall` variable. Instantiated
+parameter signatures validate missing types, generic arity and ambiguous unions
+of free variables; unused invalid overloads do not mask a valid selected one.
+Generic ancestor matches check all matching instantiations and their arguments,
+preserving structural subtype/union restriction matching. Unresolved signature
+parts remain potential matches during ranking, so untyped fallbacks cannot hide
+selected signature errors. Argument errors use constructor
+callee, named-label and splat-signature source anchors where appropriate.
 
 The current slice covers class construction/allocation, recursive method return
 inference, generic receiver substitution, lexical assignments, unions,

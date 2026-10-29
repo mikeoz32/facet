@@ -1461,7 +1461,7 @@ module Facet
         parameter = @types[parameter_id]
         if parameter.kind == SemanticTypeKind::TypeParameter && names.includes?(parameter.name || "")
           name = parameter.name.not_nil!
-          bindings[name] = bindings[name]?.try { |current| @types.union([current, argument_id]) } || argument_id
+          bindings[name] ||= argument_id unless argument_id == @types.unknown
           return
         end
 
@@ -1477,10 +1477,14 @@ module Facet
           argument_members = argument.kind == SemanticTypeKind::Union ? argument.arguments : [actual_id]
           free_members = parameter.arguments.select { |member| contains_free_type?(member, names) }
           concrete_members = parameter.arguments.reject { |member| contains_free_type?(member, names) }
+          collected = {} of String => Array(TypeId)
           argument_members.each do |member|
             next if concrete_members.any? { |concrete| type_compatible?(member, concrete) }
-            free_members.each { |free| collect_free_type_bindings(free, member, names, bindings) }
+            member_bindings = {} of String => TypeId
+            free_members.each { |free| collect_free_type_bindings(free, member, names, member_bindings) }
+            member_bindings.each { |name, value| (collected[name] ||= [] of TypeId) << value }
           end
+          collected.each { |name, values| bindings[name] ||= @types.union(values) }
           return
         end
 
@@ -1900,13 +1904,17 @@ module Facet
       private def call_types_match?(
         candidate : SemanticDefinition, call : SyntaxNode,
         arguments : Array(TypeId), receiver_type : TypeId,
+        binding_arguments : Array(TypeId) = arguments,
       ) : Bool
         indexes = matched_parameter_indexes(candidate, call)
+        bindings = infer_free_bindings(candidate, align_call_arguments(candidate, call, binding_arguments), nil)
         arguments.each_with_index.all? do |actual, index|
           parameter_index = indexes[index]?
           next true unless parameter_index
           expected = candidate.parameter_types[parameter_index]? || @types.unknown
+          expected = substitute_free_type(expected, bindings)
           expected = substitute_type(expected, receiver_type, candidate.owner || "")
+          expected = relaxed_signature_type(expected) if method_constant_type_reference(candidate).nil?
           type_compatible?(actual, effective_parameter_type(expected, receiver_type))
         end
       end
@@ -1943,7 +1951,29 @@ module Facet
           return true
         end
         variants = argument_variants(arguments)
-        return false if variants.all? { |variant| blocked.any? { |candidate| call_types_match?(candidate, call, variant, receiver_type) } }
+        if variants.all? { |variant| blocked.any? { |candidate| call_types_match?(candidate, call, variant, receiver_type, arguments) } }
+          if blocked.any? { |candidate| candidate.parameter_types.any? { |type| !signature_type_error(type, candidate.free_variables.to_set).nil? } }
+            select_overloads(blocked, call, arguments, receiver_type).each do |candidate, _|
+              next if method_constant_type_reference(candidate)
+              candidate.parameter_types.each do |type|
+                if error = signature_type_error(type, candidate.free_variables.to_set)
+                  report_semantic_error(call_name_node(call), file_id, error[0], error[1])
+                  return true
+                end
+              end
+            end
+          end
+          return false
+        end
+        blocked.each do |candidate|
+          next if method_constant_type_reference(candidate)
+          candidate.parameter_types.each do |type|
+            if error = signature_type_error(type, candidate.free_variables.to_set)
+              report_semantic_error(call_name_node(call), file_id, error[0], error[1])
+              return true
+            end
+          end
+        end
         # Preserve constant-as-type diagnostics, which are more specific than a
         # failed overload restriction, and defer facts containing unknown types.
         return false if blocked.any? { |candidate| !method_constant_type_reference(candidate).nil? }
@@ -1954,16 +1984,80 @@ module Facet
                         end
         candidate = blocked.first
         indexes = matched_parameter_indexes(candidate, call)
+        bindings = infer_free_bindings(candidate, align_call_arguments(candidate, call, arguments), nil)
         mismatch = arguments.each_index.find do |index|
           parameter_index = indexes[index]?
           next false unless parameter_index
           expected = candidate.parameter_types[parameter_index]? || @types.unknown
+          expected = substitute_free_type(expected, bindings)
           expected = substitute_type(expected, receiver_type, candidate.owner || "")
           !type_compatible?(arguments[index], effective_parameter_type(expected, receiver_type))
         end
-        location = mismatch.try { |index| call.arguments[index]?.try { |argument| argument.value || argument } } || call_name_node(call)
+        location = mismatch.try { |index| call.arguments[index]?.try { |argument| argument_error_site(argument) } } || call_name_node(call)
+        location = call_name_node(call) if method_parameters(candidate).any? { |parameter| parameter.kind == NodeKind::Splat }
         report_semantic_error(location, file_id, "facet.argument_type_mismatch", "no overload of '#{name}' accepts (#{arguments.map { |argument| @types.display(argument) }.join(", ")})")
         true
+      end
+
+      private def argument_error_site(argument : SyntaxNode) : SyntaxNode
+        return argument if argument.kind == NodeKind::NamedArg
+        argument.callee || argument
+      end
+
+      # Unresolved portions remain potential matches for overload ranking. A
+      # selected invalid signature is diagnosed, never accepted as a wildcard.
+      private def relaxed_signature_type(type_id : TypeId) : TypeId
+        type = @types[type_id]
+        if type.kind == SemanticTypeKind::Nominal
+          name = type.name || ""
+          return @types.unknown if constant_name?(name) && !BUILTIN_TYPE_NAMES.includes?(name) && !@type_definitions.has_key?(name)
+          return @types.named(name) if generic_arity_error(type_id)
+        end
+        return type_id if type.arguments.empty?
+        arguments = type.arguments.map { |argument| relaxed_signature_type(argument) }
+        case type.kind
+        when SemanticTypeKind::Nominal    then @types.named(type.name || "", arguments)
+        when SemanticTypeKind::Union      then @types.union(arguments)
+        when SemanticTypeKind::Tuple      then @types.tuple(arguments)
+        when SemanticTypeKind::NamedTuple then @types.named_tuple(arguments, type.name.try(&.split('\0')) || [] of String)
+        when SemanticTypeKind::Metaclass  then type.name == "Module" ? @types.module_type(arguments.first) : @types.metaclass(arguments.first)
+        when SemanticTypeKind::Proc       then @types.proc_type(arguments)
+        else                                   type_id
+        end
+      end
+
+      private def generic_arity_error(type_id : TypeId) : {String, String}?
+        type = @types[type_id]
+        return nil unless type.kind == SemanticTypeKind::Nominal && !type.arguments.empty?
+        name = type.name || ""
+        return nil unless parameters = @type_parameters[name]?
+        definition = @type_definitions[name]?.try { |id| @definitions[id] }
+        syntax = definition.try(&.node).try { |ref| @trees[ref.file_id].node(ref.node_id) }
+        variadic = syntax.try(&.name_node).try(&.child(1)).try(&.children.any? { |child| child.kind == NodeKind::Splat }) || false
+        valid = variadic ? type.arguments.size >= parameters.size - 1 : type.arguments.size == parameters.size
+        valid ? nil : {"facet.generic_arity", "wrong number of type vars for #{name} (given #{type.arguments.size}, expected #{parameters.size})"}
+      end
+
+      private def signature_type_error(type_id : TypeId, free_variables : Set(String)) : {String, String}?
+        type = @types[type_id]
+        if type.kind == SemanticTypeKind::Union
+          free = type.arguments.select { |member| @types[member].kind == SemanticTypeKind::TypeParameter && free_variables.includes?(@types[member].name || "") }
+          return {"facet.ambiguous_free_variable", "can't specify more than one free var in union restriction"} if free.size > 1
+        elsif type.kind == SemanticTypeKind::Nominal
+          name = type.name || ""
+          if constant_name?(name) && !BUILTIN_TYPE_NAMES.includes?(name) && !@type_definitions.has_key?(name)
+            return {"facet.undefined_constant", "undefined constant #{name}"}
+          end
+          if error = generic_arity_error(type_id)
+            return error
+          end
+        end
+        type.arguments.each do |argument|
+          if error = signature_type_error(argument, free_variables)
+            return error
+          end
+        end
+        nil
       end
 
       private def call_facts_complete? : Bool
@@ -1995,14 +2089,7 @@ module Facet
         selected = [] of {SemanticDefinition, Array(TypeId)}
         argument_variants(arguments).each do |variant|
           compatible = candidates.select do |candidate|
-            aligned = align_call_arguments(candidate, call, variant)
-            candidate.parameter_types.each_with_index.all? do |parameter_type, index|
-              argument_type = aligned[index]?
-              argument_type.nil? || type_compatible?(
-                argument_type,
-                effective_parameter_type(parameter_type, receiver_type)
-              )
-            end
+            call_types_match?(candidate, call, variant, receiver_type, arguments)
           end
           compatible = candidates if compatible.empty?
           if @semantic_options.preview_overload_order?
@@ -2372,7 +2459,9 @@ module Facet
           return expected.arguments.any? { |member| type_compatible?(actual_id, member) }
         end
         return expected.arguments.any? { |member| type_compatible?(actual_id, member) } if expected.kind == SemanticTypeKind::Union
-        if actual.kind == expected.kind && actual.name == expected.name && actual.arguments.size == expected.arguments.size
+        if actual.kind == expected.kind && actual.name == expected.name
+          return true if expected.kind == SemanticTypeKind::Nominal && expected.arguments.empty?
+          return false unless actual.arguments.size == expected.arguments.size
           return actual.arguments.zip(expected.arguments).all? do |actual_argument, expected_argument|
             type_compatible?(actual_argument, expected_argument)
           end
@@ -2386,7 +2475,7 @@ module Facet
           end
         end
         return true if builtin_subtype?(actual.name, expected.name)
-        !matching_ancestor_type(actual_id, expected.name || "").nil?
+        matching_ancestor_types(actual_id, expected.name || "").any? { |ancestor| ancestor != actual_id && type_compatible?(ancestor, expected_id) }
       end
 
       private def builtin_subtype?(actual : String?, expected : String?) : Bool
@@ -2405,6 +2494,11 @@ module Facet
       end
 
       private def matching_ancestor_type(actual_id : TypeId, expected_name : String) : TypeId?
+        matching_ancestor_types(actual_id, expected_name, true).first?
+      end
+
+      private def matching_ancestor_types(actual_id : TypeId, expected_name : String, first_only : Bool = false) : Array(TypeId)
+        matches = [] of TypeId
         queue = [{actual_id, 0}]
         visited = Set(TypeId).new
         until queue.empty?
@@ -2414,7 +2508,10 @@ module Facet
           current = @types[current_id]
           owner = current.name
           next unless current.kind == SemanticTypeKind::Nominal && owner
-          return current_id if owner == expected_name
+          if owner == expected_name
+            matches << current_id
+            break if first_only
+          end
           next if depth >= 64 || visited.size >= 512
 
           ancestors = [] of String
@@ -2426,7 +2523,7 @@ module Facet
             queue << {substitute_type(resolved, current_id, owner), depth + 1}
           end
         end
-        nil
+        matches
       end
 
       private def without_nil(type_id : TypeId) : TypeId

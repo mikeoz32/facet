@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Enforce consistent free-variable bindings across call arguments without losing
+  residual union types; share resolved restrictions with overload applicability.
+  Fix absolute type paths shadowed by forall variables and generic ancestor
+  argument checks. Validate instantiated parameter signature types/arity and
+  ambiguous unions, preserving unused-overload behavior and compiler argument
+  anchors. Semantic parity now covers 475/582 contracts, with 107 deferred.
 - Resolve qualified method declarations, lexical/canonical alias owners, root
   calls and metaclass `Class` fallback through shared lookup. Preserve argument
   scope for absolute calls, reject invalid/dynamic method declarations and

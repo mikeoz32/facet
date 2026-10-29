@@ -82,6 +82,12 @@ cases = raw.map do |contract|
                       "facet.wrong_arity"
                     elsif message.try(&.starts_with?("expected argument #"))
                       "facet.argument_type_mismatch"
+                    elsif message.try(&.starts_with?("expected argument '"))
+                      "facet.argument_type_mismatch"
+                    elsif message == "can't specify more than one free var in union restriction"
+                      "facet.ambiguous_free_variable"
+                    elsif message.try(&.starts_with?("wrong number of type vars for "))
+                      "facet.generic_arity"
                     elsif message.try { |text| text.starts_with?("method ") && text.includes?(" must return ") }
                       "facet.return_type_mismatch"
                     elsif message.try(&.starts_with?("can't restrict "))

@@ -724,7 +724,7 @@ module Facet
         end
         name = resolve_name(text, scope)
         return resolve_alias(name) if @aliases.has_key?(name)
-        return @types.type_parameter(name) if @type_parameters.includes?(name) || (@alias_stack.empty? && !@definitions.has_key?(name) && name.size == 1 && name[0].uppercase?)
+        return @types.type_parameter(name) if !text.starts_with?("::") && (@type_parameters.includes?(name) || (@alias_stack.empty? && !@definitions.has_key?(name) && name.size == 1 && name[0].uppercase?))
         named_type(name)
       end
 
